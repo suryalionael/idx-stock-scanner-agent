@@ -1,0 +1,36 @@
+# IDX ML Ranker — konfigurasi model
+# Digunakan oleh ml_ranker.train_ranker() dan ml_ranker.score_candidates()
+
+# --- Target definition ---
+# Model memprediksi: apakah return > target_return_pct dalam target_horizon_days?
+# Asumsi: swing trading harian IDX (hold beberapa hari)
+target_return_pct: 3.0       # % return minimum yang dianggap "sukses"
+target_horizon_days: 5       # trading days ke depan (≈1 minggu)
+
+# --- Feature list untuk training dan scoring ---
+# Harus sesuai dengan kolom yang dihasilkan feature_builder.build_features()
+# + kolom score dari signal_engine.compute_signal()
+features:
+  - rsi14
+  - macd_histogram
+  - vol_ratio_20d
+  - atr_pct
+  - roc5
+  - roc20
+  - pct_from_52w_high
+  - bb_width
+  - hist_vol_20d
+  - trend_score
+  - momentum_score
+  - breakout_score
+  - volume_score
+
+# --- XGBoost hyperparameters ---
+# TODO: tuning via optuna atau GridSearchCV setelah dataset historis tersedia
+xgboost:
+  n_estimators: 200
+  max_depth: 4
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  random_state: 42

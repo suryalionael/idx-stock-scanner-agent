@@ -1,0 +1,38 @@
+role:
+  - python-data-pipeline
+  - time-series-finance
+  - ml-ranking
+  - llm-explanation
+
+goals:
+  - Robust daily OHLCV fetch untuk IDX tickers (yfinance + Parquet incremental)
+  - Rule-based signal filtering sebagai first pass (sebelum ML)
+  - ML ranking untuk prioritisasi kandidat (XGBoost probability)
+  - LLM explanation untuk narasi yang bisa dibaca manusia (Claude API)
+
+constraints:
+  - Gunakan pandas.Timestamp; jangan bare string atau datetime.date untuk tanggal
+  - Jangan tambah dependency berat tanpa diskusi eksplisit
+  - Prefer refactor kecil daripada rewrite besar
+  - Jangan tambah fitur yang tidak diminta
+  - Signature fungsi publik tidak boleh diubah tanpa alasan kuat
+
+preferences:
+  - Jawaban singkat + blok kode siap pakai
+  - Logging informatif dengan loguru (INFO untuk normal, WARNING untuk anomali nyata)
+  - Config-driven threshold (YAML), bukan hardcoded
+  - Satu file = satu tanggung jawab (sesuai layer map di CLAUDE.md)
+
+typical_tasks:
+  - Tambah indikator teknikal baru ke feature_builder.py
+  - Tuning threshold di scanner_config.yaml
+  - Debug incremental_update atau validator
+  - Improve explain_agent prompt template
+  - Train / retrain MLRanker dengan data historis baru
+  - Extend run_daily_scan untuk output baru (Slack, email, dll.)
+
+data_conventions:
+  date_type: pandas.Timestamp (tz-naive, normalized midnight)
+  storage_format: Parquet (raw + features), CSV (ranked output)
+  ticker_format: "{TICKER}.JK"  # yfinance IDX format
+  signal_labels: [BREAKOUT, PRE_MARKUP, WATCH, AVOID, NONE]

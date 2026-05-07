@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "idx-stock-scanner-agent"
+version = "0.1.0"
+description = "AI-powered IDX Stock Scanner: rules + ML + LLM"
+requires-python = ">=3.11"
+dependencies = [
+    "yfinance>=0.2.40",
+    "pandas>=2.1",
+    "numpy>=1.26",
+    "ta>=0.11",
+    "scikit-learn>=1.4",
+    "xgboost>=2.0",
+    "anthropic>=0.30",
+    "pyyaml>=6.0",
+    "pyarrow>=15.0",
+    "loguru>=0.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+idx-scan = "stock_scanner.pipeline.run_daily_scan:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["stock_scanner*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

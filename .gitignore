@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+
+# Data files (jangan commit raw data ke git)
+data/
+models/*.pkl
+models/*.joblib
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local
+*.env
+
+# Logs
+*.log
+logs/
+
+# Config lokal (universe ticker adalah data pribadi)
+stock_scanner/configs/idx_universe.csv

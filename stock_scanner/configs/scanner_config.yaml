@@ -1,0 +1,36 @@
+# IDX Stock Scanner — konfigurasi utama
+# Edit file ini untuk tuning; tidak perlu ubah kode Python.
+
+# --- Paths (relatif terhadap root repo) ---
+base_dir: "."
+universe_path: "stock_scanner/configs/idx_universe.csv"
+data_dir: "data/raw"
+features_dir: "data/features"
+signals_dir: "data/signals"
+ranked_dir: "data/ranked"
+model_path: "models/ranker.pkl"
+
+# --- Data fetch ---
+lookback_years: 3
+batch_size: 20           # jumlah ticker per batch yfinance download
+max_gap_fill_days: 2     # hari kerja — gap ≤ ini di-ffill; lebih besar → log info
+
+# --- Signal thresholds (score 0–10 per komponen) ---
+signal_thresholds:
+  breakout:
+    total: 7.5           # total_score minimum
+    breakout: 7.0        # breakout_score minimum
+    volume: 6.0          # volume_score minimum
+  pre_markup:
+    total: 5.5
+    trend: 5.0
+  watch:
+    total: 3.5
+
+# --- Explain agent (Claude API) ---
+explain:
+  enabled: false         # set true setelah ANTHROPIC_API_KEY dikonfigurasi
+  max_tickers: 10        # maksimal ticker yang di-explain per scan (hemat API cost)
+
+# --- Logging ---
+log_level: "INFO"
