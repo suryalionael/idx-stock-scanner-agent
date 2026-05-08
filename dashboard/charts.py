@@ -203,6 +203,71 @@ def history_timeline(df_history: pd.DataFrame) -> go.Figure:
     return fig
 
 
+def broker_chart(df_broker: pd.DataFrame, ticker: str) -> go.Figure:
+    """Grouped bar chart top broker buy vs sell activity.
+
+    Args:
+        df_broker: DataFrame dari data_loader.load_broker_for_ticker()
+                   Kolom: broker_code, broker_name, buy_lot, sell_lot, net_lot
+        ticker: label untuk judul
+    """
+    if df_broker.empty:
+        return _empty_figure(f"Tidak ada data broker untuk {ticker}")
+
+    df = df_broker.copy()
+
+    # Gunakan broker_name jika ada, fallback ke broker_code
+    label_col = "broker_name" if "broker_name" in df.columns else "broker_code"
+    labels = df[label_col].astype(str).tolist()
+    buy_col = "buy_lot" if "buy_lot" in df.columns else df.columns[2]
+    sell_col = "sell_lot" if "sell_lot" in df.columns else df.columns[3]
+
+    buy_vals = pd.to_numeric(df[buy_col], errors="coerce").fillna(0).tolist()
+    sell_vals = pd.to_numeric(df[sell_col], errors="coerce").fillna(0).tolist()
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        name="Buy",
+        y=labels,
+        x=buy_vals,
+        orientation="h",
+        marker_color="#22c55e",
+        opacity=0.85,
+        hovertemplate="%{y}: %{x:,.0f} lot<extra>Buy</extra>",
+    ))
+    fig.add_trace(go.Bar(
+        name="Sell",
+        y=labels,
+        x=[-v for v in sell_vals],   # negatif → ke kiri untuk mirror chart
+        orientation="h",
+        marker_color="#ef4444",
+        opacity=0.85,
+        hovertemplate="%{y}: %{customdata:,.0f} lot<extra>Sell</extra>",
+        customdata=sell_vals,
+    ))
+
+    # Garis vertikal tengah
+    fig.add_vline(x=0, line_width=1, line_color="#475569")
+
+    fig.update_layout(
+        template=_DARK_TEMPLATE,
+        title=dict(text=f"Broker Activity — {ticker}", font_size=13),
+        barmode="overlay",
+        height=max(200, len(labels) * 32 + 80),
+        margin=dict(l=10, r=10, t=40, b=10),
+        paper_bgcolor="#0f172a",
+        plot_bgcolor="#0f172a",
+        xaxis=dict(
+            title="Lot (Buy →  | ← Sell)",
+            gridcolor="#1e293b",
+            zeroline=True, zerolinecolor="#475569",
+        ),
+        yaxis=dict(gridcolor="#1e293b", autorange="reversed"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="left", x=0),
+    )
+    return fig
+
+
 def _empty_figure(message: str) -> go.Figure:
     fig = go.Figure()
     fig.add_annotation(
