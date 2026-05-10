@@ -21,6 +21,7 @@ dependencies = [
     "loguru>=0.7",
     "streamlit>=1.35",
     "plotly>=5.22",
+    "requests>=2.31",   # Telegram/WhatsApp HTTP calls (also transitive via yfinance)
 ]
 
 [project.optional-dependencies]
@@ -31,7 +32,8 @@ dev = [
 ]
 
 [project.scripts]
-idx-scan = "stock_scanner.pipeline.run_daily_scan:main"
+idx-scan   = "stock_scanner.pipeline.run_daily_scan:main"
+idx-alert  = "stock_scanner.alerts.telegram_alert:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
