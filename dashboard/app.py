@@ -123,69 +123,93 @@ def _color_net_lot(val):
 # ---------------------------------------------------------------------------
 
 def render_shareholders_section(ticker: str, scan_date: str) -> None:
-    """Render shareholder composition + monthly holders panel."""
-    sh_left, sh_right = st.columns([1, 1])
+    """Render shareholder composition + monthly holders panel.
 
-    with sh_left:
-        st.markdown("**Komposisi Kepemilikan**")
+    Fully isolated: any exception inside is caught and shown as a friendly
+    message — the rest of the detail panel continues to render normally.
+    """
+    # --- Composition ---
+    try:
+        sh_left, sh_right = st.columns([1, 1])
         df_comp = get_shareholder_composition(ticker, scan_date)
-        if df_comp.empty:
-            st.caption("Data komposisi tidak tersedia.")
-        else:
-            # Table
-            disp = df_comp.copy()
-            disp["shares"] = disp["shares"].apply(lambda x: f"{int(x):,}")
-            disp["percentage"] = disp["percentage"].apply(lambda x: f"{x:.2f}%")
-            st.dataframe(
-                disp,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "category":   st.column_config.TextColumn("Kategori"),
-                    "shares":     st.column_config.TextColumn("Saham (lbr)"),
-                    "percentage": st.column_config.TextColumn("%"),
-                },
-            )
 
-    with sh_right:
-        df_comp_chart = get_shareholder_composition(ticker, scan_date)
-        if not df_comp_chart.empty:
-            st.plotly_chart(
-                shareholder_pie(df_comp_chart, ticker),
-                use_container_width=True,
-                key=f"pie_{ticker}_{scan_date}",
-            )
+        with sh_left:
+            st.markdown("**Komposisi Kepemilikan**")
+            if df_comp.empty:
+                st.caption("Data komposisi belum tersedia.")
+            else:
+                disp = df_comp.copy()
+                disp["shares"] = disp["shares"].apply(
+                    lambda x: f"{int(x):,}" if pd.notna(x) else "N/A"
+                )
+                disp["percentage"] = disp["percentage"].apply(
+                    lambda x: f"{float(x):.2f}%" if pd.notna(x) else "N/A"
+                )
+                st.dataframe(
+                    disp,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "category":   st.column_config.TextColumn("Kategori"),
+                        "shares":     st.column_config.TextColumn("Saham (lbr)"),
+                        "percentage": st.column_config.TextColumn("%"),
+                    },
+                )
+
+        with sh_right:
+            if not df_comp.empty:
+                try:
+                    st.plotly_chart(
+                        shareholder_pie(df_comp, ticker),
+                        use_container_width=True,
+                        key=f"pie_{ticker}_{scan_date}",
+                    )
+                except Exception as e:
+                    st.caption(f"Chart komposisi tidak dapat dimuat: {e}")
+
+    except Exception as exc:
+        st.warning(f"⚠️ Data komposisi pemegang saham tidak tersedia. ({exc})")
 
     st.markdown("")
+
+    # --- Monthly holders ---
     st.markdown("**Jumlah Pemegang Saham per Bulan**")
-    df_monthly = get_monthly_shareholder_stats(ticker)
-    if df_monthly.empty:
-        st.caption("Data bulanan tidak tersedia.")
-    else:
-        # Table
-        disp_m = df_monthly.copy()
-        disp_m["shareholder_count"] = disp_m["shareholder_count"].apply(
-            lambda x: f"{int(x):,}" if pd.notna(x) else "N/A"
-        )
-        disp_m["growth_pct"] = disp_m["growth_pct"].apply(
-            lambda x: f"{'+' if x >= 0 else ''}{x:.2f}%" if pd.notna(x) else "—"
-        )
-        st.dataframe(
-            disp_m,
-            use_container_width=True,
-            hide_index=True,
-            height=200,
-            column_config={
-                "month":             st.column_config.TextColumn("Bulan"),
-                "shareholder_count": st.column_config.TextColumn("Jumlah Holder"),
-                "growth_pct":        st.column_config.TextColumn("Growth MoM"),
-            },
-        )
-        st.plotly_chart(
-            monthly_holders_chart(df_monthly, ticker),
-            use_container_width=True,
-            key=f"monthly_{ticker}_{scan_date}",
-        )
+    try:
+        df_monthly = get_monthly_shareholder_stats(ticker)
+        if df_monthly.empty:
+            st.caption("Data shareholder bulanan belum tersedia.")
+        else:
+            # Display table with safe formatting
+            disp_m = df_monthly.copy()
+            disp_m["shareholder_count"] = disp_m["shareholder_count"].apply(
+                lambda x: f"{int(x):,}" if pd.notna(x) else "N/A"
+            )
+            disp_m["growth_pct"] = disp_m["growth_pct"].apply(
+                lambda x: (f"{'+'  if float(x) >= 0 else ''}{float(x):.2f}%")
+                if pd.notna(x) else "—"
+            )
+            st.dataframe(
+                disp_m,
+                use_container_width=True,
+                hide_index=True,
+                height=200,
+                column_config={
+                    "month":             st.column_config.TextColumn("Bulan"),
+                    "shareholder_count": st.column_config.TextColumn("Jumlah Holder"),
+                    "growth_pct":        st.column_config.TextColumn("Growth MoM"),
+                },
+            )
+            try:
+                st.plotly_chart(
+                    monthly_holders_chart(df_monthly, ticker),
+                    use_container_width=True,
+                    key=f"monthly_{ticker}_{scan_date}",
+                )
+            except Exception as e:
+                st.caption(f"Chart bulanan tidak dapat dimuat: {e}")
+
+    except Exception as exc:
+        st.warning(f"⚠️ Data shareholder bulanan tidak tersedia. ({exc})")
 
 
 # ---------------------------------------------------------------------------
@@ -193,9 +217,16 @@ def render_shareholders_section(ticker: str, scan_date: str) -> None:
 # ---------------------------------------------------------------------------
 
 def render_broker_section(ticker: str, scan_date: str) -> None:
-    """Render broker activity panel with colored net_lot."""
-    with st.spinner("Memuat data broker..."):
-        df_broker = load_broker_for_ticker(ticker, scan_date, use_mock=True)
+    """Render broker activity panel with colored net_lot.
+
+    Fully isolated: any exception shows a friendly message instead of crashing.
+    """
+    try:
+        with st.spinner("Memuat data broker..."):
+            df_broker = load_broker_for_ticker(ticker, scan_date, use_mock=True)
+    except Exception as exc:
+        st.warning(f"⚠️ Data broker tidak dapat dimuat. ({exc})")
+        return
 
     if df_broker.empty:
         st.caption("Tidak ada data broker untuk ticker ini.")
@@ -213,26 +244,32 @@ def render_broker_section(ticker: str, scan_date: str) -> None:
         )
 
     # Mirror bar chart
-    st.plotly_chart(
-        broker_chart(df_broker, ticker),
-        use_container_width=True,
-        key=f"broker_{ticker}_{scan_date}",
-    )
+    try:
+        st.plotly_chart(
+            broker_chart(df_broker, ticker),
+            use_container_width=True,
+            key=f"broker_{ticker}_{scan_date}",
+        )
+    except Exception as e:
+        st.caption(f"Chart broker tidak dapat dimuat: {e}")
 
     # Detailed table with colored net_lot
     with st.expander("Tabel detail broker"):
-        disp_cols = [c for c in ["broker_code", "broker_name", "buy_lot", "sell_lot", "net_lot"]
-                     if c in df_broker.columns]
-        tbl = df_broker[disp_cols].copy()
-        for col in ["buy_lot", "sell_lot", "net_lot"]:
-            if col in tbl.columns:
-                tbl[col] = pd.to_numeric(tbl[col], errors="coerce")
+        try:
+            disp_cols = [c for c in ["broker_code", "broker_name", "buy_lot", "sell_lot", "net_lot"]
+                         if c in df_broker.columns]
+            tbl = df_broker[disp_cols].copy()
+            for col in ["buy_lot", "sell_lot", "net_lot"]:
+                if col in tbl.columns:
+                    tbl[col] = pd.to_numeric(tbl[col], errors="coerce")
 
-        if "net_lot" in tbl.columns:
-            styled = tbl.style.applymap(_color_net_lot, subset=["net_lot"])
-            st.dataframe(styled, use_container_width=True, hide_index=True)
-        else:
-            st.dataframe(tbl, use_container_width=True, hide_index=True)
+            if "net_lot" in tbl.columns:
+                styled = tbl.style.applymap(_color_net_lot, subset=["net_lot"])
+                st.dataframe(styled, use_container_width=True, hide_index=True)
+            else:
+                st.dataframe(tbl, use_container_width=True, hide_index=True)
+        except Exception as e:
+            st.caption(f"Tabel broker tidak dapat dimuat: {e}")
 
 
 # ---------------------------------------------------------------------------
