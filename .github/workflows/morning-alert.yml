@@ -1,0 +1,102 @@
+name: Morning Alert (IDX Scanner)
+
+# ┌─── 07:00 WIB = 00:00 UTC (WIB = UTC+7)
+# └─── weekdays only (Mon–Fri = 1–5)
+on:
+  schedule:
+    - cron: "0 0 * * 1-5"
+
+  # Allow manual trigger from GitHub Actions UI — useful for testing
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (print message, do NOT send to Telegram)"
+        type: boolean
+        default: false
+      skip_scan:
+        description: "Skip daily scan (use cached data only)"
+        type: boolean
+        default: false
+
+# Prevent concurrent runs (e.g. if a run overruns into next schedule tick)
+concurrency:
+  group: morning-alert
+  cancel-in-progress: true
+
+jobs:
+  alert:
+    name: Scan + Telegram Alert
+    runs-on: ubuntu-latest
+    timeout-minutes: 120   # generous for first run (cold cache = full history download)
+
+    steps:
+      # ── 1. Checkout ─────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Python setup ─────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      # ── 3. Restore scan data cache ───────────────────────────────────────
+      # Cache key includes universe file hash so a universe change invalidates
+      # the data cache and triggers a fresh download.
+      - name: Restore scan data cache
+        id: cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: data/
+          key: idx-scan-data-${{ runner.os }}-${{ hashFiles('stock_scanner/configs/idx_universe.csv') }}
+          restore-keys: |
+            idx-scan-data-${{ runner.os }}-
+
+      # ── 4. Run daily scan ────────────────────────────────────────────────
+      # Skip if:
+      #   (a) workflow_dispatch with skip_scan=true, OR
+      #   (b) today's ranked file already exists in the cache
+      - name: Run daily scan
+        if: >-
+          !( github.event_name == 'workflow_dispatch' &&
+             github.event.inputs.skip_scan == 'true' )
+        run: python -m stock_scanner.pipeline.run_daily_scan
+        env:
+          # Optional: needed only if explain agent is enabled in scanner_config.yaml
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      # ── 5. Save updated scan data cache ─────────────────────────────────
+      # Always save so tomorrow's run picks up today's incremental data.
+      - name: Save scan data cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/
+          key: idx-scan-data-${{ runner.os }}-${{ hashFiles('stock_scanner/configs/idx_universe.csv') }}
+
+      # ── 6. Send morning alert ────────────────────────────────────────────
+      - name: Send morning alert to Telegram
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            python -m stock_scanner.alerts.telegram_alert --dry-run
+          else
+            python -m stock_scanner.alerts.telegram_alert
+          fi
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      # ── 7. Upload scan artifacts (optional, for debugging) ───────────────
+      - name: Upload latest ranked CSV
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ranked-${{ github.run_id }}
+          # Glob pattern: only the most recent ranked file
+          path: data/ranked/ranked_*.csv
+          retention-days: 7
+          if-no-files-found: warn
