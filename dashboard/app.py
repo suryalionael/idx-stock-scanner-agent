@@ -105,8 +105,8 @@ def _fmt_score(val) -> str:
         return "N/A"
 
 
-def _color_net_lot(val):
-    """Pandas Styler function: green for +, red for -, grey for 0/NaN."""
+def _color_net_lot(val) -> str:
+    """Per-cell CSS for net_lot: green (+), red (-), grey (0/NaN)."""
     try:
         v = float(val)
     except (TypeError, ValueError):
@@ -116,6 +116,24 @@ def _color_net_lot(val):
     if v < 0:
         return "color: #ef4444; font-weight: 600"
     return "color: #94a3b8"
+
+
+def _style_broker_table(df: pd.DataFrame) -> "pd.io.formats.style.Styler":
+    """Apply net_lot color styling with a pandas-version-safe shim.
+
+    pandas ≥ 2.1  : Styler.map()     (applymap removed in 2.2+)
+    pandas < 2.1  : Styler.applymap() (legacy)
+
+    Raises AttributeError if neither method exists (should never happen).
+    """
+    styler = df.style
+    if "net_lot" not in df.columns:
+        return styler
+    # Try new API first, fall back to legacy
+    apply_fn = getattr(styler, "map", None) or getattr(styler, "applymap", None)
+    if apply_fn is None:
+        return styler
+    return apply_fn(_color_net_lot, subset=["net_lot"])
 
 
 # ---------------------------------------------------------------------------
@@ -259,15 +277,25 @@ def render_broker_section(ticker: str, scan_date: str) -> None:
             disp_cols = [c for c in ["broker_code", "broker_name", "buy_lot", "sell_lot", "net_lot"]
                          if c in df_broker.columns]
             tbl = df_broker[disp_cols].copy()
+
+            # Coerce lot columns to numeric before any styling
             for col in ["buy_lot", "sell_lot", "net_lot"]:
                 if col in tbl.columns:
                     tbl[col] = pd.to_numeric(tbl[col], errors="coerce")
 
-            if "net_lot" in tbl.columns:
-                styled = tbl.style.applymap(_color_net_lot, subset=["net_lot"])
+            # Try styled render first; fall back to plain table on any Styler error
+            try:
+                styled = _style_broker_table(tbl)
                 st.dataframe(styled, use_container_width=True, hide_index=True)
-            else:
-                st.dataframe(tbl, use_container_width=True, hide_index=True)
+            except Exception:
+                # Fallback: add a formatted text column so colors are still implied
+                tbl_plain = tbl.copy()
+                if "net_lot" in tbl_plain.columns:
+                    tbl_plain["net_lot"] = tbl_plain["net_lot"].apply(
+                        lambda x: (f"+{x:,.0f}" if x > 0 else f"{x:,.0f}")
+                        if pd.notna(x) else "—"
+                    )
+                st.dataframe(tbl_plain, use_container_width=True, hide_index=True)
         except Exception as e:
             st.caption(f"Tabel broker tidak dapat dimuat: {e}")
 
