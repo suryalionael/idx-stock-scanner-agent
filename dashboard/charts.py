@@ -203,6 +203,99 @@ def history_timeline(df_history: pd.DataFrame) -> go.Figure:
     return fig
 
 
+def shareholder_pie(df_composition: pd.DataFrame, ticker: str) -> go.Figure:
+    """Pie chart for shareholder composition (local vs foreign breakdown).
+
+    Args:
+        df_composition: DataFrame with columns: category, shares, percentage
+        ticker: label for the chart title
+    """
+    if df_composition.empty:
+        return _empty_figure(f"Tidak ada data komposisi pemegang saham untuk {ticker}")
+
+    df = df_composition.copy()
+    pct_col = "percentage" if "percentage" in df.columns else df.columns[-1]
+    lbl_col = "category" if "category" in df.columns else df.columns[0]
+
+    _COLORS = ["#38bdf8", "#fb923c", "#a78bfa", "#4ade80", "#f472b6", "#facc15"]
+
+    fig = go.Figure(go.Pie(
+        labels=df[lbl_col],
+        values=df[pct_col],
+        hole=0.40,
+        marker=dict(colors=_COLORS[:len(df)], line=dict(color="#0f172a", width=2)),
+        textinfo="label+percent",
+        textfont_size=11,
+        hovertemplate="<b>%{label}</b><br>%{value:.2f}%<extra></extra>",
+    ))
+
+    fig.update_layout(
+        template=_DARK_TEMPLATE,
+        title=dict(text=f"Komposisi Pemegang Saham — {ticker}", font_size=13),
+        height=280,
+        margin=dict(l=10, r=10, t=40, b=10),
+        paper_bgcolor="#0f172a",
+        legend=dict(orientation="v", yanchor="middle", y=0.5, font_size=11),
+        showlegend=True,
+    )
+    return fig
+
+
+def monthly_holders_chart(df_monthly: pd.DataFrame, ticker: str) -> go.Figure:
+    """Line chart of monthly shareholder count with MoM growth % as hover labels.
+
+    Args:
+        df_monthly: DataFrame with columns: month (YYYY-MM), shareholder_count, growth_pct
+        ticker: label for the chart title
+    """
+    if df_monthly.empty:
+        return _empty_figure(f"Tidak ada data bulanan pemegang saham untuk {ticker}")
+
+    df = df_monthly.copy()
+
+    # Build hover text
+    def _hover(row: pd.Series) -> str:
+        base = f"{row['month']}<br>{int(row['shareholder_count']):,} holder"
+        if pd.notna(row.get("growth_pct")):
+            sign = "+" if row["growth_pct"] >= 0 else ""
+            color = "lime" if row["growth_pct"] >= 0 else "#f87171"
+            base += f"<br><span style='color:{color}'>{sign}{row['growth_pct']:.2f}% MoM</span>"
+        return base
+
+    hover_texts = df.apply(_hover, axis=1).tolist()
+
+    # Marker colors: green if growth ≥ 0, red otherwise
+    colors = [
+        "#22c55e" if pd.isna(g) or g >= 0 else "#ef4444"
+        for g in df.get("growth_pct", pd.Series(dtype=float))
+    ]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df["month"],
+        y=df["shareholder_count"],
+        mode="lines+markers",
+        line=dict(color="#38bdf8", width=2),
+        marker=dict(color=colors, size=8),
+        hovertemplate="%{text}<extra></extra>",
+        text=hover_texts,
+        name="Shareholders",
+    ))
+
+    fig.update_layout(
+        template=_DARK_TEMPLATE,
+        title=dict(text=f"Jumlah Pemegang Saham — {ticker}", font_size=13),
+        height=260,
+        margin=dict(l=10, r=10, t=40, b=30),
+        paper_bgcolor="#0f172a",
+        plot_bgcolor="#0f172a",
+        xaxis=dict(title="Bulan", gridcolor="#1e293b", tickangle=-30),
+        yaxis=dict(title="Jumlah Holder", gridcolor="#1e293b"),
+        showlegend=False,
+    )
+    return fig
+
+
 def broker_chart(df_broker: pd.DataFrame, ticker: str) -> go.Figure:
     """Grouped bar chart top broker buy vs sell activity.
 
