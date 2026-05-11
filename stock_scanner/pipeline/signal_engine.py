@@ -232,9 +232,22 @@ def _penalty_score(df: pd.DataFrame) -> pd.Series:
 # ---------------------------------------------------------------------------
 
 def _news_score(df: pd.DataFrame) -> pd.Series:
-    """0–10 berdasarkan news_sentiment_score. Neutral (5.0) jika tidak ada data."""
+    """0–10 berdasarkan news_sentiment_score. Neutral (5.0) jika tidak ada data.
+
+    NaN policy:
+        news_sentiment_score is NaN when news fetch FAILED (not the same as "no news").
+        - fetch failed  → NaN  → fillna(5.0) here → neutral, no penalise/boost
+        - no news found → 5.0  (set explicitly in compute_news_sentiment, status="empty")
+        - has articles  → computed 0–10 (status="ok")
+
+    We intentionally treat fetch failures as neutral in scoring so that
+    a broken news provider doesn't penalise otherwise-valid signals.
+    The original NaN is preserved in news_sentiment_score column so the
+    dashboard can show accurate status via news_data_status.
+    """
     if "news_sentiment_score" not in df.columns:
         return pd.Series(5.0, index=df.index)
+    # fillna(5.0): converts NaN (failed fetch) → neutral 5.0 for scoring only
     return df["news_sentiment_score"].fillna(5.0).clip(0, 10)
 
 
