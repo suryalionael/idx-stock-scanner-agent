@@ -13,6 +13,7 @@ _RANKED_DIR    = _ROOT / "data" / "ranked"
 _RAW_DIR       = _ROOT / "data" / "raw"
 _SIGNALS_DIR   = _ROOT / "data" / "signals"
 _NEWS_DIR          = _ROOT / "data" / "news"
+_NEWS_ARTICLES_DIR = _ROOT / "data" / "news" / "articles"
 _FOREIGN_DIR       = _ROOT / "data" / "foreign"
 _BROKER_DIR        = _ROOT / "data" / "broker"
 _FUNDAMENTALS_DIR  = _ROOT / "data" / "fundamentals"
@@ -227,6 +228,29 @@ def load_news_for_date(scan_date: str) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame()
     return pd.read_parquet(path)
+
+
+def load_news_articles_for_ticker(ticker: str, scan_date: str) -> list[dict]:
+    """Load labeled articles for one ticker from the articles parquet.
+
+    Returns:
+        List of dicts with: ticker, title, published, publisher,
+        sentiment_score, sentiment_label.
+        Empty list if file not found or ticker not in file.
+    """
+    path = _NEWS_ARTICLES_DIR / f"{scan_date}.parquet"
+    if not path.exists():
+        return []
+    try:
+        df = pd.read_parquet(path)
+        if "ticker" not in df.columns:
+            return []
+        rows = df[df["ticker"] == ticker]
+        if rows.empty:
+            return []
+        return rows.to_dict(orient="records")
+    except Exception:
+        return []
 
 
 # ---------------------------------------------------------------------------

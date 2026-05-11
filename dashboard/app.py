@@ -31,6 +31,7 @@ from dashboard.data_loader import (
     latest_ranked_date,
     load_fundamentals_for_date,
     get_fundamental_row,
+    load_news_articles_for_ticker,
 )
 from dashboard.explain import explain_signal_llm
 from dashboard.search import (
@@ -469,7 +470,9 @@ def render_ticker_detail(
 
         st.markdown("**Penjelasan Sinyal**")
         with st.spinner("Membuat penjelasan..."):
-            explanation = explain_signal_llm(row, api_key=api_key)
+            # Load per-article data for narrative bullets (cached by scan_date)
+            articles = load_news_articles_for_ticker(ticker, scan_date)
+            explanation = explain_signal_llm(row, api_key=api_key, articles=articles)
         st.markdown(explanation)
 
     # ---- TAB: Shareholders ----
