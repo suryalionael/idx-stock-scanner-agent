@@ -24,7 +24,7 @@ TABLE_COLS = [
     "close", "rsi14", "vol_ratio_20d", "pct_from_52w_high",
     "adx", "supertrend_bullish", "squeeze_on",
     "atr_breakout", "vol_spike",
-    "news_sentiment_score", "news_count_3d",
+    "news_sentiment_score", "news_count_3d", "news_data_status",
 ]
 
 HISTORY_COLS = [

@@ -1,19 +1,39 @@
-"""News Sentiment Pipeline untuk IDX tickers.
+"""News Sentiment Pipeline — IDX Stock Scanner.
 
-Source (MVP): yfinance.Ticker.news  — free, tidak butuh API key.
-Sentiment: keyword-based scoring (bilingual ID+EN).
+Architecture
+------------
+Providers (fetch raw articles)
+    BaseNewsProvider  ← abstract
+    YFinanceNewsProvider   — free, no API key, occasionally flaky
+    RssNewsProvider        — TODO: RSS fallback (IDX, CNBC Indonesia)
 
-Kolom output yang ditambahkan ke feature DataFrame:
-    news_count_3d          — jumlah berita 3 hari terakhir
-    news_sentiment_mean    — rata-rata skor per headline (-1 to 1)
-    news_positive_count    — jumlah headline positif
-    news_negative_count    — jumlah headline negatif
-    news_sentiment_score   — skor final 0–10 (5.0 = neutral)
+Aggregator
+    NewsAggregator     — tries providers in priority order, records which
+                         succeeded/failed, surfaces explicit status
 
-TODO: Ganti `_fetch_yf_news()` dengan source yang lebih kaya
-      (mis. CNBC Indonesia scraper, IDX press release RSS, Bloomberg API)
-      saat yfinance.Ticker.news tidak stabil.
+Output columns added to feature DataFrame
+    news_count_3d          — int: articles found in last N days (0 if none/failed)
+    news_sentiment_mean    — float | NaN  (NaN when fetch failed)
+    news_positive_count    — int
+    news_negative_count    — int
+    news_sentiment_score   — float 0–10 | NaN  (NaN when fetch failed)
+    news_data_status       — "ok" | "empty" | "failed"
+    news_source            — "yfinance" | "rss" | "none" | "all_failed"
+    news_error_message     — str | None  (populated only on failure)
+
+Status semantics
+    "ok"     : fetch succeeded and ≥1 article found
+    "empty"  : fetch succeeded but 0 articles in the window → score 5.0 (valid neutral)
+    "failed" : all providers failed → score NaN  ← NOT the same as neutral
+
+Downstream contract
+    _news_score() in signal_engine.py uses fillna(5.0) so scoring is unaffected.
+    Dashboard and explanation code must check news_data_status before trusting score.
 """
+from __future__ import annotations
+
+import time
+from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -23,27 +43,201 @@ from loguru import logger
 # ---------------------------------------------------------------------------
 # Keyword lists — bilingual (Bahasa Indonesia + English)
 # ---------------------------------------------------------------------------
+
 _POSITIVE_WORDS = {
-    # Indonesia
     "naik", "meningkat", "tumbuh", "positif", "untung", "laba", "profit",
     "rekor", "tinggi", "ekspansi", "akuisisi", "dividen", "buyback",
-    "surplus", "optimis", "kuat", "membaik",
-    # English
+    "surplus", "optimis", "kuat", "membaik", "capai", "cetak",
     "up", "rise", "gain", "high", "record", "growth", "profit", "strong",
     "beat", "exceed", "rally", "upgrade", "buy", "bullish", "outperform",
-    "dividend", "acquisition", "expansion", "positive",
+    "dividend", "acquisition", "expansion", "positive", "surge", "soar",
 }
 
 _NEGATIVE_WORDS = {
-    # Indonesia
     "turun", "menurun", "rugi", "kerugian", "negatif", "rendah",
     "koreksi", "lemah", "gagal", "tunda", "suspend", "investigasi",
-    "penurunan", "defisit", "pesimis", "tertekan",
-    # English
+    "penurunan", "defisit", "pesimis", "tertekan", "anjlok", "ambles",
     "down", "fall", "drop", "loss", "weak", "miss", "decline", "sell",
     "bearish", "downgrade", "suspend", "investigate", "delay", "risk",
-    "concern", "below", "negative", "crash", "default",
+    "concern", "below", "negative", "crash", "default", "fraud", "slump",
 }
+
+
+# ---------------------------------------------------------------------------
+# Exception
+# ---------------------------------------------------------------------------
+
+class NewsProviderError(Exception):
+    """Raised by a provider when fetch fails — lets Aggregator try next provider."""
+
+
+# ---------------------------------------------------------------------------
+# Provider base + implementations
+# ---------------------------------------------------------------------------
+
+class BaseNewsProvider(ABC):
+    """Interface for a news source.
+
+    Subclasses must raise NewsProviderError (not return empty list) when the
+    fetch genuinely fails — empty list is a valid "no news found" result.
+    """
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Short identifier used in logs and news_source column."""
+
+    @abstractmethod
+    def fetch(self, ticker: str, days: int) -> list[dict]:
+        """Fetch recent articles for ticker.
+
+        Args:
+            ticker : e.g. "BBCA.JK"
+            days   : look-back window in days
+
+        Returns:
+            List of dicts: {"title": str, "published": datetime, "publisher": str}
+            Empty list is valid (no news in window).
+
+        Raises:
+            NewsProviderError: on network failure, malformed response, timeout.
+        """
+
+
+class YFinanceNewsProvider(BaseNewsProvider):
+    """News via yfinance.Ticker.news — free, no API key required.
+
+    Known failure modes handled explicitly:
+    - Returns dict instead of list (yfinance "faulty response" error object)
+    - providerPublishTime missing or non-numeric
+    - API timeout / network error
+    """
+
+    @property
+    def name(self) -> str:
+        return "yfinance"
+
+    def fetch(self, ticker: str, days: int) -> list[dict]:
+        try:
+            import yfinance as yf
+            raw = yf.Ticker(ticker).news
+        except Exception as exc:
+            raise NewsProviderError(f"yfinance import/call failed: {exc}") from exc
+
+        # ── Guard: yfinance sometimes returns a dict error object ──────────
+        if raw is None:
+            raise NewsProviderError("yfinance.news returned None")
+        if isinstance(raw, dict):
+            # e.g. {"faulty": True, "error": "Failed to retrieve the news..."}
+            err_msg = raw.get("error") or raw.get("message") or str(list(raw.keys()))
+            raise NewsProviderError(f"yfinance returned dict (malformed): {err_msg}")
+        if not isinstance(raw, list):
+            raise NewsProviderError(
+                f"yfinance.news unexpected type {type(raw).__name__}"
+            )
+
+        # ── Parse articles ─────────────────────────────────────────────────
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        results: list[dict] = []
+        malformed = 0
+
+        for item in raw:
+            try:
+                pub_ts = item.get("providerPublishTime") or item.get("publishedAt")
+                if pub_ts is None:
+                    malformed += 1
+                    continue
+                pub_dt = datetime.utcfromtimestamp(int(pub_ts))
+                if pub_dt < cutoff:
+                    continue
+                # Handle both old and new yfinance response shapes
+                title = (
+                    item.get("title")
+                    or (item.get("content") or {}).get("title")
+                    or ""
+                )
+                publisher = item.get("publisher", "")
+                results.append({
+                    "title":     str(title).strip(),
+                    "published": pub_dt,
+                    "publisher": str(publisher),
+                })
+            except Exception:
+                malformed += 1
+                continue
+
+        if malformed:
+            logger.debug("%s: yfinance news — %d malformed items skipped", ticker, malformed)
+
+        return results
+
+
+class RssNewsProvider(BaseNewsProvider):
+    """RSS/scraper fallback for IDX news.
+
+    TODO: Implement with one of:
+        - IDX press release RSS: https://www.idx.co.id/id/berita/
+        - CNBC Indonesia RSS feed
+        - Bisnis.com RSS
+        - Kontan.co.id
+
+    Pattern to implement:
+        import feedparser
+        feed = feedparser.parse(f"https://some.rss.url/?q={ticker}")
+        for entry in feed.entries:
+            ...
+    """
+
+    @property
+    def name(self) -> str:
+        return "rss"
+
+    def fetch(self, ticker: str, days: int) -> list[dict]:
+        # TODO: implement real RSS fetch
+        raise NewsProviderError("RssNewsProvider not yet implemented")
+
+
+# ---------------------------------------------------------------------------
+# Aggregator — tries providers in priority order
+# ---------------------------------------------------------------------------
+
+class NewsAggregator:
+    """Run providers in order; stop at the first success.
+
+    A provider that raises NewsProviderError is logged and skipped.
+    An empty list from a provider is a valid success (no news in window).
+    """
+
+    def __init__(self, providers: list[BaseNewsProvider] | None = None) -> None:
+        if providers is None:
+            providers = [YFinanceNewsProvider(), RssNewsProvider()]
+        self.providers = providers
+
+    def fetch_with_status(
+        self, ticker: str, days: int
+    ) -> tuple[list[dict], str, str | None]:
+        """
+        Returns:
+            (articles, source_name, error_message)
+            error_message is None when at least one provider succeeded.
+        """
+        errors: list[str] = []
+
+        for provider in self.providers:
+            try:
+                articles = provider.fetch(ticker, days)
+                logger.debug("%s: news fetched via %s → %d articles", ticker, provider.name, len(articles))
+                return articles, provider.name, None
+            except NewsProviderError as exc:
+                msg = f"{provider.name}: {exc}"
+                logger.debug("%s: news provider failed — %s", ticker, msg)
+                errors.append(msg)
+                continue
+
+        # All providers failed
+        combined_error = " | ".join(errors)
+        logger.warning("%s: all news providers failed — %s", ticker, combined_error)
+        return [], "all_failed", combined_error
 
 
 # ---------------------------------------------------------------------------
@@ -51,94 +245,105 @@ _NEGATIVE_WORDS = {
 # ---------------------------------------------------------------------------
 
 def score_headline(text: str) -> float:
-    """Skor satu headline: +1 positif, -1 negatif, 0 netral."""
+    """Score one headline: +1 positive, -1 negative, 0 neutral."""
     if not text:
         return 0.0
     words = set(text.lower().replace(",", " ").replace(".", " ").split())
-    pos_hits = len(words & _POSITIVE_WORDS)
-    neg_hits = len(words & _NEGATIVE_WORDS)
-    if pos_hits == neg_hits:
+    pos = len(words & _POSITIVE_WORDS)
+    neg = len(words & _NEGATIVE_WORDS)
+    if pos == neg:
         return 0.0
-    return 1.0 if pos_hits > neg_hits else -1.0
+    return 1.0 if pos > neg else -1.0
 
 
 def sentiment_to_score(mean_sentiment: float) -> float:
-    """Konversi mean sentiment (-1 to 1) ke skala 0–10 (5.0 = neutral)."""
+    """Convert mean sentiment (–1 to 1) to 0–10 scale (5.0 = neutral)."""
     return round(5.0 + mean_sentiment * 5.0, 2)
 
 
 # ---------------------------------------------------------------------------
-# Fetch via yfinance
+# Public API: per-ticker computation
 # ---------------------------------------------------------------------------
 
-def _fetch_yf_news(ticker: str, days: int = 3) -> list[dict]:
-    """Ambil berita dari yfinance.Ticker.news dan filter N hari terakhir.
+_DEFAULT_AGGREGATOR = NewsAggregator()  # module-level singleton
 
-    Returns:
-        List of {"title": str, "published": datetime, "publisher": str}
+
+def compute_news_sentiment(
+    ticker: str,
+    news_days: int = 3,
+    aggregator: NewsAggregator | None = None,
+) -> dict:
+    """Fetch news and compute sentiment metrics for one ticker.
+
+    Returns a dict with the following keys (always present):
+        news_count_3d          int   (0 on failure or no news)
+        news_sentiment_mean    float | NaN   (NaN on fetch failure)
+        news_positive_count    int
+        news_negative_count    int
+        news_sentiment_score   float | NaN   (NaN on fetch failure)
+        news_data_status       str   "ok" | "empty" | "failed"
+        news_source            str   provider name or "all_failed"
+        news_error_message     str | None
     """
-    try:
-        import yfinance as yf
-        raw_news = yf.Ticker(ticker).news  # list of dicts
-    except Exception as e:
-        logger.debug(f"{ticker}: yf.news gagal — {e}")
-        return []
+    import math
 
-    if not raw_news:
-        return []
+    agg = aggregator or _DEFAULT_AGGREGATOR
+    articles, source, error_msg = agg.fetch_with_status(ticker, news_days)
 
-    cutoff = datetime.utcnow() - timedelta(days=days)
-    results = []
-    for item in raw_news:
-        try:
-            pub_ts = item.get("providerPublishTime") or item.get("publishedAt")
-            if pub_ts is None:
-                continue
-            # providerPublishTime adalah Unix timestamp (int)
-            pub_dt = datetime.utcfromtimestamp(int(pub_ts))
-            if pub_dt < cutoff:
-                continue
-            title = item.get("title") or item.get("content", {}).get("title", "")
-            publisher = item.get("publisher", "")
-            results.append({"title": str(title), "published": pub_dt, "publisher": publisher})
-        except Exception:
-            continue
+    # ── All providers failed → NaN scores, status = "failed" ─────────────
+    if source == "all_failed":
+        return {
+            "news_count_3d":        0,
+            "news_sentiment_mean":  float("nan"),
+            "news_positive_count":  0,
+            "news_negative_count":  0,
+            "news_sentiment_score": float("nan"),
+            "news_data_status":     "failed",
+            "news_source":          source,
+            "news_error_message":   error_msg,
+        }
 
-    return results
+    # ── Fetch succeeded but 0 articles → valid neutral ───────────────────
+    if not articles:
+        return {
+            "news_count_3d":        0,
+            "news_sentiment_mean":  0.0,
+            "news_positive_count":  0,
+            "news_negative_count":  0,
+            "news_sentiment_score": 5.0,   # genuine neutral (no news)
+            "news_data_status":     "empty",
+            "news_source":          source,
+            "news_error_message":   None,
+        }
 
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-def compute_news_sentiment(ticker: str, news_days: int = 3) -> dict:
-    """Ambil berita dan hitung sentiment untuk satu ticker.
-
-    Returns:
-        dict dengan keys: news_count_3d, news_sentiment_mean,
-                          news_positive_count, news_negative_count,
-                          news_sentiment_score
-    """
-    news = _fetch_yf_news(ticker, days=news_days)
-    default = {
-        "news_count_3d": 0,
-        "news_sentiment_mean": 0.0,
-        "news_positive_count": 0,
-        "news_negative_count": 0,
-        "news_sentiment_score": 5.0,  # neutral
-    }
-    if not news:
-        return default
-
-    scores = [score_headline(item["title"]) for item in news]
+    # ── Articles found → compute sentiment ───────────────────────────────
+    scores = [score_headline(a["title"]) for a in articles]
     mean_score = sum(scores) / len(scores)
     return {
-        "news_count_3d": len(scores),
-        "news_sentiment_mean": round(mean_score, 3),
-        "news_positive_count": sum(1 for s in scores if s > 0),
-        "news_negative_count": sum(1 for s in scores if s < 0),
+        "news_count_3d":        len(scores),
+        "news_sentiment_mean":  round(mean_score, 3),
+        "news_positive_count":  sum(1 for s in scores if s > 0),
+        "news_negative_count":  sum(1 for s in scores if s < 0),
         "news_sentiment_score": sentiment_to_score(mean_score),
+        "news_data_status":     "ok",
+        "news_source":          source,
+        "news_error_message":   None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Enrichment — batch over feature DataFrame
+# ---------------------------------------------------------------------------
+
+_NEWS_SCORE_COLS = [
+    "news_count_3d", "news_sentiment_mean",
+    "news_positive_count", "news_negative_count",
+    "news_sentiment_score",
+]
+_NEWS_STATUS_COLS = [
+    "news_data_status", "news_source", "news_error_message",
+]
+_ALL_NEWS_COLS = _NEWS_SCORE_COLS + _NEWS_STATUS_COLS
 
 
 def enrich_with_news(
@@ -147,56 +352,81 @@ def enrich_with_news(
     news_days: int = 3,
     save: bool = True,
     scan_date: str | None = None,
+    aggregator: NewsAggregator | None = None,
 ) -> pd.DataFrame:
-    """Tambahkan kolom news sentiment ke feature DataFrame.
+    """Add news sentiment columns to the feature DataFrame.
 
-    Dipanggil di run_daily_scan.py setelah build_features.
-    Untuk setiap ticker, fetch berita dan tambahkan kolom sentiment.
-    Jika fetch gagal, isi dengan nilai neutral (tidak crash pipeline).
+    NaN policy (important!):
+        news_sentiment_score is LEFT AS NaN when fetch failed.
+        DO NOT fill with 5.0 here — let _news_score() in signal_engine.py
+        handle that, so the original NaN is available for the dashboard.
 
-    Args:
-        df_features: DataFrame dengan kolom 'ticker' (satu baris per ticker)
-        news_dir: direktori untuk cache news (opsional)
-        news_days: berapa hari terakhir berita yang dihitung
-        save: simpan hasil ke news_dir/{scan_date}.parquet
-
-    Returns:
-        df_features dengan 5 kolom sentiment tambahan
+    Count columns (news_count_3d etc.) are filled with 0 since NaN count = 0.
     """
-    NEWS_COLS = [
-        "news_count_3d", "news_sentiment_mean",
-        "news_positive_count", "news_negative_count",
-        "news_sentiment_score",
-    ]
-
     df = df_features.copy()
-    results = []
+    results: list[dict] = []
+    failed_tickers: list[str] = []
+    t0 = time.monotonic()
 
     for ticker in df["ticker"].unique():
         try:
-            sentiment = compute_news_sentiment(ticker, news_days)
-            sentiment["ticker"] = ticker
-            results.append(sentiment)
-            logger.debug(f"{ticker}: news={sentiment['news_count_3d']}, score={sentiment['news_sentiment_score']:.1f}")
-        except Exception as e:
-            logger.warning(f"{ticker}: news sentiment gagal — {e}")
-            results.append({"ticker": ticker, **{c: (0 if "count" in c else 5.0) for c in NEWS_COLS}})
+            row = compute_news_sentiment(ticker, news_days, aggregator)
+            row["ticker"] = ticker
+            results.append(row)
+            if row["news_data_status"] == "failed":
+                failed_tickers.append(ticker)
+        except Exception as exc:
+            logger.error("%s: unexpected error in compute_news_sentiment — %s", ticker, exc)
+            results.append({
+                "ticker":               ticker,
+                "news_count_3d":        0,
+                "news_sentiment_mean":  float("nan"),
+                "news_positive_count":  0,
+                "news_negative_count":  0,
+                "news_sentiment_score": float("nan"),
+                "news_data_status":     "failed",
+                "news_source":          "error",
+                "news_error_message":   str(exc),
+            })
+            failed_tickers.append(ticker)
 
     news_df = pd.DataFrame(results)
-    df = df.merge(news_df[["ticker"] + NEWS_COLS], on="ticker", how="left")
+    df = df.merge(news_df[["ticker"] + _ALL_NEWS_COLS], on="ticker", how="left")
 
-    # Isi NaN dengan neutral
-    for col in NEWS_COLS:
-        default_val = 0 if "count" in col else 5.0
-        df[col] = df[col].fillna(default_val)
+    # Fill counts with 0 (NaN count is meaningless — it's still 0)
+    for col in ["news_count_3d", "news_positive_count", "news_negative_count"]:
+        df[col] = df[col].fillna(0).astype(int)
+
+    # news_sentiment_score: leave NaN for failed; fill mean NaN with 0.0
+    df["news_sentiment_mean"] = df["news_sentiment_mean"].fillna(0.0)
+
+    # Status defaults for any ticker not in results
+    df["news_data_status"] = df["news_data_status"].fillna("failed")
+    df["news_source"] = df["news_source"].fillna("all_failed")
+
+    elapsed = time.monotonic() - t0
+    total = len(df["ticker"].unique())
+    ok_count = (news_df["news_data_status"] == "ok").sum()
+    empty_count = (news_df["news_data_status"] == "empty").sum()
+    fail_count = len(failed_tickers)
+
+    logger.info(
+        "News enrichment done in %.1fs — ok=%d empty=%d failed=%d / %d tickers",
+        elapsed, ok_count, empty_count, fail_count, total,
+    )
+    if failed_tickers:
+        sample = failed_tickers[:5]
+        logger.warning(
+            "Failed tickers (%d total), sample: %s%s",
+            fail_count,
+            ", ".join(sample),
+            f" ... (+{fail_count - len(sample)} more)" if fail_count > 5 else "",
+        )
 
     if save and news_dir and scan_date:
         news_dir.mkdir(parents=True, exist_ok=True)
         path = news_dir / f"{scan_date}.parquet"
         news_df.to_parquet(path, index=False)
-        logger.info(f"News sentiment saved → {path}")
+        logger.info("News sentiment saved → %s", path)
 
-    n_positive = (news_df["news_sentiment_score"] > 6).sum()
-    n_negative = (news_df["news_sentiment_score"] < 4).sum()
-    logger.info(f"News enrichment done: +{n_positive} positive, -{n_negative} negative")
     return df
