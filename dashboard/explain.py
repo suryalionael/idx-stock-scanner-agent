@@ -7,6 +7,8 @@ Dua level:
 Penjelasan dibagi 3 dimensi:
   🔧 Teknikal    — indikator harga & volume (MA, RSI, OBV, ATR, dll.)
   📰 News/Catalyst — sentimen berita 3 hari terakhir; respects news_data_status
+                     Jika artikel tersedia: menampilkan bullet topik per kategori
+                     (positif/negatif/netral) via news_summarizer
   📊 Fundamental  — PE, PBV, ROE, DER, dividend yield dari yfinance pipeline
 
 Logika rule-based menggunakan kondisi fitur nyata sehingga penjelasan
@@ -16,6 +18,11 @@ import os
 from typing import Any
 
 import pandas as pd
+
+from stock_scanner.pipeline.news_summarizer import (
+    format_news_bullets,
+    summarize_news_articles,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -38,13 +45,22 @@ _PBV_EXPENSIVE = 4.0   # PBV > 4 dianggap premium
 # Level 1: Rule-based explanation (selalu tersedia)
 # ---------------------------------------------------------------------------
 
-def explain_signal(row: pd.Series) -> str:
+def explain_signal(
+    row: pd.Series,
+    articles: list[dict] | None = None,
+) -> str:
     """Buat penjelasan berbasis rule dari fitur satu ticker.
 
     Tidak butuh API key. Output adalah teks Markdown dengan 3 seksi:
       🔧 Teknikal
       📰 News & Catalyst
       📊 Fundamental
+
+    Args:
+        row      : Series dengan feature + signal + news/fundamental columns
+        articles : list of labeled article dicts (optional).
+                   If provided, adds per-topic bullet points to the news section.
+                   Dict shape: {title, sentiment_label, publisher, published, ...}
     """
     signal = str(row.get("signal", "NONE"))
     ticker = str(row.get("ticker", "?"))
@@ -79,7 +95,7 @@ def explain_signal(row: pd.Series) -> str:
     # =========================================================================
     parts.append("")
     parts.append("### 📰 News & Catalyst (3 hari terakhir)")
-    parts.extend(_build_news_section(row))
+    parts.extend(_build_news_section(row, articles=articles))
 
     # =========================================================================
     # SEKSI 3: FUNDAMENTAL
@@ -230,14 +246,21 @@ def _build_technical_section(row: pd.Series) -> list[str]:
     return tech if tech else ["Data teknikal tidak lengkap untuk ticker ini."]
 
 
-def _build_news_section(row: pd.Series) -> list[str]:
+def _build_news_section(
+    row: pd.Series,
+    articles: list[dict] | None = None,
+) -> list[str]:
     """Build lines for the News & Catalyst section.
 
     Respects news_data_status:
-      "ok"     → show count, breakdown, sentiment score
+      "ok"     → stats + per-topic bullet points (if articles provided)
       "none"   → explain no news found (valid, not a failure)
       "failed" → honest error message, explain impact on scoring
       (missing) → legacy scan without status column
+
+    Args:
+        row      : Series with news aggregate columns
+        articles : optional list of labeled article dicts for bullet summaries
     """
     news_status  = str(row.get("news_data_status", "")).strip().lower()
     news_count   = _num(row.get("news_count_3d"))
@@ -250,6 +273,7 @@ def _build_news_section(row: pd.Series) -> list[str]:
 
     lines: list[str] = []
 
+    # ── FAILED: all providers errored ────────────────────────────────────
     if news_status == "failed":
         err_hint = f"\n  _(Detail: {news_err})_" if news_err else ""
         lines.append(
@@ -258,33 +282,58 @@ def _build_news_section(row: pd.Series) -> list[str]:
             "\nNilai news_score diset ke netral (5.0) secara internal agar tidak "
             "merugikan sinyal teknikal yang mungkin valid.".format(err_hint)
         )
+        return lines
 
-    elif news_status == "none":
+    # ── NONE: fetch succeeded but 0 articles ─────────────────────────────
+    if news_status == "none":
         lines.append(
             "Tidak ada berita relevan yang ditemukan dalam 3 hari terakhir untuk ticker ini "
             f"(sumber: {news_source or 'google_rss'}).\n"
             "\nPergerakan harga kemungkinan lebih didorong oleh teknikal atau aliran dana, "
             "bukan katalis berita spesifik."
         )
+        return lines
 
-    elif news_status == "ok" and news_count is not None:
+    # ── OK: articles found ────────────────────────────────────────────────
+    if news_status == "ok" and news_count is not None:
         n   = int(news_count)
         pos = int(news_pos) if news_pos is not None else 0
         neg = int(news_neg) if news_neg is not None else 0
         neu = max(0, n - pos - neg)
-
         src_label = news_source or "google_rss"
+        bar = _score_bar(news_score_v) if news_score_v is not None else ""
+
+        # ── With articles: full narrative ──────────────────────────────
+        if articles:
+            try:
+                summary = summarize_news_articles(articles, max_articles_per_polarity=5)
+                narrative = format_news_bullets(
+                    summary=summary,
+                    total_article_count=n,
+                    sentiment_score=news_score_v,
+                    score_bar=bar,
+                    source=src_label,
+                    max_chars=900,
+                )
+                # Prepend breakdown line
+                breakdown = (
+                    f"Breakdown: 🟢 {pos} positif · 🔴 {neg} negatif · ⚪ {neu} netral"
+                )
+                lines.append(narrative)
+                lines.append(breakdown)
+                return lines
+            except Exception:
+                pass  # fall through to stats-only on any error
+
+        # ── Without articles (or summarizer failed): stats-only ────────
         lines.append(
             f"Ditemukan **{n} artikel** dalam 3 hari terakhir (sumber: {src_label})."
         )
-
         if news_score_v is not None:
-            bar = _score_bar(news_score_v)
             lines.append(
                 f"Breakdown: 🟢 {pos} positif · 🔴 {neg} negatif · ⚪ {neu} netral  "
                 f"→ Skor sentimen: **{_fmt_num(news_score_v, 1)}/10** {bar}"
             )
-
         if news_mean is not None:
             if news_mean > 0.3:
                 lines.append(
@@ -300,21 +349,19 @@ def _build_news_section(row: pd.Series) -> list[str]:
                 lines.append(
                     "Berita cukup berimbang — tidak ada sentimen kuat ke satu arah."
                 )
+        return lines
 
+    # ── Legacy scan (no status field) ────────────────────────────────────
+    if news_count is not None and news_count > 0 and news_score_v is not None:
+        lines.append(
+            f"{int(news_count)} artikel, skor sentimen: {_fmt_num(news_score_v, 1)}/10. "
+            "(Status field belum tersedia — jalankan ulang scan untuk info lengkap.)"
+        )
     else:
-        # news_data_status kolom belum ada (scan lama sebelum upgrade pipeline)
-        if news_count is not None and news_count > 0 and news_score_v is not None:
-            # Bisa tampilkan data meski tanpa status field
-            lines.append(
-                f"{int(news_count)} artikel, skor sentimen: {_fmt_num(news_score_v, 1)}/10. "
-                "(Status field belum tersedia — jalankan ulang scan untuk info lengkap.)"
-            )
-        else:
-            lines.append(
-                "_Data news tidak tersedia untuk scan ini (format lama). "
-                "Jalankan ulang scan untuk mendapatkan status news yang akurat._"
-            )
-
+        lines.append(
+            "_Data news tidak tersedia untuk scan ini (format lama). "
+            "Jalankan ulang scan untuk mendapatkan status news yang akurat._"
+        )
     return lines
 
 
@@ -439,16 +486,22 @@ def _build_fundamental_section(row: pd.Series) -> list[str]:
 def explain_signal_llm(
     row: pd.Series,
     api_key: str | None = None,
+    articles: list[dict] | None = None,
 ) -> str:
     """Gunakan Claude API untuk narasi yang lebih natural.
 
     Jika api_key tidak tersedia, fallback otomatis ke explain_signal().
+
+    Args:
+        row      : Series dengan fitur + signal + ml_prob
+        api_key  : ANTHROPIC_API_KEY (jika None, baca dari env var)
+        articles : optional labeled articles list (passed to explain_signal fallback)
     """
     key = api_key or os.getenv("ANTHROPIC_API_KEY")
     if not key:
-        return explain_signal(row)
+        return explain_signal(row, articles=articles)
 
-    prompt = _build_llm_prompt(row)
+    prompt = _build_llm_prompt(row, articles=articles)
 
     # TODO: Uncomment dan install `anthropic` untuk integrasi nyata
     #
@@ -456,15 +509,18 @@ def explain_signal_llm(
     # client = anthropic.Anthropic(api_key=key)
     # response = client.messages.create(
     #     model="claude-sonnet-4-6",
-    #     max_tokens=500,
+    #     max_tokens=600,
     #     messages=[{"role": "user", "content": prompt}],
     # )
     # return response.content[0].text.strip()
 
-    return explain_signal(row)
+    return explain_signal(row, articles=articles)
 
 
-def _build_llm_prompt(row: pd.Series) -> str:
+def _build_llm_prompt(
+    row: pd.Series,
+    articles: list[dict] | None = None,
+) -> str:
     """Build prompt terstruktur 3 dimensi untuk Claude."""
     ticker  = row.get("ticker", "?")
     signal  = row.get("signal", "NONE")
@@ -495,13 +551,24 @@ def _build_llm_prompt(row: pd.Series) -> str:
     elif news_status == "none":
         news_lines = "  Status: KOSONG — tidak ada berita 3 hari terakhir"
     elif news_status == "ok" and news_count is not None:
-        news_lines = "\n".join([
+        base_lines = [
             f"  Jumlah artikel: {int(news_count)}",
             f"  Sentimen rata-rata: {_fmt_num(news_mean, 2)} (-1 s/d 1)",
             f"  Positif: {_fmt_num(row.get('news_positive_count'), 0)} | "
             f"Negatif: {_fmt_num(row.get('news_negative_count'), 0)}",
             f"  Skor sentimen (0-10): {_fmt_num(row.get('news_sentiment_score'), 1)}",
-        ])
+        ]
+        if articles:
+            try:
+                from stock_scanner.pipeline.news_summarizer import summarize_news_articles
+                summary = summarize_news_articles(articles, max_articles_per_polarity=3)
+                if summary.get("positive_summary"):
+                    base_lines.append("  Topik positif: " + " | ".join(summary["positive_summary"][:2]))
+                if summary.get("negative_summary"):
+                    base_lines.append("  Topik negatif: " + " | ".join(summary["negative_summary"][:2]))
+            except Exception:
+                pass
+        news_lines = "\n".join(base_lines)
     else:
         news_lines = "  Status: tidak tersedia (scan lama)"
 

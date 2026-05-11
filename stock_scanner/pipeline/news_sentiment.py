@@ -391,6 +391,30 @@ def sentiment_to_score(mean_sentiment: float) -> float:
     return round(5.0 + mean_sentiment * 5.0, 2)
 
 
+def label_articles(articles: list[dict]) -> list[dict]:
+    """Add sentiment_score and sentiment_label to each article dict.
+
+    Args:
+        articles: list of {"title": str, "published": datetime, "publisher": str}
+
+    Returns:
+        Same list with two extra fields added in-place (returns new list):
+            sentiment_score : +1.0 | 0.0 | -1.0
+            sentiment_label : "positive" | "neutral" | "negative"
+    """
+    labeled = []
+    for a in articles:
+        score = score_headline(a.get("title", ""))
+        if score > 0:
+            label = "positive"
+        elif score < 0:
+            label = "negative"
+        else:
+            label = "neutral"
+        labeled.append({**a, "sentiment_score": score, "sentiment_label": label})
+    return labeled
+
+
 # ---------------------------------------------------------------------------
 # Public API: per-ticker computation
 # ---------------------------------------------------------------------------
@@ -415,12 +439,27 @@ def compute_news_sentiment(
         news_source            str   provider name or "all_failed"
         news_error_message     str | None
     """
+    _, stats = _fetch_and_compute(ticker, news_days, aggregator)
+    return stats
+
+
+def _fetch_and_compute(
+    ticker: str,
+    news_days: int,
+    aggregator: NewsAggregator | None,
+) -> tuple[list[dict], dict]:
+    """Internal: fetch articles, label them, compute stats.
+
+    Returns:
+        (labeled_articles, stats_dict)
+        labeled_articles is empty list when status != "ok"
+    """
     agg = aggregator or _DEFAULT_AGGREGATOR
     articles, source, error_msg = agg.fetch_with_status(ticker, news_days)
 
     # ── All providers failed → NaN scores, status = "failed" ─────────────
     if source == "all_failed":
-        return {
+        return [], {
             "news_count_3d":        0,
             "news_sentiment_mean":  float("nan"),
             "news_positive_count":  0,
@@ -432,23 +471,23 @@ def compute_news_sentiment(
         }
 
     # ── Fetch succeeded but 0 articles → valid neutral ───────────────────
-    # Status = "none" (not "failed") — absence of news ≠ failure
     if not articles:
-        return {
+        return [], {
             "news_count_3d":        0,
             "news_sentiment_mean":  0.0,
             "news_positive_count":  0,
             "news_negative_count":  0,
-            "news_sentiment_score": 5.0,   # genuine neutral (no news)
+            "news_sentiment_score": 5.0,
             "news_data_status":     "none",
             "news_source":          source,
             "news_error_message":   None,
         }
 
-    # ── Articles found → compute sentiment ───────────────────────────────
-    scores = [score_headline(a["title"]) for a in articles]
+    # ── Articles found → label + compute sentiment ────────────────────────
+    labeled = label_articles(articles)
+    scores = [a["sentiment_score"] for a in labeled]
     mean_score = sum(scores) / len(scores)
-    return {
+    stats = {
         "news_count_3d":        len(scores),
         "news_sentiment_mean":  round(mean_score, 3),
         "news_positive_count":  sum(1 for s in scores if s > 0),
@@ -458,6 +497,7 @@ def compute_news_sentiment(
         "news_source":          source,
         "news_error_message":   None,
     }
+    return labeled, stats
 
 
 # ---------------------------------------------------------------------------
@@ -495,21 +535,31 @@ def enrich_with_news(
         - "failed" leaves score = NaN (data unavailable)
 
     Count columns (news_count_3d etc.) are filled with 0 since NaN count = 0.
+
+    Article storage:
+        Individual labeled articles are saved to
+        {news_dir}/articles/{scan_date}.parquet
+        with columns: ticker, title, published, publisher, sentiment_score, sentiment_label
+        These are used by the dashboard explanation to show "what the news was about".
     """
     df = df_features.copy()
     results: list[dict] = []
+    all_articles: list[dict] = []   # ← collect per-article rows for storage
     failed_tickers: list[str] = []
     t0 = time.monotonic()
 
     for ticker in df["ticker"].unique():
         try:
-            row = compute_news_sentiment(ticker, news_days, aggregator)
+            labeled, row = _fetch_and_compute(ticker, news_days, aggregator)
             row["ticker"] = ticker
             results.append(row)
+            # Collect articles with ticker tag for article-level storage
+            for a in labeled:
+                all_articles.append({"ticker": ticker, **a})
             if row["news_data_status"] == "failed":
                 failed_tickers.append(ticker)
         except Exception as exc:
-            logger.error("%s: unexpected error in compute_news_sentiment — %s", ticker, exc)
+            logger.error("%s: unexpected error in _fetch_and_compute — %s", ticker, exc)
             results.append({
                 "ticker":               ticker,
                 "news_count_3d":        0,
@@ -557,9 +607,28 @@ def enrich_with_news(
         )
 
     if save and news_dir and scan_date:
-        Path(news_dir).mkdir(parents=True, exist_ok=True)
-        path = Path(news_dir) / f"{scan_date}.parquet"
+        news_dir_p = Path(news_dir)
+        news_dir_p.mkdir(parents=True, exist_ok=True)
+
+        # Aggregate stats (one row per ticker)
+        path = news_dir_p / f"{scan_date}.parquet"
         news_df.to_parquet(path, index=False)
         logger.info("News sentiment saved → %s", path)
+
+        # Individual labeled articles (one row per article)
+        if all_articles:
+            articles_dir = news_dir_p / "articles"
+            articles_dir.mkdir(parents=True, exist_ok=True)
+            articles_df = pd.DataFrame(all_articles)
+            # Ensure published is serialisable (convert datetime to str if needed)
+            if "published" in articles_df.columns:
+                articles_df["published"] = pd.to_datetime(
+                    articles_df["published"], errors="coerce"
+                )
+            art_path = articles_dir / f"{scan_date}.parquet"
+            articles_df.to_parquet(art_path, index=False)
+            logger.info(
+                "News articles saved → %s (%d rows)", art_path, len(articles_df)
+            )
 
     return df
