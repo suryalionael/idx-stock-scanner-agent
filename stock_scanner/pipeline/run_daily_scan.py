@@ -23,6 +23,7 @@ from stock_scanner.pipeline.explain_agent import explain_batch
 from stock_scanner.pipeline.feature_builder import build_features, save_features
 from stock_scanner.pipeline.fetch_yfinance import YFinanceFetcher, incremental_update
 from stock_scanner.pipeline.foreign_flow import PlaceholderForeignFetcher, enrich_with_foreign
+from stock_scanner.pipeline.fundamental import enrich_with_fundamentals
 from stock_scanner.pipeline.ml_ranker import load_ranker, score_candidates
 from stock_scanner.pipeline.news_sentiment import enrich_with_news
 from stock_scanner.pipeline.shareholder import PlaceholderShareholderFetcher, enrich_with_shareholders
@@ -43,14 +44,15 @@ def main(config_path: Path = _DEFAULT_CONFIG) -> None:
     features_dir  = base_dir / config.get("features_dir",   "data/features")
     signals_dir   = base_dir / config.get("signals_dir",    "data/signals")
     ranked_dir    = base_dir / config.get("ranked_dir",     "data/ranked")
-    news_dir      = base_dir / config.get("news_dir",       "data/news")
-    foreign_dir   = base_dir / config.get("foreign_dir",    "data/foreign")
-    broker_dir    = base_dir / config.get("broker_dir",     "data/broker")
-    shareholder_dir = base_dir / config.get("shareholder_dir", "data/shareholders")
-    model_path    = base_dir / config.get("model_path",     "models/ranker.pkl")
-    universe_path = base_dir / config.get("universe_path",  "stock_scanner/configs/idx_universe.csv")
+    news_dir         = base_dir / config.get("news_dir",          "data/news")
+    foreign_dir      = base_dir / config.get("foreign_dir",       "data/foreign")
+    broker_dir       = base_dir / config.get("broker_dir",        "data/broker")
+    shareholder_dir  = base_dir / config.get("shareholder_dir",   "data/shareholders")
+    fundamentals_dir = base_dir / config.get("fundamentals_dir",  "data/fundamentals")
+    model_path       = base_dir / config.get("model_path",        "models/ranker.pkl")
+    universe_path    = base_dir / config.get("universe_path",     "stock_scanner/configs/idx_universe.csv")
 
-    for d in [ranked_dir, news_dir, foreign_dir, broker_dir, shareholder_dir]:
+    for d in [ranked_dir, news_dir, foreign_dir, broker_dir, shareholder_dir, fundamentals_dir]:
         d.mkdir(parents=True, exist_ok=True)
 
     # --- Step 1: Load ticker universe ---
@@ -121,6 +123,16 @@ def main(config_path: Path = _DEFAULT_CONFIG) -> None:
             feature_df,
             fetcher=PlaceholderShareholderFetcher(),
             shareholder_dir=shareholder_dir,
+        )
+
+    if enrich_cfg.get("fundamental", {}).get("enabled", True):
+        delay = enrich_cfg.get("fundamental", {}).get("delay_between_tickers", 0.3)
+        feature_df = enrich_with_fundamentals(
+            feature_df,
+            fundamentals_dir=fundamentals_dir,
+            save=True,
+            scan_date=scan_date,
+            delay_between_tickers=delay,
         )
 
     # --- Step 6: Signal engine (rules) ---

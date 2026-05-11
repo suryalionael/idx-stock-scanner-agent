@@ -12,9 +12,10 @@ _ROOT = Path(__file__).parent.parent
 _RANKED_DIR    = _ROOT / "data" / "ranked"
 _RAW_DIR       = _ROOT / "data" / "raw"
 _SIGNALS_DIR   = _ROOT / "data" / "signals"
-_NEWS_DIR      = _ROOT / "data" / "news"
-_FOREIGN_DIR   = _ROOT / "data" / "foreign"
-_BROKER_DIR    = _ROOT / "data" / "broker"
+_NEWS_DIR          = _ROOT / "data" / "news"
+_FOREIGN_DIR       = _ROOT / "data" / "foreign"
+_BROKER_DIR        = _ROOT / "data" / "broker"
+_FUNDAMENTALS_DIR  = _ROOT / "data" / "fundamentals"
 
 # Kolom tabel utama (urutan display) — termasuk kolom baru
 TABLE_COLS = [
@@ -25,6 +26,7 @@ TABLE_COLS = [
     "adx", "supertrend_bullish", "squeeze_on",
     "atr_breakout", "vol_spike",
     "news_sentiment_score", "news_count_3d", "news_data_status",
+    "pe_ratio", "pbv", "roe_pct", "der", "div_yield_pct", "fundamental_status",
 ]
 
 HISTORY_COLS = [
@@ -225,3 +227,26 @@ def load_news_for_date(scan_date: str) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame()
     return pd.read_parquet(path)
+
+
+# ---------------------------------------------------------------------------
+# Fundamental data
+# ---------------------------------------------------------------------------
+
+def load_fundamentals_for_date(scan_date: str) -> pd.DataFrame:
+    """Load fundamental snapshot untuk semua ticker pada tanggal tertentu."""
+    path = _FUNDAMENTALS_DIR / f"{scan_date}.parquet"
+    if not path.exists():
+        return pd.DataFrame()
+    return pd.read_parquet(path)
+
+
+def get_fundamental_row(ticker: str, scan_date: str) -> dict:
+    """Return fundamental dict for one ticker from cached parquet, or empty dict."""
+    df = load_fundamentals_for_date(scan_date)
+    if df.empty or "ticker" not in df.columns:
+        return {}
+    row = df[df["ticker"] == ticker]
+    if row.empty:
+        return {}
+    return row.iloc[0].to_dict()
