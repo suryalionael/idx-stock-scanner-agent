@@ -29,6 +29,8 @@ from dashboard.data_loader import (
     load_broker_for_ticker,
     load_raw,
     latest_ranked_date,
+    load_fundamentals_for_date,
+    get_fundamental_row,
 )
 from dashboard.explain import explain_signal_llm
 from dashboard.search import (
@@ -116,6 +118,72 @@ def _color_net_lot(val) -> str:
     if v < 0:
         return "color: #ef4444; font-weight: 600"
     return "color: #94a3b8"
+
+
+def _render_data_status_badges(row: pd.Series) -> None:
+    """Show compact news + fundamental status badges above the explanation."""
+    news_status = str(row.get("news_data_status", "")).lower()
+    fund_status = str(row.get("fundamental_status", "")).lower()
+
+    badges: list[str] = []
+
+    # News badge
+    if news_status == "ok":
+        n = row.get("news_count_3d", 0)
+        score = row.get("news_sentiment_score")
+        try:
+            score_str = f"{float(score):.1f}" if score is not None and pd.notna(score) else "?"
+        except (TypeError, ValueError):
+            score_str = "?"
+        badges.append(
+            f'<span style="background:#14532d;color:#4ade80;padding:2px 8px;'
+            f'border-radius:8px;font-size:12px">📰 News: {n} artikel · skor {score_str}</span>'
+        )
+    elif news_status == "none":
+        badges.append(
+            '<span style="background:#1e293b;color:#94a3b8;padding:2px 8px;'
+            'border-radius:8px;font-size:12px">📰 News: tidak ada berita 3 hari ini</span>'
+        )
+    elif news_status == "failed":
+        badges.append(
+            '<span style="background:#450a0a;color:#f87171;padding:2px 8px;'
+            'border-radius:8px;font-size:12px">⚠️ News: data unavailable today</span>'
+        )
+
+    # Fundamental badge
+    if fund_status == "ok":
+        pe  = row.get("pe_ratio")
+        roe = row.get("roe_pct")
+        parts = []
+        if pe is not None:
+            try:
+                parts.append(f"PE {float(pe):.1f}x")
+            except (TypeError, ValueError):
+                pass
+        if roe is not None:
+            try:
+                parts.append(f"ROE {float(roe):.1f}%")
+            except (TypeError, ValueError):
+                pass
+        summary = " · ".join(parts) if parts else "data ok"
+        badges.append(
+            f'<span style="background:#1e3a5f;color:#38bdf8;padding:2px 8px;'
+            f'border-radius:8px;font-size:12px">📊 Fundamental: {summary}</span>'
+        )
+    elif fund_status == "partial":
+        badges.append(
+            '<span style="background:#292524;color:#fb923c;padding:2px 8px;'
+            'border-radius:8px;font-size:12px">📊 Fundamental: data parsial</span>'
+        )
+    elif fund_status == "missing":
+        badges.append(
+            '<span style="background:#1e293b;color:#64748b;padding:2px 8px;'
+            'border-radius:8px;font-size:12px">📊 Fundamental: belum tersedia</span>'
+        )
+
+    if badges:
+        st.markdown(" &nbsp; ".join(badges), unsafe_allow_html=True)
+        st.markdown("")
 
 
 def _style_broker_table(df: pd.DataFrame) -> "pd.io.formats.style.Styler":
@@ -395,6 +463,9 @@ def render_ticker_detail(
             use_container_width=True,
             key=f"{key_prefix}chart_{ticker}_{scan_date}",
         )
+
+        # ---- Status badges (news & fundamental) ----
+        _render_data_status_badges(row)
 
         st.markdown("**Penjelasan Sinyal**")
         with st.spinner("Membuat penjelasan..."):

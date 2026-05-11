@@ -12,6 +12,7 @@ news_dir: "data/news"
 foreign_dir: "data/foreign"
 broker_dir: "data/broker"
 shareholder_dir: "data/shareholders"
+fundamentals_dir: "data/fundamentals"
 model_path: "models/ranker.pkl"
 
 # --- Data fetch ---
@@ -28,6 +29,9 @@ enrichment:
     enabled: true        # PlaceholderForeignFetcher (no-op) by default
   shareholder:
     enabled: true        # PlaceholderShareholderFetcher (no-op) by default
+  fundamental:
+    enabled: true        # yfinance .info; set false untuk skip (lebih cepat)
+    delay_between_tickers: 0.3   # detik antar request (rate limiting)
 
 # --- Signal classification ---
 # Gunakan enhanced_total_score (news + foreign adjusted) atau total_score biasa
