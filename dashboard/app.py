@@ -44,6 +44,7 @@ from dashboard.shareholders import (
     get_monthly_shareholder_stats,
     get_shareholder_composition,
 )
+from stock_scanner.alerts.level_calculator import compute_trading_levels, enrich_df_with_levels
 from stock_scanner.reference.issuers import get_company_name, get_sector, ticker_display
 
 # ---------------------------------------------------------------------------
@@ -185,6 +186,168 @@ def _render_data_status_badges(row: pd.Series) -> None:
     if badges:
         st.markdown(" &nbsp; ".join(badges), unsafe_allow_html=True)
         st.markdown("")
+
+
+def _fmt_price(val) -> str:
+    """Format a price int/float as a clean integer string, or '-' if zero/None."""
+    try:
+        v = int(val)
+        return f"{v:,}" if v > 0 else "-"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _fmt_price_range(low, high) -> str:
+    """Format an entry/TP range as 'low – high' or single value if equal."""
+    try:
+        l, h = int(low), int(high)
+        if l <= 0 and h <= 0:
+            return "-"
+        if l == h or h <= 0:
+            return f"{l:,}" if l > 0 else "-"
+        return f"{l:,} – {h:,}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _get_or_compute_levels(df: pd.DataFrame) -> pd.DataFrame:
+    """Return df with trading level columns guaranteed present.
+
+    If columns are already in the DataFrame (from pipeline output), use them.
+    If not (e.g., old cached parquet), compute on-the-fly.
+    """
+    level_cols = ["entry_low", "entry_high", "tp_low", "tp_high", "cutloss", "trade_setup_status"]
+    if all(c in df.columns for c in level_cols):
+        return df
+    # Compute on-the-fly for older data without pre-computed columns
+    return enrich_df_with_levels(df.copy())
+
+
+def render_trading_levels_section(df_all: pd.DataFrame, selected_date: str) -> None:
+    """Render the compact Trading Levels table.
+
+    Shows entry / TP / cutloss for actionable signals.
+    Toggle allows filtering to BREAKOUT + PRE_MARKUP only, or all active setups.
+    """
+    st.markdown("### 🎯 Level Trading")
+
+    # Ensure level columns exist
+    df_levels = _get_or_compute_levels(df_all)
+
+    # Controls row
+    ctrl_left, ctrl_right = st.columns([3, 1])
+    with ctrl_left:
+        show_watch = st.toggle(
+            "Tampilkan WATCH juga",
+            value=False,
+            help="BREAKOUT & PRE_MARKUP selalu ditampilkan. Toggle ini menambahkan WATCH.",
+        )
+    with ctrl_right:
+        only_active = st.toggle(
+            "Sembunyikan inactive",
+            value=True,
+            help="Sembunyikan AVOID / NONE yang tidak punya setup trading.",
+        )
+
+    # Filter
+    if only_active:
+        priority = ["BREAKOUT", "PRE_MARKUP"]
+        if show_watch:
+            priority.append("WATCH")
+        df_show = df_levels[df_levels["signal"].isin(priority)].copy()
+    else:
+        df_show = df_levels.copy()
+
+    if df_show.empty:
+        st.info("Tidak ada data level trading untuk filter yang dipilih.")
+        return
+
+    # Sort: BREAKOUT first, then PRE_MARKUP, then WATCH; within each by total_score desc
+    sig_order = {"BREAKOUT": 0, "PRE_MARKUP": 1, "WATCH": 2, "NONE": 3, "AVOID": 4}
+    df_show["_sig_rank"] = df_show["signal"].map(sig_order).fillna(5)
+    sort_by = ["_sig_rank"]
+    if "total_score" in df_show.columns:
+        sort_by.append("total_score")
+    df_show = df_show.sort_values(sort_by, ascending=[True, False]).drop(columns=["_sig_rank"])
+
+    # Build display DataFrame
+    rows = []
+    for _, row in df_show.iterrows():
+        ticker_clean = str(row.get("ticker", "")).replace(".JK", "")
+        signal = str(row.get("signal", ""))
+        status = str(row.get("trade_setup_status", "inactive")).lower()
+
+        entry  = _fmt_price_range(row.get("entry_low"),  row.get("entry_high"))
+        tp     = _fmt_price_range(row.get("tp_low"),     row.get("tp_high"))
+        cl     = _fmt_price(row.get("cutloss"))
+        close  = _fmt_price(row.get("close"))
+        score  = row.get("total_score")
+        score_str = f"{float(score):.1f}" if pd.notna(score) else "-"
+
+        # R:R calculation
+        try:
+            el = int(row.get("entry_low", 0))
+            tl = int(row.get("tp_low",   0))
+            cl_val = int(row.get("cutloss", 0))
+            if el > cl_val > 0 and tl > el:
+                rr = (tl - el) / (el - cl_val)
+                rr_str = f"1:{rr:.1f}"
+            else:
+                rr_str = "-"
+        except (TypeError, ValueError):
+            rr_str = "-"
+
+        rows.append({
+            "Ticker":  ticker_clean,
+            "Signal":  signal,
+            "Close":   close,
+            "Area Entry":     entry if status == "active" else "-",
+            "Target Profit":  tp    if status == "active" else "-",
+            "Cutloss":        cl    if status == "active" else "-",
+            "R:R":            rr_str if status == "active" else "-",
+            "Score":          score_str,
+        })
+
+    df_disp = pd.DataFrame(rows)
+
+    if df_disp.empty:
+        st.info("Tidak ada setup trading yang aktif.")
+        return
+
+    # Counts summary
+    active_n  = (df_show.get("trade_setup_status") == "active").sum() if "trade_setup_status" in df_show.columns else 0
+    brk_n     = (df_show["signal"] == "BREAKOUT").sum()
+    pre_n     = (df_show["signal"] == "PRE_MARKUP").sum()
+    watch_n   = (df_show["signal"] == "WATCH").sum() if show_watch else 0
+
+    cnt_parts = [f"🟢 BREAKOUT: **{brk_n}**", f"🔵 PRE_MARKUP: **{pre_n}**"]
+    if show_watch:
+        cnt_parts.append(f"🟠 WATCH: **{watch_n}**")
+    st.caption("  ·  ".join(cnt_parts) + f"  ·  Total active: **{active_n}**")
+
+    # Render table
+    st.dataframe(
+        df_disp,
+        use_container_width=True,
+        hide_index=True,
+        height=min(38 * len(df_disp) + 40, 520),
+        column_config={
+            "Ticker":        st.column_config.TextColumn("Ticker",         width="small"),
+            "Signal":        st.column_config.TextColumn("Signal",         width="small"),
+            "Close":         st.column_config.TextColumn("Close (Rp)",     width="small"),
+            "Area Entry":    st.column_config.TextColumn("Area Entry (Rp)", width="medium"),
+            "Target Profit": st.column_config.TextColumn("Target Profit (Rp)", width="medium"),
+            "Cutloss":       st.column_config.TextColumn("Cutloss (Rp)",   width="small"),
+            "R:R":           st.column_config.TextColumn("R:R",            width="small"),
+            "Score":         st.column_config.TextColumn("Skor",           width="small"),
+        },
+    )
+
+    # Disclaimer
+    st.caption(
+        "⚠️ Level dihitung otomatis dari ATR14, MA20, MA50 — bukan rekomendasi investasi. "
+        "Selalu verifikasi dengan chart dan lakukan manajemen risiko mandiri."
+    )
 
 
 def _style_broker_table(df: pd.DataFrame) -> "pd.io.formats.style.Styler":
@@ -457,6 +620,34 @@ def render_ticker_detail(
                 key=f"{key_prefix}radar_{ticker}_{scan_date}",
             )
 
+            # ── Trading levels mini card ──────────────────────────
+            levels = compute_trading_levels(row)
+            if levels.get("trade_setup_status") == "active":
+                st.markdown("")
+                st.markdown("**🎯 Level Trading**")
+                lvl_data = {
+                    "": ["Area Entry", "Target Profit", "Cutloss"],
+                    "Harga (Rp)": [
+                        _fmt_price_range(levels["entry_low"], levels["entry_high"]),
+                        _fmt_price_range(levels["tp_low"],    levels["tp_high"]),
+                        _fmt_price(levels["cutloss"]),
+                    ],
+                }
+                st.dataframe(
+                    pd.DataFrame(lvl_data),
+                    use_container_width=True,
+                    hide_index=True,
+                    height=145,
+                )
+                try:
+                    el, cl_v = levels["entry_low"], levels["cutloss"]
+                    tl = levels["tp_low"]
+                    if el > cl_v > 0 and tl > el:
+                        rr = (tl - el) / (el - cl_v)
+                        st.caption(f"Risk/Reward ≈ 1:{rr:.1f}")
+                except (TypeError, ValueError, ZeroDivisionError):
+                    pass
+
         st.markdown("**Chart Harga (120 hari terakhir)**")
         df_raw = load_raw(ticker)
         st.plotly_chart(
@@ -666,6 +857,10 @@ with tab_today:
                 "vol_spike":            st.column_config.CheckboxColumn("Vol Spike"),
             },
         )
+
+    # ── Trading Levels section ──────────────────────────────────────────────
+    st.divider()
+    render_trading_levels_section(df_filtered if not df_filtered.empty else df_all, selected_date)
 
     # Ticker detail (driven by sidebar selectbox)
     st.divider()

@@ -11,11 +11,16 @@ IDX Tick Size Reference (BEI regulations):
     price ≥ 5000       → tick = 25
 
 Level logic per signal type:
-    BREAKOUT   : entry at current close ± 0.5 ATR (stock has triggered breakout)
+    BREAKOUT   : entry at current close to close + 0.5 ATR
     PRE_MARKUP : entry at support zone (MA20 area) up to current price
-    WATCH/other: entry at pullback zone below current price
+    WATCH      : entry on pullback below current price (narrower range)
+    AVOID/NONE : trade_setup_status = "inactive", all price fields = 0
 
-Risk-reward minimum target: 2:1 (tp_low = entry + 2×risk)
+Risk-reward minimum target: 1.8:1 (tp_low = entry + 1.8×risk)
+
+trade_setup_status:
+    "active"   — BREAKOUT, PRE_MARKUP, WATCH
+    "inactive" — AVOID, NONE, missing close
 """
 from __future__ import annotations
 
@@ -49,6 +54,22 @@ def round_to_tick(price: float, tick: int, down: bool = False) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Internal constants
+# ---------------------------------------------------------------------------
+
+_ACTIVE_SIGNALS  = {"BREAKOUT", "PRE_MARKUP", "WATCH"}
+
+_INACTIVE_RESULT = {
+    "entry_low":          0,
+    "entry_high":         0,
+    "tp_low":             0,
+    "tp_high":            0,
+    "cutloss":            0,
+    "trade_setup_status": "inactive",
+}
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -57,22 +78,28 @@ def compute_trading_levels(row: pd.Series) -> dict:
 
     Returns:
         {
-            "entry_low":  int,
-            "entry_high": int,
-            "tp_low":     int,
-            "tp_high":    int,
-            "cutloss":    int,
+            "entry_low":           int,
+            "entry_high":          int,
+            "tp_low":              int,
+            "tp_high":             int,
+            "cutloss":             int,
+            "trade_setup_status":  "active" | "inactive",
         }
-        All values are 0 if close price is missing or zero.
-    """
-    close = _safe_float(row.get("close"))
-    if not close or close <= 0:
-        return {"entry_low": 0, "entry_high": 0, "tp_low": 0, "tp_high": 0, "cutloss": 0}
 
+    trade_setup_status:
+        "active"   — BREAKOUT, PRE_MARKUP, WATCH (levels are meaningful)
+        "inactive" — AVOID, NONE, or missing close (all price fields = 0)
+    """
+    close  = _safe_float(row.get("close"))
     signal = str(row.get("signal", "")).upper()
+
+    # Bail early for inactive signals or missing price
+    if not close or close <= 0 or signal not in _ACTIVE_SIGNALS:
+        return dict(_INACTIVE_RESULT)
+
     tick = get_tick_size(close)
 
-    # ATR: use atr14 column, fallback to atr_pct * close / 100, then 2.5%
+    # ATR: prefer atr14, fallback to atr_pct * close / 100, then 2.5%
     atr = _safe_float(row.get("atr14")) or 0.0
     if atr <= 0:
         atr_pct = _safe_float(row.get("atr_pct")) or 0.0
@@ -82,28 +109,30 @@ def compute_trading_levels(row: pd.Series) -> dict:
     ma20 = _safe_float(row.get("ma20")) or 0.0
     ma50 = _safe_float(row.get("ma50")) or 0.0
 
-    # Find nearest support below close
+    # Nearest support below close
     candidates = [s for s in [ma20, ma50] if 0 < s < close]
     support = max(candidates) if candidates else close * 0.95
 
     # ── Entry zone ────────────────────────────────────────────────────────
     if signal == "BREAKOUT":
-        # Stock already breaking out — buy at current or chase slightly
+        # Stock already breaking out — buy at current or slight chase
         entry_low  = close
         entry_high = close + atr * 0.5
+
     elif signal == "PRE_MARKUP":
-        # Building up — entry from support to current
-        entry_low  = max(support * 1.005, close * 0.97)
+        # Building up — entry from near support to current price
+        # Cap entry_low at close so we never have entry_low > entry_high
+        entry_low  = min(max(support * 1.005, close * 0.97), close)
         entry_high = close
-    else:
-        # WATCH / others — entry on pullback
+
+    else:  # WATCH — wait for pullback, tighter range
         entry_low  = max(support, close * 0.95)
         entry_high = close * 0.99
 
     # ── Cutloss ───────────────────────────────────────────────────────────
-    # Below support by ~1 ATR, but never below 5% of close
+    # Below support by ~0.5 ATR, hard floor at -8% from close
     cutloss_raw = support - atr * 0.5
-    cutloss_raw = max(cutloss_raw, close * 0.92)  # hard cap at -8%
+    cutloss_raw = max(cutloss_raw, close * 0.92)
 
     # ── TP: risk-reward ratio ─────────────────────────────────────────────
     risk = entry_low - cutloss_raw
@@ -114,12 +143,40 @@ def compute_trading_levels(row: pd.Series) -> dict:
 
     # ── Round everything to tick ──────────────────────────────────────────
     return {
-        "entry_low":  round_to_tick(entry_low,  tick),
-        "entry_high": round_to_tick(entry_high, tick),
-        "tp_low":     round_to_tick(tp_low_raw,  tick),
-        "tp_high":    round_to_tick(tp_high_raw, tick),
-        "cutloss":    round_to_tick(cutloss_raw, tick, down=True),
+        "entry_low":          round_to_tick(entry_low,  tick),
+        "entry_high":         round_to_tick(entry_high, tick),
+        "tp_low":             round_to_tick(tp_low_raw,  tick),
+        "tp_high":            round_to_tick(tp_high_raw, tick),
+        "cutloss":            round_to_tick(cutloss_raw, tick, down=True),
+        "trade_setup_status": "active",
     }
+
+
+def enrich_df_with_levels(df: pd.DataFrame) -> pd.DataFrame:
+    """Apply compute_trading_levels to every row in a signals DataFrame.
+
+    Adds columns:
+        entry_low, entry_high, tp_low, tp_high, cutloss, trade_setup_status
+
+    Existing level columns are overwritten.  All other columns are preserved.
+    Safe to call on an empty DataFrame (returns it unchanged).
+
+    Args:
+        df: Signals DataFrame (must have 'close', 'signal', optionally atr14/ma20/ma50).
+
+    Returns:
+        DataFrame with 6 new columns appended.
+    """
+    if df.empty:
+        for col in ["entry_low", "entry_high", "tp_low", "tp_high", "cutloss", "trade_setup_status"]:
+            df[col] = None
+        return df
+
+    level_rows = df.apply(compute_trading_levels, axis=1, result_type="expand")
+    # Drop existing level cols to avoid duplicates, then concat
+    drop_cols = [c for c in level_rows.columns if c in df.columns]
+    df = df.drop(columns=drop_cols)
+    return pd.concat([df, level_rows], axis=1)
 
 
 def _safe_float(val) -> float:

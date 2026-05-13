@@ -28,6 +28,7 @@ TABLE_COLS = [
     "atr_breakout", "vol_spike",
     "news_sentiment_score", "news_count_3d", "news_data_status",
     "pe_ratio", "pbv", "roe_pct", "der", "div_yield_pct", "fundamental_status",
+    "entry_low", "entry_high", "tp_low", "tp_high", "cutloss", "trade_setup_status",
 ]
 
 HISTORY_COLS = [
