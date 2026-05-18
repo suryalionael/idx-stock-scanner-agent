@@ -15,9 +15,11 @@ import streamlit as st
 
 from dashboard.charts import (
     broker_chart,
+    fundamental_trend_chart,
     history_timeline,
     monthly_holders_chart,
     price_chart,
+    price_chart_longterm,
     score_radar,
     shareholder_pie,
 )
@@ -45,6 +47,13 @@ from dashboard.shareholders import (
     get_shareholder_composition,
 )
 from stock_scanner.alerts.level_calculator import compute_trading_levels, enrich_df_with_levels
+from stock_scanner.pipeline.scalping import enrich_df_with_scalping
+from stock_scanner.pipeline.long_term import (
+    compute_long_term_score,
+    compare_financial_statements,
+    classify_cyclicality,
+    enrich_df_with_long_term,
+)
 from stock_scanner.reference.issuers import get_company_name, get_sector, ticker_display
 
 # ---------------------------------------------------------------------------
@@ -676,6 +685,602 @@ def render_ticker_detail(
 
 
 # ---------------------------------------------------------------------------
+# Data preparation helpers (cached)
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _prepare_scalping_df(scan_date: str) -> pd.DataFrame:
+    """Load signals and enrich with scalping scores. Cached 5 min."""
+    df = load_all_tickers_for_date(scan_date)
+    if df.empty:
+        return df
+    return enrich_df_with_scalping(df)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _prepare_longterm_df(scan_date: str) -> pd.DataFrame:
+    """Load signals and enrich with long-term scores. Cached 5 min."""
+    df = load_all_tickers_for_date(scan_date)
+    if df.empty:
+        return df
+    # Build sector map from issuers reference
+    from stock_scanner.reference.issuers import get_sector as _get_sector
+    sector_map = {row["ticker"]: _get_sector(row["ticker"])
+                  for _, row in df.iterrows()}
+    return enrich_df_with_long_term(df, sector_map=sector_map)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _fetch_financial_comparison(ticker: str) -> dict:
+    """Lazy-load multi-period financials. Cached 10 min."""
+    return compare_financial_statements(ticker)
+
+
+# ---------------------------------------------------------------------------
+# Scalping Tab
+# ---------------------------------------------------------------------------
+
+def render_scalping_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | None) -> None:
+    """Render the 📈 Scalping tab content."""
+    st.markdown("### 📈 Scalping — Kandidat Momentum Harian")
+    st.caption(
+        "Filter saham berpotensi top-gainer berdasarkan volume spike, momentum harga, "
+        "dan ATR breakout dari data harian. ⚠️ Tidak ada data intraday — semua berbasis OHLCV daily."
+    )
+
+    # Enrich with scalping scores
+    with st.spinner("Menghitung scalping score..."):
+        df_scalp = _prepare_scalping_df(scan_date)
+
+    if df_scalp.empty or "scalping_score" not in df_scalp.columns:
+        st.warning("Tidak ada data scalping tersedia.")
+        return
+
+    # Controls
+    ctrl1, ctrl2, ctrl3 = st.columns([2, 2, 1])
+    with ctrl1:
+        show_label = st.multiselect(
+            "Filter label",
+            options=["SCALPING_HIGH", "SCALPING_WATCH", "NOT_SCALPING"],
+            default=["SCALPING_HIGH", "SCALPING_WATCH"],
+            key="scalp_label_filter",
+        )
+    with ctrl2:
+        min_vol = st.slider("Min Volume Ratio", 0.0, 5.0, 1.5, 0.5, key="scalp_vol_filter")
+    with ctrl3:
+        top_n = st.number_input("Top N", 5, 50, 15, 5, key="scalp_top_n")
+
+    # Filter + sort
+    df_show = df_scalp.copy()
+    if show_label:
+        df_show = df_show[df_show["scalping_label"].isin(show_label)]
+    if min_vol > 0 and "vol_ratio_20d" in df_show.columns:
+        df_show = df_show[pd.to_numeric(df_show["vol_ratio_20d"], errors="coerce").fillna(0) >= min_vol]
+    df_show = df_show.sort_values("scalping_score", ascending=False).head(int(top_n))
+
+    # Summary counts
+    high_n  = (df_scalp["scalping_label"] == "SCALPING_HIGH").sum()
+    watch_n = (df_scalp["scalping_label"] == "SCALPING_WATCH").sum()
+    s1, s2, s3 = st.columns(3)
+    with s1:
+        st.metric("🔥 SCALPING_HIGH", high_n)
+    with s2:
+        st.metric("👀 SCALPING_WATCH", watch_n)
+    with s3:
+        st.metric("Ditampilkan", len(df_show))
+
+    if df_show.empty:
+        st.info("Tidak ada kandidat scalping dengan filter ini.")
+        return
+
+    # Table
+    tbl_cols = ["ticker", "scalping_score", "scalping_label", "scalping_reason",
+                "close", "vol_ratio_20d", "roc5", "rsi14", "momentum_score",
+                "atr_breakout", "vol_spike", "entry_low", "entry_high", "tp_low", "cutloss"]
+    disp_cols = [c for c in tbl_cols if c in df_show.columns]
+    tbl = df_show[disp_cols].copy()
+
+    # Format
+    for col in ["close", "entry_low", "entry_high", "tp_low", "cutloss"]:
+        if col in tbl.columns:
+            tbl[col] = tbl[col].apply(lambda x: f"{int(x):,}" if pd.notna(x) and x > 0 else "-")
+    for col in ["vol_ratio_20d", "roc5", "rsi14", "momentum_score", "scalping_score"]:
+        if col in tbl.columns:
+            tbl[col] = tbl[col].apply(lambda x: f"{float(x):.1f}" if pd.notna(x) else "-")
+
+    st.dataframe(
+        tbl,
+        use_container_width=True,
+        hide_index=True,
+        height=min(38 * len(tbl) + 40, 500),
+        column_config={
+            "ticker":          st.column_config.TextColumn("Ticker",         width="small"),
+            "scalping_score":  st.column_config.TextColumn("Scalp Score",    width="small"),
+            "scalping_label":  st.column_config.TextColumn("Label",          width="medium"),
+            "scalping_reason": st.column_config.TextColumn("Alasan",         width="large"),
+            "close":           st.column_config.TextColumn("Close (Rp)",     width="small"),
+            "vol_ratio_20d":   st.column_config.TextColumn("Vol Ratio",      width="small"),
+            "roc5":            st.column_config.TextColumn("ROC5 (%)",        width="small"),
+            "rsi14":           st.column_config.TextColumn("RSI14",          width="small"),
+            "momentum_score":  st.column_config.TextColumn("Mom Score",      width="small"),
+            "atr_breakout":    st.column_config.CheckboxColumn("ATR Brk"),
+            "vol_spike":       st.column_config.CheckboxColumn("Vol Spike"),
+            "entry_low":       st.column_config.TextColumn("Entry",          width="small"),
+            "entry_high":      st.column_config.TextColumn("Entry Hi",       width="small"),
+            "tp_low":          st.column_config.TextColumn("TP",             width="small"),
+            "cutloss":         st.column_config.TextColumn("CL",             width="small"),
+        },
+    )
+
+    st.caption(
+        "⚠️ Level trading dihitung dari ATR daily — bukan untuk scalping tick-by-tick. "
+        "Selalu gunakan real-time chart dan order flow sebelum entry."
+    )
+
+    # Expandable detail per ticker
+    st.divider()
+    st.markdown("#### Detail Ticker Scalping")
+    ticker_list = df_show["ticker"].tolist()
+    if not ticker_list:
+        return
+
+    sel_scalp = st.selectbox(
+        "Pilih ticker untuk detail:",
+        options=ticker_list,
+        format_func=lambda t: f"{t.replace('.JK','')} — {get_company_name(t)}",
+        key="scalp_detail_select",
+    )
+    if sel_scalp:
+        row = df_show[df_show["ticker"] == sel_scalp].iloc[0]
+        _render_scalping_detail(row, scan_date, api_key)
+
+
+def _render_scalping_detail(row: pd.Series, scan_date: str, api_key: str | None) -> None:
+    """Render detail panel for one scalping candidate."""
+    ticker = str(row.get("ticker", "?"))
+    scalp_score = row.get("scalping_score")
+    scalp_reason = str(row.get("scalping_reason", "—"))
+
+    col_left, col_right = st.columns([1.2, 1])
+
+    with col_left:
+        # Scalping-focused metrics
+        st.markdown("**🔥 Scalping Metrics**")
+        scalp_metrics = [
+            ("Scalping Score",  f"{float(scalp_score):.1f}/10" if pd.notna(scalp_score) else "—"),
+            ("Volume Ratio",    f"{float(row.get('vol_ratio_20d', 0)):.1f}×"
+                                if pd.notna(row.get('vol_ratio_20d')) else "—"),
+            ("ROC5 (5d return)", f"+{float(row.get('roc5', 0)):.1f}%"
+                                 if pd.notna(row.get('roc5')) else "—"),
+            ("RSI14",           f"{float(row.get('rsi14', 0)):.0f}"
+                                if pd.notna(row.get('rsi14')) else "—"),
+            ("Momentum Score",  f"{float(row.get('momentum_score', 0)):.1f}/10"
+                                if pd.notna(row.get('momentum_score')) else "—"),
+            ("ADX",             f"{float(row.get('adx', 0)):.1f}"
+                                if pd.notna(row.get('adx')) else "—"),
+            ("Close",           f"Rp{int(row.get('close', 0)):,}"
+                                if pd.notna(row.get('close')) else "—"),
+        ]
+        for label, val in scalp_metrics:
+            st.markdown(f"`{label}`: **{val}**")
+
+        st.markdown(f"\n**Alasan**: {scalp_reason}")
+
+        # Flags
+        flags = []
+        if _bool_val(row.get("vol_spike")):     flags.append("Volume Spike 🔥")
+        if _bool_val(row.get("atr_breakout")):  flags.append("ATR Breakout 🚀")
+        if _bool_val(row.get("supertrend_bullish")): flags.append("Supertrend ✅")
+        if _bool_val(row.get("squeeze_on")):    flags.append("Squeeze On 🔋")
+        if flags:
+            st.markdown("**Konfirmasi**: " + "  |  ".join(flags))
+
+        # Trading levels
+        levels = compute_trading_levels(row)
+        if levels.get("trade_setup_status") == "active":
+            st.markdown("")
+            st.markdown("**🎯 Level Trading (Daily Approximation)**")
+            level_rows = {
+                "": ["Area Entry", "Target Profit", "Cutloss"],
+                "Rp": [
+                    _fmt_price_range(levels["entry_low"], levels["entry_high"]),
+                    _fmt_price_range(levels["tp_low"],    levels["tp_high"]),
+                    _fmt_price(levels["cutloss"]),
+                ],
+            }
+            st.dataframe(pd.DataFrame(level_rows), use_container_width=True,
+                         hide_index=True, height=145)
+
+    with col_right:
+        # Price chart
+        df_raw = load_raw(ticker)
+        st.plotly_chart(
+            price_chart(df_raw, ticker, signal_date=scan_date, lookback_days=60),
+            use_container_width=True,
+            key=f"scalp_chart_{ticker}_{scan_date}",
+        )
+
+    # News (catalyst) — compact
+    news_status = str(row.get("news_data_status", "")).lower()
+    if news_status == "ok":
+        articles = load_news_articles_for_ticker(ticker, scan_date)
+        if articles:
+            st.markdown("**📰 Katalis Berita**")
+            from stock_scanner.pipeline.news_summarizer import summarize_news_articles, format_news_bullets
+            summary = summarize_news_articles(articles)
+            bullets = format_news_bullets(summary, len(articles),
+                                         sentiment_score=row.get("news_sentiment_score"),
+                                         max_chars=500)
+            st.markdown(bullets.replace("**", "**"), unsafe_allow_html=False)
+
+
+# ---------------------------------------------------------------------------
+# Swing Tab
+# ---------------------------------------------------------------------------
+
+def render_swing_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | None,
+                     signal_filter: list[str]) -> None:
+    """Render the 🔄 Swing Trading tab content — refactored Today Overview."""
+    st.markdown("### 🔄 Swing Trading — Setup Teknikal 3–10 Hari")
+
+    # Signal distribution
+    sig_counts_all = df_all["signal"].value_counts() if "signal" in df_all.columns else pd.Series(dtype=int)
+    total_tickers  = len(df_all)
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    for col, label, key, color in [
+        (c1, "Total",      None,         "#94a3b8"),
+        (c2, "BREAKOUT",   "BREAKOUT",   "#4ade80"),
+        (c3, "PRE_MARKUP", "PRE_MARKUP", "#38bdf8"),
+        (c4, "WATCH",      "WATCH",      "#fb923c"),
+        (c5, "AVOID",      "AVOID",      "#f87171"),
+    ]:
+        count = total_tickers if key is None else int(sig_counts_all.get(key, 0))
+        with col:
+            st.markdown(
+                f'<div class="metric-card">'
+                f'<div class="label">{label}</div>'
+                f'<div class="value" style="color:{color}">{count}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+    st.markdown("")
+
+    # Filtered signal table
+    if "signal" in df_all.columns and signal_filter:
+        df_filtered = df_all[df_all["signal"].isin(signal_filter)].copy()
+    else:
+        df_filtered = df_all.copy()
+
+    if not df_filtered.empty:
+        df_table = get_table_df(df_filtered)
+        display = df_table.copy()
+        for col in ["total_score", "enhanced_total_score", "trend_score", "momentum_score",
+                    "breakout_score", "volume_score", "penalty_score", "news_score", "foreign_score"]:
+            if col in display.columns:
+                display[col] = display[col].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "-")
+        for col in ["rsi14", "vol_ratio_20d", "pct_from_52w_high", "adx"]:
+            if col in display.columns:
+                display[col] = display[col].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
+
+        st.dataframe(
+            display,
+            use_container_width=True, hide_index=True, height=320,
+            column_config={
+                "ticker":               st.column_config.TextColumn("Ticker",      width="small"),
+                "signal":               st.column_config.TextColumn("Signal",      width="small"),
+                "total_score":          st.column_config.TextColumn("Score",       width="small"),
+                "enhanced_total_score": st.column_config.TextColumn("Enh.Score",  width="small"),
+                "close":                st.column_config.NumberColumn("Close",     format="%.0f"),
+                "rsi14":                st.column_config.TextColumn("RSI14",       width="small"),
+                "adx":                  st.column_config.TextColumn("ADX",         width="small"),
+                "vol_ratio_20d":        st.column_config.TextColumn("Vol Ratio",   width="small"),
+                "pct_from_52w_high":    st.column_config.TextColumn("52w High%",   width="small"),
+                "supertrend_bullish":   st.column_config.CheckboxColumn("Supertrend"),
+                "squeeze_on":           st.column_config.CheckboxColumn("Squeeze"),
+                "atr_breakout":         st.column_config.CheckboxColumn("ATR Brk"),
+                "vol_spike":            st.column_config.CheckboxColumn("Vol Spike"),
+            },
+        )
+    else:
+        st.info("Tidak ada ticker dengan signal yang dipilih.")
+
+    # Trading levels
+    st.divider()
+    render_trading_levels_section(df_filtered if not df_filtered.empty else df_all, scan_date)
+
+
+# ---------------------------------------------------------------------------
+# Long Term Tab
+# ---------------------------------------------------------------------------
+
+def render_longterm_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | None) -> None:
+    """Render the 📊 Long Term Investment tab content."""
+    st.markdown("### 📊 Long Term — Investasi Berbasis Kualitas Bisnis & Valuasi")
+    st.caption(
+        "Fokus pada ROE, DER, pertumbuhan laba, valuasi intrinsik, dan margin of safety. "
+        "Fundamental dominan; teknikal hanya sebagai timing helper."
+    )
+
+    # Enrich with long-term scores
+    with st.spinner("Menghitung long-term score..."):
+        df_lt = _prepare_longterm_df(scan_date)
+
+    if df_lt.empty or "long_term_score" not in df_lt.columns:
+        st.warning("Tidak ada data long-term tersedia.")
+        return
+
+    # Controls
+    lt_c1, lt_c2, lt_c3 = st.columns([2, 2, 1])
+    with lt_c1:
+        lt_label_filter = st.multiselect(
+            "Filter label",
+            options=["LONG_TERM_CORE", "LONG_TERM_WATCHLIST", "NOT_LONG_TERM"],
+            default=["LONG_TERM_CORE", "LONG_TERM_WATCHLIST"],
+            key="lt_label_filter",
+        )
+    with lt_c2:
+        fund_status_filter = st.multiselect(
+            "Filter data fundamental",
+            options=["ok", "partial", "missing"],
+            default=["ok"],
+            key="lt_fund_filter",
+        )
+    with lt_c3:
+        lt_top_n = st.number_input("Top N", 5, 100, 20, 5, key="lt_top_n")
+
+    # Filter
+    df_lt_show = df_lt.copy()
+    if lt_label_filter:
+        df_lt_show = df_lt_show[df_lt_show["long_term_label"].isin(lt_label_filter)]
+    if fund_status_filter and "fundamental_status" in df_lt_show.columns:
+        df_lt_show = df_lt_show[df_lt_show["fundamental_status"].isin(fund_status_filter)]
+    df_lt_show = df_lt_show.sort_values("long_term_score", ascending=False).head(int(lt_top_n))
+
+    # Summary
+    core_n    = (df_lt["long_term_label"] == "LONG_TERM_CORE").sum()
+    watchl_n  = (df_lt["long_term_label"] == "LONG_TERM_WATCHLIST").sum()
+    underval_n = (df_lt.get("valuation_status", pd.Series()) == "UNDERVALUED").sum()
+    ms1, ms2, ms3 = st.columns(3)
+    with ms1: st.metric("💎 LONG_TERM_CORE",      core_n)
+    with ms2: st.metric("📋 LONG_TERM_WATCHLIST",  watchl_n)
+    with ms3: st.metric("🏷️ Undervalued",          underval_n)
+
+    if df_lt_show.empty:
+        st.info("Tidak ada kandidat long-term dengan filter ini.")
+        return
+
+    # Fundamental table
+    tbl_cols_lt = [
+        "ticker", "long_term_score", "long_term_label", "valuation_status",
+        "close", "pe_ratio", "pbv", "roe_pct", "der",
+        "revenue_growth_pct", "profit_growth_pct", "div_yield_pct",
+        "intrinsic_value", "margin_of_safety",
+        "cyclicality", "long_term_reason",
+    ]
+    disp_cols_lt = [c for c in tbl_cols_lt if c in df_lt_show.columns]
+    tbl_lt = df_lt_show[disp_cols_lt].copy()
+
+    # Format
+    for col in ["pe_ratio", "pbv", "roe_pct", "der", "div_yield_pct",
+                "revenue_growth_pct", "profit_growth_pct", "long_term_score"]:
+        if col in tbl_lt.columns:
+            tbl_lt[col] = tbl_lt[col].apply(
+                lambda x: f"{float(x):.1f}" if pd.notna(x) else "-")
+    for col in ["close", "intrinsic_value"]:
+        if col in tbl_lt.columns:
+            tbl_lt[col] = tbl_lt[col].apply(
+                lambda x: f"{int(x):,}" if pd.notna(x) and x else "-")
+    if "margin_of_safety" in tbl_lt.columns:
+        tbl_lt["margin_of_safety"] = tbl_lt["margin_of_safety"].apply(
+            lambda x: f"{float(x):+.0f}%" if pd.notna(x) else "-")
+
+    st.dataframe(
+        tbl_lt,
+        use_container_width=True, hide_index=True,
+        height=min(38 * len(tbl_lt) + 40, 520),
+        column_config={
+            "ticker":              st.column_config.TextColumn("Ticker",        width="small"),
+            "long_term_score":     st.column_config.TextColumn("LT Score",      width="small"),
+            "long_term_label":     st.column_config.TextColumn("Label",         width="medium"),
+            "valuation_status":    st.column_config.TextColumn("Valuasi",       width="small"),
+            "close":               st.column_config.TextColumn("Close (Rp)",    width="small"),
+            "pe_ratio":            st.column_config.TextColumn("PE",            width="small"),
+            "pbv":                 st.column_config.TextColumn("PBV",           width="small"),
+            "roe_pct":             st.column_config.TextColumn("ROE%",          width="small"),
+            "der":                 st.column_config.TextColumn("DER",           width="small"),
+            "revenue_growth_pct":  st.column_config.TextColumn("Rev Growth%",   width="small"),
+            "profit_growth_pct":   st.column_config.TextColumn("Profit Growth%",width="small"),
+            "div_yield_pct":       st.column_config.TextColumn("Div Yield%",    width="small"),
+            "intrinsic_value":     st.column_config.TextColumn("Intrinsic (Rp)",width="small"),
+            "margin_of_safety":    st.column_config.TextColumn("MoS",           width="small"),
+            "cyclicality":         st.column_config.TextColumn("Siklikalitas",  width="small"),
+            "long_term_reason":    st.column_config.TextColumn("Ringkasan",     width="large"),
+        },
+    )
+
+    # Expandable ticker detail
+    st.divider()
+    st.markdown("#### Detail Fundamental Ticker")
+    lt_ticker_list = df_lt_show["ticker"].tolist()
+    sel_lt = st.selectbox(
+        "Pilih ticker:",
+        options=lt_ticker_list,
+        format_func=lambda t: f"{t.replace('.JK','')} — {get_company_name(t)}",
+        key="lt_detail_select",
+    )
+    if sel_lt:
+        lt_row = df_lt_show[df_lt_show["ticker"] == sel_lt].iloc[0]
+        _render_longterm_detail(lt_row, scan_date, api_key)
+
+
+def _render_longterm_detail(row: pd.Series, scan_date: str, api_key: str | None) -> None:
+    """Render full fundamental detail for one long-term candidate."""
+    ticker  = str(row.get("ticker", "?"))
+    sector  = get_sector(ticker) or ""
+    cycl    = str(row.get("cyclicality", classify_cyclicality(sector)))
+    lt_score = row.get("long_term_score")
+    strengths_raw = str(row.get("strengths", ""))
+    flags_raw     = str(row.get("red_flags", ""))
+
+    # Header
+    st.markdown(
+        f"**{ticker.replace('.JK','')}** &nbsp;·&nbsp; {get_company_name(ticker)}"
+        f"&nbsp;·&nbsp; *{sector}*"
+    )
+
+    # Cyclicality warning
+    if cycl == "cyclical":
+        st.warning(
+            "⚠️ Saham **siklikal** — kinerja sangat bergantung pada siklus industri/komoditas. "
+            "Tidak cocok untuk buy-and-forget. Evaluasi siklus sebelum masuk."
+        )
+    elif cycl == "defensive":
+        st.info("🛡️ Saham **defensif** — lebih stabil, cocok untuk long-term buy-and-hold.")
+
+    col_l, col_r = st.columns([1, 1])
+
+    with col_l:
+        st.markdown("**📊 Fundamental Snapshot**")
+        fund_items = [
+            ("Long Term Score",      f"{float(lt_score):.1f}/10" if pd.notna(lt_score) else "—"),
+            ("Valuation Status",     str(row.get("valuation_status", "—"))),
+            ("Intrinsic Value (Rp)", f"{int(row.get('intrinsic_value', 0)):,}"
+                                     if pd.notna(row.get("intrinsic_value")) and row.get("intrinsic_value") else "—"),
+            ("Margin of Safety",     f"{float(row.get('margin_of_safety', 0)):+.0f}%"
+                                     if pd.notna(row.get("margin_of_safety")) else "—"),
+            ("PE Ratio",             f"{float(row.get('pe_ratio', 0)):.1f}×"
+                                     if pd.notna(row.get("pe_ratio")) else "—"),
+            ("PBV",                  f"{float(row.get('pbv', 0)):.2f}×"
+                                     if pd.notna(row.get("pbv")) else "—"),
+            ("ROE",                  f"{float(row.get('roe_pct', 0)):.1f}%"
+                                     if pd.notna(row.get("roe_pct")) else "—"),
+            ("DER",                  f"{float(row.get('der', 0)):.2f}×"
+                                     if pd.notna(row.get("der")) else "—"),
+            ("Revenue Growth",       f"{float(row.get('revenue_growth_pct', 0)):+.1f}%"
+                                     if pd.notna(row.get("revenue_growth_pct")) else "—"),
+            ("Profit Growth",        f"{float(row.get('profit_growth_pct', 0)):+.1f}%"
+                                     if pd.notna(row.get("profit_growth_pct")) else "—"),
+            ("Dividend Yield",       f"{float(row.get('div_yield_pct', 0)):.2f}%"
+                                     if pd.notna(row.get("div_yield_pct")) and row.get("div_yield_pct") else "—"),
+        ]
+        for label, val in fund_items:
+            st.markdown(f"`{label}`: **{val}**")
+
+        if strengths_raw:
+            st.markdown("**✅ Kekuatan:**")
+            for s in strengths_raw.split(" | "):
+                if s.strip():
+                    st.markdown(f"- {s.strip()}")
+
+        if flags_raw:
+            st.markdown("**⚠️ Red Flags:**")
+            for f in flags_raw.split(" | "):
+                if f.strip():
+                    st.markdown(f"- {f.strip()}")
+
+    with col_r:
+        # Long-term price chart
+        df_raw = load_raw(ticker)
+        st.plotly_chart(
+            price_chart_longterm(df_raw, ticker),
+            use_container_width=True,
+            key=f"lt_chart_{ticker}_{scan_date}",
+        )
+
+    # Multi-period financial statement comparison (lazy, on demand)
+    st.markdown("")
+    with st.expander("📑 Laporan Keuangan Multi-Periode (dari yfinance)", expanded=False):
+        with st.spinner("Mengambil data laporan keuangan..."):
+            fin_data = _fetch_financial_comparison(ticker)
+
+        if fin_data["status"] == "failed":
+            st.warning(f"Gagal mengambil data: {fin_data.get('error', '—')}")
+        else:
+            if fin_data["status"] == "partial":
+                st.caption("⚠️ Data parsial — beberapa periode tidak tersedia.")
+
+            # YoY summary
+            yoy = fin_data.get("yoy", {})
+            if yoy:
+                st.markdown("**YoY Changes (terbaru vs tahun sebelumnya):**")
+                yoy_items = [
+                    ("Revenue",     yoy.get("revenue_chg")),
+                    ("Net Income",  yoy.get("net_income_chg")),
+                    ("Total Asset", yoy.get("asset_chg")),
+                    ("Equity",      yoy.get("equity_chg")),
+                    ("Op. Cash Flow", yoy.get("ocf_chg")),
+                ]
+                yoy_cols = st.columns(len(yoy_items))
+                for col, (label, val) in zip(yoy_cols, yoy_items):
+                    with col:
+                        if val is not None:
+                            color = "#4ade80" if val >= 0 else "#f87171"
+                            st.markdown(
+                                f'<div style="text-align:center">'
+                                f'<div style="font-size:11px;color:#94a3b8">{label}</div>'
+                                f'<div style="font-size:16px;font-weight:700;color:{color}">'
+                                f'{val:+.1f}%</div></div>',
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            st.caption(f"{label}: —")
+
+            st.markdown("")
+
+            # Charts for key metrics
+            chart_metrics = [
+                ("revenue",      "Revenue"),
+                ("net_income",   "Net Income"),
+                ("total_equity", "Total Equity"),
+                ("op_cash_flow", "Operating Cash Flow"),
+            ]
+            ch_cols = st.columns(2)
+            for i, (metric, label) in enumerate(chart_metrics):
+                with ch_cols[i % 2]:
+                    fig = fundamental_trend_chart(fin_data, ticker, metric=metric, label=label)
+                    st.plotly_chart(fig, use_container_width=True,
+                                    key=f"lt_fin_{ticker}_{metric}_{scan_date}")
+
+    # News sentiment (reputation/risk layer)
+    news_status = str(row.get("news_data_status", "")).lower()
+    if news_status in ("ok", "none"):
+        st.markdown("**📰 Sentimen Berita (Risiko / Reputasi)**")
+        if news_status == "ok":
+            articles = load_news_articles_for_ticker(ticker, scan_date)
+            if articles:
+                from stock_scanner.pipeline.news_summarizer import summarize_news_articles, format_news_bullets
+                summary = summarize_news_articles(articles)
+                bullets = format_news_bullets(summary, len(articles),
+                                             sentiment_score=row.get("news_sentiment_score"),
+                                             max_chars=600)
+                st.markdown(bullets)
+        else:
+            st.caption("Tidak ada berita relevan dalam 3 hari terakhir.")
+
+    # AI Explanation (if API key available)
+    st.markdown("**🤖 AI Explanation**")
+    with st.spinner("Membuat narasi long-term..."):
+        articles_lt = load_news_articles_for_ticker(ticker, scan_date)
+        explanation = explain_signal_llm(row, api_key=api_key, articles=articles_lt)
+    st.markdown(explanation)
+
+
+# ---------------------------------------------------------------------------
+# Small utility helpers
+# ---------------------------------------------------------------------------
+
+def _bool_val(val) -> bool:
+    """Safe bool conversion for dashboard use."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return bool(val)
+    return str(val).lower() in ("true", "1", "yes")
+
+
+# ---------------------------------------------------------------------------
 # SIDEBAR
 # ---------------------------------------------------------------------------
 with st.sidebar:
@@ -779,93 +1384,27 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # MAIN TABS
 # ---------------------------------------------------------------------------
-tab_today, tab_search, tab_history = st.tabs(
-    ["📊 Today Overview", "🔍 Search Emiten", "🕐 History"]
+tab_scalping, tab_swing, tab_longterm, tab_search, tab_history = st.tabs(
+    ["📈 Scalping", "🔄 Swing Trading", "📊 Long Term", "🔍 Search Emiten", "🕐 History"]
 )
 
 
 # ===========================================================================
-# TAB 1 — TODAY OVERVIEW
+# TAB 1 — SCALPING
 # ===========================================================================
-with tab_today:
-    st.markdown(f"### Scan: {selected_date}")
+with tab_scalping:
+    render_scalping_tab(df_all, selected_date, active_api_key)
 
-    # Summary cards
-    sig_counts_all = df_all["signal"].value_counts() if "signal" in df_all.columns else pd.Series(dtype=int)
-    total_tickers = len(df_all)
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    for col, label, key, color in [
-        (c1, "Total",      None,         "#94a3b8"),
-        (c2, "BREAKOUT",   "BREAKOUT",   "#4ade80"),
-        (c3, "PRE_MARKUP", "PRE_MARKUP", "#38bdf8"),
-        (c4, "WATCH",      "WATCH",      "#fb923c"),
-        (c5, "AVOID",      "AVOID",      "#f87171"),
-    ]:
-        count = total_tickers if key is None else int(sig_counts_all.get(key, 0))
-        with col:
-            st.markdown(
-                f'<div class="metric-card">'
-                f'<div class="label">{label}</div>'
-                f'<div class="value" style="color:{color}">{count}</div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-
-    st.markdown("")
-
-    # Signal table
-    if "signal" in df_all.columns and signal_filter:
-        df_filtered = df_all[df_all["signal"].isin(signal_filter)].copy()
-    else:
-        df_filtered = df_all.copy()
-
-    if df_filtered.empty:
-        st.info("Tidak ada ticker yang cocok dengan filter signal yang dipilih.")
-    else:
-        df_table = get_table_df(df_filtered)
-        display = df_table.copy()
-
-        for col in ["total_score", "enhanced_total_score", "trend_score", "momentum_score",
-                    "breakout_score", "volume_score", "penalty_score", "news_score", "foreign_score"]:
-            if col in display.columns:
-                display[col] = display[col].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "-")
-        for col in ["rsi14", "vol_ratio_20d", "pct_from_52w_high", "adx"]:
-            if col in display.columns:
-                display[col] = display[col].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
-
-        st.dataframe(
-            display,
-            use_container_width=True,
-            hide_index=True,
-            height=320,
-            column_config={
-                "ticker":               st.column_config.TextColumn("Ticker",      width="small"),
-                "signal":               st.column_config.TextColumn("Signal",      width="small"),
-                "total_score":          st.column_config.TextColumn("Score",       width="small"),
-                "enhanced_total_score": st.column_config.TextColumn("Enh.Score",   width="small"),
-                "news_score":           st.column_config.TextColumn("News",        width="small"),
-                "foreign_score":        st.column_config.TextColumn("Foreign",     width="small"),
-                "close":                st.column_config.NumberColumn("Close",     format="%.0f"),
-                "rsi14":                st.column_config.TextColumn("RSI14",       width="small"),
-                "adx":                  st.column_config.TextColumn("ADX",         width="small"),
-                "vol_ratio_20d":        st.column_config.TextColumn("Vol Ratio",   width="small"),
-                "pct_from_52w_high":    st.column_config.TextColumn("52w High%",   width="small"),
-                "supertrend_bullish":   st.column_config.CheckboxColumn("Supertrend"),
-                "squeeze_on":           st.column_config.CheckboxColumn("Squeeze"),
-                "atr_breakout":         st.column_config.CheckboxColumn("ATR Break"),
-                "vol_spike":            st.column_config.CheckboxColumn("Vol Spike"),
-            },
-        )
-
-    # ── Trading Levels section ──────────────────────────────────────────────
-    st.divider()
-    render_trading_levels_section(df_filtered if not df_filtered.empty else df_all, selected_date)
+# ===========================================================================
+# TAB 2 — SWING TRADING
+# ===========================================================================
+with tab_swing:
+    render_swing_tab(df_all, selected_date, active_api_key, signal_filter)
 
     # Ticker detail (driven by sidebar selectbox)
     st.divider()
     st.markdown("### Detail Ticker")
-
     if not selected_ticker:
         st.info("Pilih ticker dari sidebar untuk melihat detail chart dan analisis.")
     else:
@@ -873,11 +1412,18 @@ with tab_today:
         if ticker_rows.empty:
             st.warning(f"Data untuk {selected_ticker} tidak ditemukan.")
         else:
-            render_ticker_detail(ticker_rows.iloc[0], selected_date, active_api_key, key_prefix="ov_")
+            render_ticker_detail(ticker_rows.iloc[0], selected_date, active_api_key, key_prefix="sw_")
 
 
 # ===========================================================================
-# TAB 2 — SEARCH EMITEN
+# TAB 3 — LONG TERM
+# ===========================================================================
+with tab_longterm:
+    render_longterm_tab(df_all, selected_date, active_api_key)
+
+
+# ===========================================================================
+# TAB 4 — SEARCH EMITEN
 # ===========================================================================
 with tab_search:
     st.markdown("### 🔍 Cari Emiten")
@@ -964,7 +1510,7 @@ with tab_search:
 
 
 # ===========================================================================
-# TAB 3 — HISTORY
+# TAB 5 — HISTORY
 # ===========================================================================
 with tab_history:
     st.markdown("### Signal Terkuat (Lintas Tanggal)")
