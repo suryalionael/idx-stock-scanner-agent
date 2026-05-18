@@ -378,3 +378,143 @@ def _empty_figure(message: str) -> go.Figure:
         margin=dict(l=10, r=10, t=10, b=10),
     )
     return fig
+
+
+def fundamental_trend_chart(
+    financial_data: dict,
+    ticker: str,
+    metric: str = "revenue",
+    label: str = "Revenue",
+    unit: str = "Rp Triliun",
+) -> go.Figure:
+    """Bar chart for multi-period fundamental data (revenue, net income, etc.).
+
+    Args:
+        financial_data: dict from long_term.compare_financial_statements()
+        ticker        : ticker label
+        metric        : key in financial_data["annual"] (e.g. "revenue", "net_income")
+        label         : display name for the metric
+        unit          : y-axis unit label (default "Rp Triliun")
+
+    Returns:
+        Plotly Figure, or empty figure if data unavailable.
+    """
+    series = financial_data.get("annual", {}).get(metric, [])
+
+    if not series:
+        fig = go.Figure()
+        fig.add_annotation(
+            text="Data tidak tersedia",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False, font=dict(size=13, color="#94a3b8"),
+        )
+        fig.update_layout(
+            template=_DARK_TEMPLATE,
+            paper_bgcolor="#0f172a",
+            plot_bgcolor="#0f172a",
+            height=220,
+            margin=dict(l=10, r=10, t=30, b=10),
+            title=dict(text=f"{label} ({ticker})", font=dict(size=13, color="#e2e8f0")),
+        )
+        return fig
+
+    years  = [item["year"] for item in series]
+    values = [item["value"] for item in series]
+
+    # Color bars: most recent = accent, older = muted
+    colors = ["#38bdf8"] + ["#334155"] * (len(years) - 1)
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=years,
+        y=values,
+        marker_color=colors,
+        text=[f"{v:.2f}" for v in values],
+        textposition="outside",
+        textfont=dict(size=11, color="#e2e8f0"),
+    ))
+
+    fig.update_layout(
+        template=_DARK_TEMPLATE,
+        paper_bgcolor="#0f172a",
+        plot_bgcolor="#1e293b",
+        height=220,
+        margin=dict(l=10, r=10, t=30, b=10),
+        title=dict(text=f"{label} ({unit})", font=dict(size=12, color="#94a3b8")),
+        yaxis=dict(showgrid=True, gridcolor="#1e293b", tickfont=dict(size=10)),
+        xaxis=dict(tickfont=dict(size=10)),
+        showlegend=False,
+    )
+    return fig
+
+
+def price_chart_longterm(
+    df_raw: pd.DataFrame,
+    ticker: str,
+) -> go.Figure:
+    """Simplified long-term price chart showing all available history.
+
+    Uses a line chart (cleaner for multi-year view) with annual MA.
+
+    Args:
+        df_raw: Full OHLCV DataFrame (no lookback limit — shows all years).
+        ticker: ticker label for title.
+
+    Returns:
+        Plotly Figure.
+    """
+    if df_raw is None or df_raw.empty or "close" not in df_raw.columns:
+        fig = go.Figure()
+        fig.add_annotation(
+            text="Data OHLCV tidak tersedia",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False, font=dict(size=13, color="#94a3b8"),
+        )
+        fig.update_layout(
+            template=_DARK_TEMPLATE,
+            paper_bgcolor="#0f172a", plot_bgcolor="#0f172a",
+            height=280, margin=dict(l=10, r=10, t=30, b=10),
+        )
+        return fig
+
+    df = df_raw.copy()
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.sort_values("date")
+
+    date_col = "date" if "date" in df.columns else df.index
+
+    fig = go.Figure()
+
+    # Price line
+    fig.add_trace(go.Scatter(
+        x=df[date_col] if "date" in df.columns else df.index,
+        y=df["close"],
+        mode="lines",
+        name="Harga",
+        line=dict(color="#38bdf8", width=1.5),
+    ))
+
+    # MA 200
+    if len(df) >= 200:
+        ma200 = df["close"].rolling(200).mean()
+        fig.add_trace(go.Scatter(
+            x=df[date_col] if "date" in df.columns else df.index,
+            y=ma200,
+            mode="lines",
+            name="MA200",
+            line=dict(color="#a78bfa", width=1, dash="dot"),
+        ))
+
+    fig.update_layout(
+        template=_DARK_TEMPLATE,
+        paper_bgcolor="#0f172a",
+        plot_bgcolor="#1e293b",
+        height=280,
+        margin=dict(l=10, r=10, t=30, b=10),
+        title=dict(text=f"{ticker} — Harga Jangka Panjang", font=dict(size=12, color="#94a3b8")),
+        yaxis=dict(showgrid=True, gridcolor="#1e293b", tickformat=","),
+        xaxis=dict(showgrid=False),
+        legend=dict(orientation="h", y=1.05, x=0, font=dict(size=10)),
+    )
+    return fig
