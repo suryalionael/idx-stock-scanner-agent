@@ -42,6 +42,7 @@ FEATURE_COLS = [
     "stoch_rsi_k", "stoch_rsi_d",
     "adx", "adx_pos", "adx_neg",
     "squeeze_on",
+    "squeeze_release",      # True only on first day squeeze is OFF after being ON
     "vwap_20d", "price_vs_vwap",
     # Raw (untuk scoring + ML)
     "close", "volume",
@@ -240,6 +241,17 @@ def _add_tv_indicators(df: pd.DataFrame) -> pd.DataFrame:
     except Exception as e:
         logger.debug(f"Squeeze gagal: {e}")
         df["squeeze_on"] = False
+
+    # --- squeeze_release: True pada hari PERTAMA squeeze berakhir ---
+    # PENTING: harus dihitung di sini (history lengkap), BUKAN di signal_engine
+    # karena signal_engine hanya melihat baris terakhir (single-row DataFrame).
+    # squeeze_on shift(1) di signal_engine selalu False → bug.
+    try:
+        sq = df["squeeze_on"].astype(bool)
+        df["squeeze_release"] = (~sq) & sq.shift(1).fillna(False)
+    except Exception as e:
+        logger.debug(f"Squeeze release gagal: {e}")
+        df["squeeze_release"] = False
 
     # --- 5. Rolling VWAP 20d ---
     # VWAP harian (intraday tidak tersedia); pakai typical price × volume rolling sum

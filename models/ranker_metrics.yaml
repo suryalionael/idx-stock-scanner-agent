@@ -1,0 +1,30 @@
+auc_roc: 0.594
+f1_1: 0.0536
+features:
+- rsi14
+- macd_histogram
+- macd
+- vol_ratio_20d
+- atr_pct
+- roc5
+- roc20
+- pct_from_52w_high
+- bb_width
+- hist_vol_20d
+- ma_full_alignment
+- ma_partial_alignment
+- slope_ma20
+- price_vs_ma200
+- obv_trend
+- squeeze_release
+model: XGBoostClassifier
+n_features: 16
+positive_rate_test: 0.2653
+positive_rate_train: 0.2513
+precision_1: 0.5046
+recall_1: 0.0283
+support_1_test: 13561
+test_period: 2025-11-26 → 2026-05-13
+test_rows: 51109
+train_period: 2023-05-08 → 2025-11-26
+train_rows: 204436

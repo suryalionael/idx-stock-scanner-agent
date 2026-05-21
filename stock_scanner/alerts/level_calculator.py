@@ -152,17 +152,23 @@ def compute_trading_levels(row: pd.Series) -> dict:
     }
 
 
-def enrich_df_with_levels(df: pd.DataFrame) -> pd.DataFrame:
+def enrich_df_with_levels(df: pd.DataFrame, min_rr: float = 1.5) -> pd.DataFrame:
     """Apply compute_trading_levels to every row in a signals DataFrame.
 
     Adds columns:
         entry_low, entry_high, tp_low, tp_high, cutloss, trade_setup_status
 
+    After tick rounding, validates Risk:Reward ratio.
+    If realized R:R (using entry_low vs tp_low vs cutloss) < min_rr,
+    trade_setup_status is set to "low_rr" instead of "active".
+
     Existing level columns are overwritten.  All other columns are preserved.
     Safe to call on an empty DataFrame (returns it unchanged).
 
     Args:
-        df: Signals DataFrame (must have 'close', 'signal', optionally atr14/ma20/ma50).
+        df     : Signals DataFrame (must have 'close', 'signal', optionally atr14/ma20/ma50).
+        min_rr : Minimum Risk:Reward ratio after tick rounding (default 1.5).
+                 Set to 0.0 to disable R:R validation.
 
     Returns:
         DataFrame with 6 new columns appended.
@@ -173,6 +179,25 @@ def enrich_df_with_levels(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     level_rows = df.apply(compute_trading_levels, axis=1, result_type="expand")
+
+    # ── R:R validation after tick rounding ───────────────────────────────
+    if min_rr > 0:
+        def _check_rr(row: pd.Series) -> str:
+            if row.get("trade_setup_status") != "active":
+                return row.get("trade_setup_status", "inactive")
+            try:
+                el  = int(row["entry_low"])
+                tl  = int(row["tp_low"])
+                cl  = int(row["cutloss"])
+                if el <= cl or cl <= 0 or tl <= el:
+                    return "active"    # can't validate, keep as-is
+                rr = (tl - el) / (el - cl)
+                return "active" if rr >= min_rr else "low_rr"
+            except (TypeError, ValueError, ZeroDivisionError):
+                return row.get("trade_setup_status", "inactive")
+
+        level_rows["trade_setup_status"] = level_rows.apply(_check_rr, axis=1)
+
     # Drop existing level cols to avoid duplicates, then concat
     drop_cols = [c for c in level_rows.columns if c in df.columns]
     df = df.drop(columns=drop_cols)

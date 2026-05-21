@@ -1,12 +1,17 @@
-"""Rule-based signal engine.
+"""Rule-based signal engine — v2 (audit-fixes-v2).
+
+CHANGES vs v1:
+  - Hard liquidity gate: turnover < min_turnover_idr → AVOID (before any scoring)
+  - penalty_score weight increased: 0.10 → 0.20
+  - squeeze_release: reads pre-computed column from feature_builder (no shift(1) here)
+  - _classify() receives full config for gate access
+  - Thresholds now match tighter values in scanner_config.yaml
 
 Menerima DataFrame fitur dan menghasilkan:
 - 5 komponen score original (0–10) + 2 komponen baru (news, foreign)
-- total_score (weighted, clipped 0–10) — formula lama, backward compatible
+- total_score (weighted, clipped 0–10)
 - enhanced_total_score — total_score + koreksi dari news dan foreign
 - signal label: BREAKOUT | PRE_MARKUP | WATCH | AVOID | NONE
-
-Semua threshold classification baca dari scanner_config.yaml → signal_thresholds.
 """
 from datetime import date
 from pathlib import Path
@@ -15,20 +20,23 @@ import pandas as pd
 import yaml
 from loguru import logger
 
-# Default thresholds jika config tidak tersedia
+# Default thresholds — sync dengan scanner_config.yaml defaults
 _DEFAULTS = {
     "signal_thresholds": {
-        "breakout": {"total": 7.5, "breakout": 7.0, "volume": 6.0},
-        "pre_markup": {"total": 5.5, "trend": 5.0},
-        "watch": {"total": 3.5},
-    }
+        "breakout":   {"total": 7.5, "breakout": 7.0, "volume": 6.0},
+        "pre_markup": {"total": 6.0, "trend": 5.0},
+        "watch":      {"total": 5.0},
+    },
+    "liquidity": {
+        "min_turnover_idr": 500_000_000,
+    },
 }
 
-SIGNAL_BREAKOUT = "BREAKOUT"
+SIGNAL_BREAKOUT   = "BREAKOUT"
 SIGNAL_PRE_MARKUP = "PRE_MARKUP"
-SIGNAL_WATCH = "WATCH"
-SIGNAL_AVOID = "AVOID"
-SIGNAL_NONE = "NONE"
+SIGNAL_WATCH      = "WATCH"
+SIGNAL_AVOID      = "AVOID"
+SIGNAL_NONE       = "NONE"
 
 
 def compute_signal(
@@ -40,13 +48,14 @@ def compute_signal(
     Kolom yang ditambahkan:
         trend_score, momentum_score, breakout_score, volume_score, penalty_score,
         news_score, foreign_score,
-        total_score (original formula, backward compat),
-        enhanced_total_score (total + news/foreign adjustment),
-        signal (berdasarkan total_score)
+        total_score, enhanced_total_score, signal
+
+    Hard gates (diterapkan sebelum scoring):
+        - turnover (close × volume) < liquidity.min_turnover_idr → AVOID
+        - volume == 0 (no trades) → AVOID
 
     Args:
         df_features: DataFrame dengan kolom dari feature_builder.FEATURE_COLS
-                     + opsional: news_sentiment_score, foreign_flow_score
         config: dict dari scanner_config.yaml (opsional)
     """
     if config is None:
@@ -66,29 +75,33 @@ def compute_signal(
     df["news_score"]    = _news_score(df)
     df["foreign_score"] = _foreign_score(df)
 
-    # --- total_score: formula asli, tidak berubah ---
+    # --- total_score ---
+    # penalty weight dinaikkan dari 0.10 → 0.20 untuk memberi efek nyata
     df["total_score"] = (
         df["trend_score"]    * 0.25
         + df["momentum_score"] * 0.25
         + df["breakout_score"] * 0.25
         + df["volume_score"]   * 0.15
-        - df["penalty_score"]  * 0.10
+        - df["penalty_score"]  * 0.20    # was 0.10
     ).clip(0, 10)
 
-    # --- enhanced_total_score: total_score + koreksi kecil dari news + foreign ---
-    # news_adj: +0.4 max jika semua positif, -0.4 max jika semua negatif
-    # foreign_adj: sama. Total max ±0.8 dari baseline
+    # --- enhanced_total_score ---
     news_adj    = (df["news_score"]    - 5.0) * 0.08
     foreign_adj = (df["foreign_score"] - 5.0) * 0.08
     df["enhanced_total_score"] = (df["total_score"] + news_adj + foreign_adj).clip(0, 10)
 
-    # --- Signal classification (berdasarkan total_score untuk backward compat) ---
+    # --- Signal classification ---
     use_enhanced = config.get("use_enhanced_score", False)
     score_col = "enhanced_total_score" if use_enhanced else "total_score"
-    df["signal"] = df.apply(lambda row: _classify(row, thresholds, score_col), axis=1)
+    df["signal"] = df.apply(
+        lambda row: _classify(row, thresholds, score_col, config),
+        axis=1,
+    )
 
     n_signals = df["signal"].value_counts().to_dict()
-    logger.info(f"Signal distribution: {n_signals}")
+    n_avoid_liq = (df.get("_avoid_reason", pd.Series(dtype=str)) == "LIQUIDITY").sum() \
+                  if "_avoid_reason" in df.columns else "?"
+    logger.info(f"Signal distribution: {n_signals} | liquidity-AVOID: {n_avoid_liq}")
     return df
 
 
@@ -101,7 +114,7 @@ def save_signals(df: pd.DataFrame, signals_dir: Path, scan_date: str | None = No
     label = scan_date or date.today().strftime("%Y-%m-%d")
     signals_dir.mkdir(parents=True, exist_ok=True)
     parquet_path = signals_dir / f"{label}.parquet"
-    csv_path = signals_dir / f"{label}.csv"
+    csv_path     = signals_dir / f"{label}.csv"
     df.to_parquet(parquet_path, index=False)
     df.to_csv(csv_path, index=False)
     logger.info(f"Signals saved → {parquet_path}")
@@ -119,17 +132,15 @@ def load_signals(signals_dir: Path, scan_date: str) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Internal scorers — original
+# Internal scorers
 # ---------------------------------------------------------------------------
 
 def _trend_score(df: pd.DataFrame) -> pd.Series:
     score = pd.Series(0.0, index=df.index)
 
-    # FIX: evaluasi nilai bool, bukan hanya keberadaan kolom
     if "ma_full_alignment" in df.columns:
         full_align = df["ma_full_alignment"].fillna(False).astype(bool)
         score += full_align.astype(float) * 10
-        # Partial alignment hanya berlaku saat full alignment TIDAK terpenuhi
         if "ma_partial_alignment" in df.columns:
             partial_only = df["ma_partial_alignment"].fillna(False).astype(bool) & ~full_align
             score += partial_only.astype(float) * 5
@@ -139,13 +150,11 @@ def _trend_score(df: pd.DataFrame) -> pd.Series:
     if "golden_cross" in df.columns:
         score += df["golden_cross"].fillna(False).astype(float) * 3
 
-    # TradingView bonus: ADX trend strength
     if "adx" in df.columns:
         adx = df["adx"].fillna(0)
-        score += (adx >= 25).astype(float) * 1   # trending market
-        score += (adx >= 40).astype(float) * 1   # strong trend
+        score += (adx >= 25).astype(float) * 1
+        score += (adx >= 40).astype(float) * 1
 
-    # Supertrend
     if "supertrend_bullish" in df.columns:
         score += df["supertrend_bullish"].fillna(False).astype(float) * 2
 
@@ -165,11 +174,9 @@ def _momentum_score(df: pd.DataFrame) -> pd.Series:
     if "roc20" in df.columns:
         score += (df["roc20"].fillna(0) > 0).astype(float) * 1
 
-    # TradingView bonus: Stoch RSI oversold→rising
     if "stoch_rsi_k" in df.columns and "stoch_rsi_d" in df.columns:
         k = df["stoch_rsi_k"].fillna(50)
         d = df["stoch_rsi_d"].fillna(50)
-        # K memotong D ke atas dari zona oversold (< 20) → sinyal momentum positif
         score += ((k > d) & (k < 80)).astype(float) * 1
 
     return score.clip(0, 10)
@@ -184,13 +191,10 @@ def _breakout_score(df: pd.DataFrame) -> pd.Series:
     if "atr_breakout" in df.columns:
         score += df["atr_breakout"].fillna(False).astype(float) * 5
 
-    # Squeeze release: squeeze baru berakhir (potensi breakout)
-    if "squeeze_on" in df.columns:
-        sq = df["squeeze_on"].fillna(False).astype(bool)
-        # Squeeze baru release = False setelah sebelumnya True
-        sq_prev = sq.shift(1).fillna(False)
-        squeeze_release = (~sq) & sq_prev
-        score += squeeze_release.astype(float) * 3
+    # squeeze_release: baca dari kolom pre-computed (feature_builder._add_tv_indicators)
+    # JANGAN pakai shift(1) di sini — signal_engine hanya lihat single row per ticker
+    if "squeeze_release" in df.columns:
+        score += df["squeeze_release"].fillna(False).astype(float) * 3
 
     return score.clip(0, 10)
 
@@ -207,20 +211,18 @@ def _volume_score(df: pd.DataFrame) -> pd.Series:
 
 
 def _penalty_score(df: pd.DataFrame) -> pd.Series:
-    """Nilai positif = besar penalti (dikurangkan dari total_score)."""
+    """Nilai positif = besar penalti. Bobot di total_score = ×0.20 (was 0.10)."""
     penalty = pd.Series(0.0, index=df.index)
+
     if "rsi14" in df.columns:
         penalty += (df["rsi14"].fillna(50) > 80).astype(float) * 8
-    if "volume" in df.columns:
-        # FIX: gunakan volume × close untuk estimasi nilai IDR; threshold 500 juta IDR
-        if "close" in df.columns:
-            value_idr = df["volume"].fillna(0) * df["close"].fillna(0)
-            penalty += (value_idr < 500_000_000).astype(float) * 5  # < Rp 500 juta
-        else:
-            # Fallback: share count threshold (tidak ideal, tapi tidak crash)
-            penalty += (df["volume"].fillna(0) < 500_000).astype(float) * 5
 
-    # ADX terlalu lemah → no trend, penalty kecil
+    if "volume" in df.columns and "close" in df.columns:
+        value_idr = df["volume"].fillna(0) * df["close"].fillna(0)
+        penalty += (value_idr < 500_000_000).astype(float) * 5    # < Rp 500 juta
+    elif "volume" in df.columns:
+        penalty += (df["volume"].fillna(0) < 500_000).astype(float) * 5
+
     if "adx" in df.columns:
         penalty += (df["adx"].fillna(25) < 15).astype(float) * 2
 
@@ -228,68 +230,96 @@ def _penalty_score(df: pd.DataFrame) -> pd.Series:
 
 
 # ---------------------------------------------------------------------------
-# Komponen baru: News & Foreign
+# News & Foreign scores
 # ---------------------------------------------------------------------------
 
 def _news_score(df: pd.DataFrame) -> pd.Series:
-    """0–10 berdasarkan news_sentiment_score. Neutral (5.0) jika tidak ada data.
-
-    NaN / status policy (aligns with news_sentiment.py):
-        news_data_status = "ok"     → news_sentiment_score is 0–10 (real sentiment)
-        news_data_status = "none"   → news_sentiment_score = 5.0 (explicit neutral:
-                                       no articles found, but fetch succeeded)
-        news_data_status = "failed" → news_sentiment_score = NaN (fetch error)
-                                       → fillna(5.0) here → neutral in scoring only
-
-    We intentionally treat fetch failures as neutral in scoring so that a broken
-    news provider does NOT penalise otherwise-valid signals.
-
-    The original NaN is preserved in the news_sentiment_score column so the
-    dashboard can show "⚠️ Data unavailable" via news_data_status, rather than
-    silently showing a fake neutral score.
-    """
     if "news_sentiment_score" not in df.columns:
         return pd.Series(5.0, index=df.index)
-    # fillna(5.0): converts NaN (status="failed") → neutral 5.0 for scoring only.
-    # "none" status already has score 5.0 set by compute_news_sentiment.
     return df["news_sentiment_score"].fillna(5.0).clip(0, 10)
 
 
 def _foreign_score(df: pd.DataFrame) -> pd.Series:
-    """0–10 berdasarkan foreign_flow_score. Neutral (5.0) jika tidak ada data."""
     if "foreign_flow_score" not in df.columns:
         return pd.Series(5.0, index=df.index)
     return df["foreign_flow_score"].fillna(5.0).clip(0, 10)
 
 
 # ---------------------------------------------------------------------------
+# Hard gates
+# ---------------------------------------------------------------------------
+
+def _hard_gate(row: pd.Series, config: dict) -> str | None:
+    """Return AVOID reason string if hard gate is triggered, else None.
+
+    Gates (checked in order):
+    1. Zero volume — no trades today
+    2. Turnover < min_turnover_idr (default Rp 500 juta)
+
+    Returns:
+        None          → passed all gates (proceed to scoring)
+        "ZERO_VOLUME" → no trades
+        "LIQUIDITY"   → too illiquid
+    """
+    liq_cfg = config.get("liquidity", _DEFAULTS["liquidity"])
+    min_turnover = liq_cfg.get("min_turnover_idr", 500_000_000)
+
+    volume = float(row.get("volume", 0) or 0)
+    close  = float(row.get("close", 0) or 0)
+
+    if volume == 0:
+        return "ZERO_VOLUME"
+
+    turnover = volume * close
+    if turnover < min_turnover:
+        return "LIQUIDITY"
+
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Classification
 # ---------------------------------------------------------------------------
 
-def _classify(row: pd.Series, thresholds: dict, score_col: str = "total_score") -> str:
-    ts = row.get(score_col, 0)
-    bs = row.get("breakout_score", 0)
-    vs = row.get("volume_score", 0)
-    tr = row.get("trend_score", 0)
-    ps = row.get("penalty_score", 0)
+def _classify(
+    row: pd.Series,
+    thresholds: dict,
+    score_col: str = "total_score",
+    config: dict | None = None,
+) -> str:
+    # ── Hard gates (checked first, before any score-based logic) ──────────
+    gate = _hard_gate(row, config or _DEFAULTS)
+    if gate:
+        return SIGNAL_AVOID
 
+    ts = row.get(score_col, 0) or 0
+    bs = row.get("breakout_score", 0) or 0
+    vs = row.get("volume_score", 0) or 0
+    tr = row.get("trend_score", 0) or 0
+    ps = row.get("penalty_score", 0) or 0
+
+    # Heavy penalty → AVOID regardless of score
     if ps >= 8:
         return SIGNAL_AVOID
 
+    # BREAKOUT
     t_breakout = thresholds.get("breakout", {})
     if (ts >= t_breakout.get("total", 7.5)
             and bs >= t_breakout.get("breakout", 7.0)
             and vs >= t_breakout.get("volume", 6.0)):
         return SIGNAL_BREAKOUT
 
+    # PRE_MARKUP
     t_pre = thresholds.get("pre_markup", {})
-    if ts >= t_pre.get("total", 5.5) and tr >= t_pre.get("trend", 5.0):
+    if ts >= t_pre.get("total", 6.0) and tr >= t_pre.get("trend", 5.0):
         return SIGNAL_PRE_MARKUP
 
+    # WATCH
     t_watch = thresholds.get("watch", {})
-    if ts >= t_watch.get("total", 3.5):
+    if ts >= t_watch.get("total", 5.0):
         return SIGNAL_WATCH
 
+    # Low score → AVOID
     if ts < 2.0:
         return SIGNAL_AVOID
 
