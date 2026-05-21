@@ -219,6 +219,70 @@ def load_broker_for_ticker(ticker: str, selected_date: str, use_mock: bool = Tru
     )
 
 
+def load_broker_history(ticker: str, n_days: int = 20) -> pd.DataFrame:
+    """Load last n_days of broker transaction data for a single ticker.
+
+    Scans data/broker/ for files matching ``{ticker_clean}_{date}.parquet``
+    and combines them into one DataFrame with a ``date`` column.
+
+    This is used by ``compute_broker_intelligence()`` for multi-day accumulation
+    analysis. Returns an empty DataFrame when no files are found (e.g., broker
+    fetcher not yet set up).
+
+    Args:
+        ticker : IDX ticker (with or without .JK suffix).
+        n_days : Maximum number of daily files to load (most-recent first).
+
+    Returns:
+        DataFrame with columns:
+            date, broker_code, broker_name, buy_lot, sell_lot, net_lot
+        Empty DataFrame if no files exist.
+    """
+    # Try both clean (BBCA) and raw (BBCA.JK) filename patterns
+    ticker_clean = ticker.replace(".JK", "")
+    patterns = [f"{ticker_clean}_*.parquet", f"{ticker}_*.parquet"]
+
+    files: list[Path] = []
+    for pattern in patterns:
+        found = sorted(_BROKER_DIR.glob(pattern), reverse=True)
+        if found:
+            files = found
+            break
+
+    if not files:
+        return pd.DataFrame()
+
+    # Load up to n_days files
+    files = files[:n_days]
+    frames: list[pd.DataFrame] = []
+    for f in files:
+        try:
+            df = pd.read_parquet(f)
+            # Extract date from filename stem: {ticker}_{YYYY-MM-DD}
+            stem = f.stem
+            parts = stem.split("_")
+            date_str = parts[-1] if len(parts) >= 2 else ""
+            if date_str and "date" not in df.columns:
+                df["date"] = date_str
+            frames.append(df)
+        except Exception:
+            continue
+
+    if not frames:
+        return pd.DataFrame()
+
+    combined = pd.concat(frames, ignore_index=True)
+
+    # Normalise net_lot
+    if "net_lot" not in combined.columns and "buy_lot" in combined.columns and "sell_lot" in combined.columns:
+        combined["net_lot"] = (
+            pd.to_numeric(combined["buy_lot"], errors="coerce").fillna(0)
+            - pd.to_numeric(combined["sell_lot"], errors="coerce").fillna(0)
+        )
+
+    return combined
+
+
 # ---------------------------------------------------------------------------
 # News data
 # ---------------------------------------------------------------------------
