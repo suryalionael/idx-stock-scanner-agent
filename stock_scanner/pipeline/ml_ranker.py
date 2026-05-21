@@ -142,6 +142,7 @@ def score_candidates(
     """
     feature_cols = config.get("features", DEFAULT_FEATURES)
     available = [c for c in feature_cols if c in df_today.columns]
+    missing_cols = [c for c in feature_cols if c not in df_today.columns]
 
     if not available:
         logger.warning("Tidak ada feature column tersedia untuk scoring — ml_prob diset 0.0")
@@ -149,7 +150,18 @@ def score_candidates(
         df_today["ml_prob"] = 0.0
         return df_today
 
-    X = df_today[available].fillna(0)
+    if missing_cols:
+        logger.warning(
+            f"Feature columns hilang dari df_today (diisi 0): {missing_cols}\n"
+            "Ini normal jika features parquet dibuat sebelum fitur baru ditambahkan."
+        )
+
+    # Build X with ALL training feature columns, filling missing ones with 0
+    df_today = df_today.copy()
+    for col in missing_cols:
+        df_today[col] = 0.0
+
+    X = df_today[feature_cols].fillna(0)
 
     try:
         probs = model.predict_proba(X)[:, 1]

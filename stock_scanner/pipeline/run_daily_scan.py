@@ -160,14 +160,18 @@ def main(config_path: Path = _DEFAULT_CONFIG) -> None:
     else:
         logger.info("Explain agent dinonaktifkan")
 
-    # --- Step 8b: Trading levels (entry / TP / cutloss) ---
-    signals_df = enrich_df_with_levels(signals_df)
-    active_count = (signals_df.get("trade_setup_status") == "active").sum() if "trade_setup_status" in signals_df.columns else 0
-    logger.info(f"Trading levels computed: {active_count} active setups")
+    # --- Step 8b: Trading levels (entry / TP / cutloss) with R:R validation ---
+    min_rr = config.get("min_rr", 1.5)
+    signals_df = enrich_df_with_levels(signals_df, min_rr=min_rr)
+    active_count = (signals_df.get("trade_setup_status") == "active").sum() \
+                   if "trade_setup_status" in signals_df.columns else 0
+    low_rr_count = (signals_df.get("trade_setup_status") == "low_rr").sum() \
+                   if "trade_setup_status" in signals_df.columns else 0
+    logger.info(f"Trading levels: {active_count} active, {low_rr_count} low_rr (R:R < {min_rr})")
 
     # --- Step 9: Simpan output ---
     save_signals(signals_df, signals_dir, scan_date)
-    _save_ranked(signals_df, ranked_dir, scan_date)
+    _save_ranked(signals_df, ranked_dir, scan_date, config=config)
     _print_summary(signals_df, scan_date)
     logger.info(f"=== Scan selesai: {scan_date} ===")
 
@@ -201,9 +205,28 @@ def _load_universe(universe_path: Path) -> list[str]:
     return df["ticker"].tolist()
 
 
-def _save_ranked(df: pd.DataFrame, ranked_dir: Path, scan_date: str) -> None:
+def _save_ranked(
+    df: pd.DataFrame,
+    ranked_dir: Path,
+    scan_date: str,
+    config: dict | None = None,
+) -> None:
+    """Save ranked signals with per-tier caps applied.
+
+    Caps are read from config['signal_caps'] (default: BREAKOUT=15, PRE_MARKUP=30, WATCH=50).
+    Sorting: signal tier first, then ml_prob (if available), then total_score descending.
+    """
+    caps_cfg = (config or {}).get("signal_caps", {})
+    caps = {
+        "BREAKOUT":   caps_cfg.get("breakout",   15),
+        "PRE_MARKUP": caps_cfg.get("pre_markup",  30),
+        "WATCH":      caps_cfg.get("watch",       50),
+    }
+
     priority = ["BREAKOUT", "PRE_MARKUP", "WATCH"]
     ranked = df[df["signal"].isin(priority)].copy()
+
+    # Sort within each tier
     sort_cols = ["signal"]
     asc = [True]
     if "ml_prob" in ranked.columns:
@@ -212,9 +235,28 @@ def _save_ranked(df: pd.DataFrame, ranked_dir: Path, scan_date: str) -> None:
     sort_cols.append("total_score")
     asc.append(False)
     ranked = ranked.sort_values(sort_cols, ascending=asc)
+
+    # Apply per-tier caps
+    capped_frames = []
+    for sig in priority:
+        tier = ranked[ranked["signal"] == sig]
+        cap = caps.get(sig, 999)
+        if len(tier) > cap:
+            logger.info(f"Cap applied: {sig} {len(tier)} → {cap} tickers")
+            tier = tier.head(cap)
+        capped_frames.append(tier)
+
+    if capped_frames:
+        ranked = pd.concat(capped_frames, ignore_index=True)
+    else:
+        ranked = ranked.head(0)
+
+    ranked_dir.mkdir(parents=True, exist_ok=True)
     path = ranked_dir / f"ranked_{scan_date}.csv"
     ranked.to_csv(path, index=False)
-    logger.info(f"Ranked output → {path} ({len(ranked)} tickers)")
+
+    sig_counts = ranked["signal"].value_counts().to_dict()
+    logger.info(f"Ranked output → {path} ({len(ranked)} tickers) | {sig_counts}")
 
 
 def _print_summary(df: pd.DataFrame, scan_date: str) -> None:

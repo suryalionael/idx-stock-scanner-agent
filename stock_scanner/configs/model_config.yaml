@@ -8,11 +8,14 @@ target_return_pct: 3.0       # % return minimum yang dianggap "sukses"
 target_horizon_days: 5       # trading days ke depan (≈1 minggu)
 
 # --- Feature list untuk training dan scoring ---
-# Harus sesuai dengan kolom yang dihasilkan feature_builder.build_features()
-# + kolom score dari signal_engine.compute_signal()
+# Hanya kolom yang tersedia dari feature_builder.build_features() (bukan signal_engine).
+# Signal-engine score columns (trend_score, momentum_score, breakout_score, volume_score)
+# sengaja TIDAK dimasukkan karena tidak tersedia saat training dari raw OHLCV history.
+# Mereka tetap dipakai sebagai filter oleh signal_engine sebelum ML scoring.
 features:
   - rsi14
   - macd_histogram
+  - macd
   - vol_ratio_20d
   - atr_pct
   - roc5
@@ -20,10 +23,12 @@ features:
   - pct_from_52w_high
   - bb_width
   - hist_vol_20d
-  - trend_score
-  - momentum_score
-  - breakout_score
-  - volume_score
+  - ma_full_alignment
+  - ma_partial_alignment
+  - slope_ma20
+  - price_vs_ma200
+  - obv_trend
+  - squeeze_release
 
 # --- XGBoost hyperparameters ---
 # TODO: tuning via optuna atau GridSearchCV setelah dataset historis tersedia

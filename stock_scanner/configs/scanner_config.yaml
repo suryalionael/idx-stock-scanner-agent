@@ -37,22 +37,55 @@ enrichment:
 # Gunakan enhanced_total_score (news + foreign adjusted) atau total_score biasa
 use_enhanced_score: false   # set true untuk pakai enhanced_total_score di classifier
 
-# --- Signal thresholds (score 0–10 per komponen) ---
+# ---------------------------------------------------------------------------
+# LIQUIDITY HARD GATES
+# ---------------------------------------------------------------------------
+# Diterapkan SEBELUM scoring. Jika dilanggar → AVOID langsung (skip semua scoring).
+# Gunakan turnover = close × volume (estimasi nilai IDR per hari).
+liquidity:
+  min_turnover_idr: 500_000_000    # Rp 500 juta/hari minimum (hard gate)
+  min_volume_shares: 0             # jika perlu filter shares juga (0 = disabled)
+
+# ---------------------------------------------------------------------------
+# SIGNAL THRESHOLDS (score 0–10 per komponen)
+# ---------------------------------------------------------------------------
+# CHANGELOG vs versi sebelumnya:
+#   watch.total:       3.5 → 5.0   (-30% → butuh sinyal nyata, bukan noise)
+#   pre_markup.total:  5.5 → 6.0   (lebih selektif)
+#   pre_markup.trend:  5.0 → 5.0   (tetap)
+#   breakout.total:    7.5          (tetap)
+#   breakout.breakout: 7.0          (tetap)
+#   breakout.volume:   6.0          (tetap)
 signal_thresholds:
   breakout:
     total: 7.5           # total_score minimum
     breakout: 7.0        # breakout_score minimum
     volume: 6.0          # volume_score minimum
   pre_markup:
-    total: 5.5
+    total: 6.0           # was 5.5 — lebih ketat
     trend: 5.0
   watch:
-    total: 3.5
+    total: 5.0           # was 3.5 — MAJOR CHANGE: eliminasi noise
+
+# ---------------------------------------------------------------------------
+# PER-TIER CAPS (safety valves — aktif setelah hard gates + thresholds)
+# ---------------------------------------------------------------------------
+# Jumlah maksimum ticker per signal tier di file ranked.
+# Untuk mencegah "ratusan WATCH" bahkan setelah threshold dinaikkan.
+signal_caps:
+  breakout: 15
+  pre_markup: 30
+  watch: 50
 
 # --- Explain agent (Claude API) ---
 explain:
   enabled: false         # set true setelah ANTHROPIC_API_KEY dikonfigurasi
   max_tickers: 10        # maksimal ticker yang di-explain per scan (hemat API cost)
+
+# --- ML ranking ---
+# min_rr: minimum Risk:Reward setelah tick rounding untuk trade_setup_status = "active"
+# Di bawah ini → "low_rr" (level tetap dihitung, tapi tidak di-rank aktif)
+min_rr: 1.5
 
 # --- Logging ---
 log_level: "INFO"
