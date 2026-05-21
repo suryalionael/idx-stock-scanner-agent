@@ -15,6 +15,7 @@ import streamlit as st
 
 from dashboard.charts import (
     broker_chart,
+    broker_net_flow_chart,
     fundamental_trend_chart,
     history_timeline,
     monthly_holders_chart,
@@ -29,6 +30,7 @@ from dashboard.data_loader import (
     load_all_ranked,
     load_all_tickers_for_date,
     load_broker_for_ticker,
+    load_broker_history,
     load_raw,
     latest_ranked_date,
     load_fundamentals_for_date,
@@ -716,6 +718,14 @@ def _fetch_financial_comparison(ticker: str) -> dict:
     return compare_financial_statements(ticker)
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_broker_intelligence(ticker: str) -> dict:
+    """Load broker history and compute accumulation intelligence. Cached 5 min."""
+    from stock_scanner.pipeline.broker_intelligence import compute_broker_intelligence
+    broker_df = load_broker_history(ticker, n_days=20)
+    return compute_broker_intelligence(ticker, broker_df)
+
+
 # ---------------------------------------------------------------------------
 # Scalping Tab
 # ---------------------------------------------------------------------------
@@ -1243,7 +1253,155 @@ def _render_longterm_detail(row: pd.Series, scan_date: str, api_key: str | None)
                     st.plotly_chart(fig, use_container_width=True,
                                     key=f"lt_fin_{ticker}_{metric}_{scan_date}")
 
-    # News sentiment (reputation/risk layer)
+    # ── Broker Intelligence ────────────────────────────────────────────────
+    st.markdown("")
+    st.markdown("**🏦 Broker Intelligence**")
+    with st.spinner("Menganalisis broker flow..."):
+        bi = _fetch_broker_intelligence(ticker)
+
+    acc_label = bi.get("broker_accumulation_label", "NO_SIGNAL")
+    acc_score = bi.get("broker_accumulation_score", 0.0)
+    has_broker_data = acc_score > 0 or bi.get("active_broker_count_5d", 0) > 0
+
+    if not has_broker_data:
+        st.caption(
+            "📭 Data broker multi-hari tidak tersedia. "
+            "Aktifkan broker fetcher dan jalankan `run_daily_scan` untuk mengisi data ini."
+        )
+    else:
+        # Accumulation badge
+        _acc_colors = {
+            "ACCUMULATION_STRONG": ("#14532d", "#4ade80", "🟢"),
+            "ACCUMULATION_WATCH":  ("#7c3f00", "#fb923c", "🟠"),
+            "NO_SIGNAL":           ("#1e293b", "#64748b", "⚪"),
+        }
+        bg, fg, emoji = _acc_colors.get(acc_label, ("#1e293b", "#64748b", "⚪"))
+        st.markdown(
+            f'<div style="background:{bg};border-radius:8px;padding:8px 14px;display:inline-block;margin-bottom:8px">'
+            f'<span style="color:{fg};font-weight:700;font-size:14px">'
+            f'{emoji} {acc_label} &nbsp;·&nbsp; Score: {acc_score:.1f}/10</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        # Broker Intelligence alert (3-layer)
+        from stock_scanner.pipeline.broker_intelligence import compute_longterm_broker_alert
+        alert_input = {**dict(row), **bi}
+        broker_alert = compute_longterm_broker_alert(alert_input)
+        alert_status = broker_alert.get("alert_status", "NO_ALERT")
+        alert_reason = broker_alert.get("alert_reason", "")
+        conf_score   = broker_alert.get("confidence_score", 0.0)
+
+        if alert_status == "LONGTERM_BROKER_ALERT_STRONG":
+            st.success(
+                f"🚨 **LONGTERM BROKER ALERT — STRONG** (confidence: {conf_score:.1f}/10)\n\n"
+                f"{alert_reason}"
+            )
+        elif alert_status == "LONGTERM_BROKER_ALERT_WATCH":
+            st.warning(
+                f"⚠️ **LONGTERM BROKER ALERT — WATCH** (confidence: {conf_score:.1f}/10)\n\n"
+                f"{alert_reason}"
+            )
+
+        # Key metrics
+        bi_c1, bi_c2, bi_c3 = st.columns(3)
+        with bi_c1:
+            fn_1d = bi.get("foreign_net_buy_1d", 0)
+            fn_5d = bi.get("foreign_net_buy_5d", 0)
+            color_1d = "#4ade80" if fn_1d >= 0 else "#ef4444"
+            color_5d = "#4ade80" if fn_5d >= 0 else "#ef4444"
+            st.markdown(
+                f'<div class="metric-card">'
+                f'<div class="label">🌍 Foreign Net (1d)</div>'
+                f'<div class="value" style="color:{color_1d};font-size:20px">'
+                f'{"+" if fn_1d >= 0 else ""}{fn_1d:,.0f} lot</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        with bi_c2:
+            color_fn5 = "#4ade80" if fn_5d >= 0 else "#ef4444"
+            st.markdown(
+                f'<div class="metric-card">'
+                f'<div class="label">🌍 Foreign Net (5d)</div>'
+                f'<div class="value" style="color:{color_fn5};font-size:20px">'
+                f'{"+" if fn_5d >= 0 else ""}{fn_5d:,.0f} lot</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        with bi_c3:
+            big_5d = bi.get("big_broker_net_buy_5d", 0)
+            color_big = "#4ade80" if big_5d >= 0 else "#ef4444"
+            st.markdown(
+                f'<div class="metric-card">'
+                f'<div class="label">🏦 Big Local Net (5d)</div>'
+                f'<div class="value" style="color:{color_big};font-size:20px">'
+                f'{"+" if big_5d >= 0 else ""}{big_5d:,.0f} lot</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        st.markdown("")
+
+        # Top buyers / sellers table
+        buyers  = bi.get("top_buyer_brokers", [])
+        sellers = bi.get("top_seller_brokers", [])
+
+        if buyers or sellers:
+            tbl_col1, tbl_col2 = st.columns(2)
+            with tbl_col1:
+                st.markdown("**Top Buyer Brokers (5d)**")
+                if buyers:
+                    buyer_df = pd.DataFrame(buyers)
+                    buyer_df["net_lot"] = buyer_df["net_lot"].apply(lambda x: f"+{x:,.0f}")
+                    st.dataframe(
+                        buyer_df[["broker_code", "type_label", "net_lot"]].rename(
+                            columns={"broker_code": "Broker", "type_label": "Tipe", "net_lot": "Net Lot"}
+                        ),
+                        use_container_width=True, hide_index=True, height=200,
+                    )
+                else:
+                    st.caption("Tidak ada data.")
+
+            with tbl_col2:
+                st.markdown("**Top Seller Brokers (5d)**")
+                if sellers:
+                    seller_df = pd.DataFrame(sellers)
+                    seller_df["net_lot"] = seller_df["net_lot"].apply(lambda x: f"{x:,.0f}")
+                    st.dataframe(
+                        seller_df[["broker_code", "type_label", "net_lot"]].rename(
+                            columns={"broker_code": "Broker", "type_label": "Tipe", "net_lot": "Net Lot"}
+                        ),
+                        use_container_width=True, hide_index=True, height=200,
+                    )
+                else:
+                    st.caption("Tidak ada data.")
+
+        # Net flow chart
+        broker_history_df = load_broker_history(ticker, n_days=20)
+        if not broker_history_df.empty and "date" in broker_history_df.columns:
+            try:
+                st.plotly_chart(
+                    broker_net_flow_chart(broker_history_df, ticker),
+                    use_container_width=True,
+                    key=f"lt_broker_flow_{ticker}_{scan_date}",
+                )
+            except Exception as e:
+                st.caption(f"Chart broker flow tidak dapat dimuat: {e}")
+
+        # Strengths / red flags
+        bi_strengths  = bi.get("strengths", [])
+        bi_red_flags  = bi.get("red_flags", [])
+        if bi_strengths:
+            st.markdown("**✅ Broker Strengths:**")
+            for s in bi_strengths:
+                st.markdown(f"- {s}")
+        if bi_red_flags:
+            st.markdown("**⚠️ Broker Red Flags:**")
+            for f in bi_red_flags:
+                st.markdown(f"- {f}")
+
+    # ── News sentiment (reputation/risk layer) ─────────────────────────────
+    st.markdown("")
     news_status = str(row.get("news_data_status", "")).lower()
     if news_status in ("ok", "none"):
         st.markdown("**📰 Sentimen Berita (Risiko / Reputasi)**")
@@ -1259,7 +1417,7 @@ def _render_longterm_detail(row: pd.Series, scan_date: str, api_key: str | None)
         else:
             st.caption("Tidak ada berita relevan dalam 3 hari terakhir.")
 
-    # AI Explanation (if API key available)
+    # ── AI Explanation (if API key available) ────────────────────────────
     st.markdown("**🤖 AI Explanation**")
     with st.spinner("Membuat narasi long-term..."):
         articles_lt = load_news_articles_for_ticker(ticker, scan_date)

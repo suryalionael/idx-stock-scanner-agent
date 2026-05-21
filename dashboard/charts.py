@@ -42,6 +42,7 @@ def price_chart(
     )
 
     # --- Candlestick ---
+    pct_chg = df["close"].pct_change() * 100
     fig.add_trace(
         go.Candlestick(
             x=df["date"],
@@ -54,6 +55,26 @@ def price_chart(
             decreasing_line_color="#ef4444",
             increasing_fillcolor="#22c55e",
             decreasing_fillcolor="#ef4444",
+        ),
+        row=1, col=1,
+    )
+
+    # Invisible scatter overlay for % change hover (Candlestick doesn't support hovertemplate)
+    fig.add_trace(
+        go.Scatter(
+            x=df["date"],
+            y=df["close"],
+            mode="markers",
+            marker=dict(opacity=0, size=6, color="rgba(0,0,0,0)"),
+            customdata=pct_chg.values,
+            name="Δ%",
+            hovertemplate=(
+                "<b>%{x|%d %b %Y}</b><br>"
+                "Close: %{y:,.0f}<br>"
+                "Perubahan: %{customdata:+.2f}%"
+                "<extra></extra>"
+            ),
+            showlegend=False,
         ),
         row=1, col=1,
     )
@@ -109,7 +130,7 @@ def price_chart(
     fig.update_layout(
         template=_DARK_TEMPLATE,
         title=dict(text=ticker, font_size=16),
-        height=520,
+        height=540,
         margin=dict(l=10, r=10, t=40, b=10),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
         xaxis_rangeslider_visible=False,
@@ -118,7 +139,31 @@ def price_chart(
     )
     fig.update_yaxes(title_text="Harga", row=1, col=1, gridcolor="#1e293b")
     fig.update_yaxes(title_text="Volume", row=2, col=1, gridcolor="#1e293b")
-    fig.update_xaxes(gridcolor="#1e293b", showgrid=True)
+
+    # Range selector buttons on the price axis (row 1)
+    fig.update_xaxes(
+        gridcolor="#1e293b",
+        showgrid=True,
+        rangeselector=dict(
+            buttons=[
+                dict(count=7,  label="1W", step="day",   stepmode="backward"),
+                dict(count=1,  label="1M", step="month", stepmode="backward"),
+                dict(count=3,  label="3M", step="month", stepmode="backward"),
+                dict(count=6,  label="6M", step="month", stepmode="backward"),
+                dict(count=1,  label="1Y", step="year",  stepmode="backward"),
+                dict(count=1,  label="YTD",step="year",  stepmode="todate"),
+                dict(step="all", label="ALL"),
+            ],
+            bgcolor="#1e293b",
+            activecolor="#38bdf8",
+            bordercolor="#334155",
+            font=dict(color="#94a3b8", size=11),
+            x=0.0,
+            y=1.0,
+        ),
+        row=1, col=1,
+    )
+    fig.update_xaxes(gridcolor="#1e293b", showgrid=True, row=2, col=1)
 
     return fig
 
@@ -361,6 +406,91 @@ def broker_chart(df_broker: pd.DataFrame, ticker: str) -> go.Figure:
     return fig
 
 
+def broker_net_flow_chart(
+    broker_history_df: pd.DataFrame,
+    ticker: str,
+) -> go.Figure:
+    """Stacked bar chart of daily net broker flow by type (foreign / big-local / retail).
+
+    Args:
+        broker_history_df: Multi-day broker DataFrame from ``load_broker_history()``.
+                           Must have: date, broker_code, net_lot.
+        ticker: Ticker label for the chart title.
+
+    Returns:
+        Plotly Figure, or empty figure if data unavailable.
+    """
+    if broker_history_df is None or broker_history_df.empty:
+        return _empty_figure(f"Tidak ada data broker flow untuk {ticker}")
+
+    df = broker_history_df.copy()
+    if "broker_code" not in df.columns or "net_lot" not in df.columns:
+        return _empty_figure(f"Kolom broker tidak lengkap untuk {ticker}")
+
+    from stock_scanner.pipeline.broker_intelligence import classify_broker
+    df["broker_type"] = df["broker_code"].apply(classify_broker)
+    df["net_lot"]     = pd.to_numeric(df["net_lot"], errors="coerce").fillna(0)
+
+    if "date" not in df.columns:
+        return _empty_figure("Data broker tidak memiliki kolom tanggal")
+
+    df["_date"] = pd.to_datetime(df["date"], errors="coerce")
+    df = df.dropna(subset=["_date"])
+
+    # Aggregate daily net by broker_type
+    agg = (
+        df.groupby(["_date", "broker_type"])["net_lot"]
+        .sum()
+        .reset_index()
+        .pivot(index="_date", columns="broker_type", values="net_lot")
+        .fillna(0)
+        .sort_index()
+    )
+
+    type_colors = {
+        "foreign":   "#38bdf8",
+        "big_local": "#fb923c",
+        "local":     "#94a3b8",
+        "unknown":   "#475569",
+    }
+    type_labels = {
+        "foreign":   "🌍 Asing",
+        "big_local": "🏦 Big Local",
+        "local":     "🏠 Retail/Lokal",
+        "unknown":   "❓ Lainnya",
+    }
+
+    fig = go.Figure()
+    for btype in ["foreign", "big_local", "local", "unknown"]:
+        if btype not in agg.columns:
+            continue
+        fig.add_trace(go.Bar(
+            x=agg.index,
+            y=agg[btype],
+            name=type_labels.get(btype, btype),
+            marker_color=type_colors.get(btype, "#475569"),
+            opacity=0.85,
+            hovertemplate=f"<b>{type_labels.get(btype, btype)}</b><br>%{{x|%d %b}}: %{{y:+,.0f}} lot<extra></extra>",
+        ))
+
+    # Zero line
+    fig.add_hline(y=0, line_width=1, line_color="#475569")
+
+    fig.update_layout(
+        template=_DARK_TEMPLATE,
+        title=dict(text=f"Daily Net Broker Flow — {ticker}", font=dict(size=12, color="#94a3b8")),
+        barmode="group",
+        height=260,
+        margin=dict(l=10, r=10, t=40, b=10),
+        paper_bgcolor="#0f172a",
+        plot_bgcolor="#1e293b",
+        xaxis=dict(title="Tanggal", gridcolor="#1e293b", tickangle=-30),
+        yaxis=dict(title="Net Lot", gridcolor="#1e293b", zeroline=True, zerolinecolor="#475569"),
+        legend=dict(orientation="h", y=1.1, x=0, font=dict(size=10)),
+    )
+    return fig
+
+
 def _empty_figure(message: str) -> go.Figure:
     fig = go.Figure()
     fig.add_annotation(
@@ -484,37 +614,71 @@ def price_chart_longterm(
 
     date_col = "date" if "date" in df.columns else df.index
 
+    xs = df[date_col] if "date" in df.columns else df.index
+    pct_chg_lt = df["close"].pct_change() * 100
+
     fig = go.Figure()
 
-    # Price line
+    # Price line with hover %
     fig.add_trace(go.Scatter(
-        x=df[date_col] if "date" in df.columns else df.index,
+        x=xs,
         y=df["close"],
         mode="lines",
         name="Harga",
         line=dict(color="#38bdf8", width=1.5),
+        customdata=pct_chg_lt.values,
+        hovertemplate=(
+            "<b>%{x|%d %b %Y}</b><br>"
+            "Harga: %{y:,.0f}<br>"
+            "Perubahan: %{customdata:+.2f}%"
+            "<extra></extra>"
+        ),
     ))
 
     # MA 200
     if len(df) >= 200:
         ma200 = df["close"].rolling(200).mean()
         fig.add_trace(go.Scatter(
-            x=df[date_col] if "date" in df.columns else df.index,
+            x=xs,
             y=ma200,
             mode="lines",
             name="MA200",
             line=dict(color="#a78bfa", width=1, dash="dot"),
+            hovertemplate="MA200: %{y:,.0f}<extra></extra>",
         ))
 
     fig.update_layout(
         template=_DARK_TEMPLATE,
         paper_bgcolor="#0f172a",
         plot_bgcolor="#1e293b",
-        height=280,
-        margin=dict(l=10, r=10, t=30, b=10),
+        height=310,
+        margin=dict(l=10, r=10, t=50, b=10),
         title=dict(text=f"{ticker} — Harga Jangka Panjang", font=dict(size=12, color="#94a3b8")),
         yaxis=dict(showgrid=True, gridcolor="#1e293b", tickformat=","),
-        xaxis=dict(showgrid=False),
-        legend=dict(orientation="h", y=1.05, x=0, font=dict(size=10)),
+        xaxis=dict(
+            showgrid=False,
+            rangeselector=dict(
+                buttons=[
+                    dict(count=1,  label="1M",  step="month", stepmode="backward"),
+                    dict(count=3,  label="3M",  step="month", stepmode="backward"),
+                    dict(count=6,  label="6M",  step="month", stepmode="backward"),
+                    dict(count=1,  label="1Y",  step="year",  stepmode="backward"),
+                    dict(count=3,  label="3Y",  step="year",  stepmode="backward"),
+                    dict(count=1,  label="YTD", step="year",  stepmode="todate"),
+                    dict(step="all", label="ALL"),
+                ],
+                bgcolor="#1e293b",
+                activecolor="#38bdf8",
+                bordercolor="#334155",
+                font=dict(color="#94a3b8", size=11),
+            ),
+            rangeslider=dict(
+                visible=True,
+                bgcolor="#0f172a",
+                thickness=0.06,
+            ),
+            type="date",
+        ),
+        legend=dict(orientation="h", y=1.08, x=0, font=dict(size=10)),
     )
     return fig
