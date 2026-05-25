@@ -99,7 +99,7 @@ _install() {
     echo ""
     echo "=== Installation Complete ==="
     info "Job label   : $LABEL"
-    info "Schedule    : Mon–Fri at 08:00 WIB"
+    info "Schedule    : Mon–Fri at 06:00 WIB (fallback 07:00)"
     info "Script      : $REPO_DIR/scripts/run_daily_alerts.sh"
     info "Logs        : $REPO_DIR/logs/daily/YYYY-MM-DD.log"
     info "Plist       : $PLIST_TARGET"
