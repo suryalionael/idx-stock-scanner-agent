@@ -125,6 +125,119 @@ class TelegramSender(BaseAlertSender):
             return AlertResult(success=False, channel=self.channel_name, error=str(exc))
 
 
+    def send_document(
+        self,
+        file_path: "Path | str",
+        caption: str = "",
+    ) -> "AlertResult":
+        """Send a local file as a Telegram document (e.g. .md, .pdf).
+
+        Args:
+            file_path : Local path to the file to upload.
+            caption   : Short caption shown below the file in Telegram (≤1024 chars).
+
+        Returns:
+            AlertResult
+        """
+        from pathlib import Path as _Path
+        import urllib.request, urllib.parse, json as _json
+
+        file_path = _Path(file_path)
+        if not file_path.exists():
+            err = f"File not found: {file_path}"
+            logger.error(err)
+            return AlertResult(success=False, channel=self.channel_name, error=err)
+
+        if not self.bot_token or not self.chat_id:
+            err = "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set."
+            logger.error(err)
+            return AlertResult(success=False, channel=self.channel_name, error=err)
+
+        try:
+            import email.mime.multipart, email.mime.base, email.mime.text
+            import email.encoders, io
+
+            url = f"https://api.telegram.org/bot{self.bot_token}/sendDocument"
+
+            # Build multipart form-data manually (no requests / httpx required)
+            boundary = "IDXScannerBoundary123456"
+            body_parts: list[bytes] = []
+
+            def _field(name: str, value: str) -> bytes:
+                return (
+                    f"--{boundary}\r\n"
+                    f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
+                    f"{value}\r\n"
+                ).encode()
+
+            body_parts.append(_field("chat_id", str(self.chat_id)))
+            if caption:
+                body_parts.append(_field("caption", caption[:1024]))
+
+            # File part
+            file_content = file_path.read_bytes()
+            file_part = (
+                f"--{boundary}\r\n"
+                f'Content-Disposition: form-data; name="document"; filename="{file_path.name}"\r\n'
+                f"Content-Type: application/octet-stream\r\n\r\n"
+            ).encode() + file_content + b"\r\n"
+            body_parts.append(file_part)
+            body_parts.append(f"--{boundary}--\r\n".encode())
+
+            body = b"".join(body_parts)
+            req = urllib.request.Request(
+                url,
+                data=body,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = _json.loads(resp.read())
+
+            if result.get("ok"):
+                logger.info(
+                    "Telegram: document '%s' sent (chat_id=%s)", file_path.name, self.chat_id
+                )
+                return AlertResult(success=True, channel=self.channel_name)
+            else:
+                err = f"Telegram API error: {result}"
+                logger.error(err)
+                return AlertResult(success=False, channel=self.channel_name, error=err)
+
+        except Exception as exc:
+            logger.error("Telegram send_document failed: %s", exc)
+            return AlertResult(success=False, channel=self.channel_name, error=str(exc))
+
+    def send_messages_batch(
+        self,
+        messages: list[str],
+        delay_sec: float = 2.0,
+    ) -> int:
+        """Send multiple messages sequentially with a polite delay.
+
+        Args:
+            messages  : List of HTML strings.
+            delay_sec : Seconds between messages (default 2.0).
+
+        Returns:
+            Number of messages successfully sent.
+        """
+        import time as _time
+        success_count = 0
+        for i, msg in enumerate(messages, 1):
+            result = self.send(msg)
+            if result:
+                success_count += 1
+            else:
+                logger.error("Batch send failed (msg %d/%d): %s", i, len(messages), result.error)
+            if i < len(messages):
+                _time.sleep(delay_sec)
+        logger.info(
+            "Batch send: %d/%d messages sent.", success_count, len(messages)
+        )
+        return success_count
+
+
 # ---------------------------------------------------------------------------
 # Standalone helper (backward-compat / simple usage)
 # ---------------------------------------------------------------------------
