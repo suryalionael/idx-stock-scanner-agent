@@ -39,5 +39,9 @@ Thumbs.db
 *.log
 logs/
 
+# Automation credentials — NEVER commit
+.env.alerts
+*.env.alerts
+
 # Config lokal (universe ticker adalah data pribadi)
 stock_scanner/configs/idx_universe.csv

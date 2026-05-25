@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+
+  <!-- Unique label for this job -->
+  <key>Label</key>
+  <string>com.idxscanner.dailyalerts</string>
+
+  <!-- Command to run -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>REPO_DIR/scripts/run_daily_alerts.sh</string>
+  </array>
+
+  <!--
+    Schedule: Monday–Friday at 08:00 WIB (= 08:00 local if Mac is set to WIB)
+    IDX pre-market starts 08:45 WIB — scan + alert takes ~15–30 min.
+    Start at 08:00 so alerts land by ~08:30.
+
+    Weekday values: 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri
+  -->
+  <!--
+    Two slots per day (Mon–Fri):
+      08:00 WIB — primary run
+      09:00 WIB — fallback if Mac was asleep at 08:00
+    The date-based lock file in run_daily_alerts.sh prevents double execution.
+  -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <!-- Primary: 08:00 WIB -->
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+    <!-- Fallback: 09:00 WIB (if Mac was asleep at 08:00) -->
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
+  </array>
+
+  <!-- Logs — will be replaced with absolute paths by install_scheduler.sh -->
+  <key>StandardOutPath</key>
+  <string>REPO_DIR/logs/launchd_stdout.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>REPO_DIR/logs/launchd_stderr.log</string>
+
+  <!-- Working directory -->
+  <key>WorkingDirectory</key>
+  <string>REPO_DIR</string>
+
+  <!--
+    Note on missed schedules (Mac asleep at 08:00):
+    launchd with StartCalendarInterval does NOT auto-catch-up after sleep.
+    If this is a problem, set a second StartCalendarInterval entry at e.g. 09:00
+    as a fallback, and let run_daily_alerts.sh deduplicate via the date-based lock file.
+  -->
+
+  <!--
+    KeepAlive = false: this is a one-shot job, not a daemon.
+  -->
+  <key>KeepAlive</key>
+  <false/>
+
+  <!--
+    RunAtLoad = false: don't run immediately when launchd loads the plist.
+    Set to true only during testing.
+  -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <!--
+    Nice = 10: run at slightly lower CPU priority to avoid slowing the Mac.
+  -->
+  <key>Nice</key>
+  <integer>10</integer>
+
+  <!--
+    AbandonProcessGroup: if the job is killed, don't leave orphan processes.
+  -->
+  <key>AbandonProcessGroup</key>
+  <true/>
+
+</dict>
+</plist>
