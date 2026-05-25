@@ -31,9 +31,11 @@ from loguru import logger
 from stock_scanner.alerts.message_builder import (
     build_all_breakout_deep_dive_messages,
     build_telegram_top_picks_message,
+    format_swing_full_alert,
     signals_df_to_list,
     split_long_message,
 )
+from stock_scanner.alerts.scalping_formatter import format_scalping_alert
 from stock_scanner.alerts.telegram_alert import TelegramSender
 
 # ---------------------------------------------------------------------------
@@ -67,21 +69,31 @@ def _load_signals(scan_date: str) -> pd.DataFrame:
     """Load signals DataFrame for a given date.
 
     Priority: signals/{scan_date}.parquet → ranked_{scan_date}.csv
+
+    If scalping columns are missing (older files), they are computed on-the-fly.
     """
+    from stock_scanner.pipeline.scalping import enrich_df_with_scalping
+
     parquet = _SIGNALS_DIR / f"{scan_date}.parquet"
     ranked_csv = _RANKED_DIR / f"ranked_{scan_date}.csv"
 
     if parquet.exists():
         df = pd.read_parquet(parquet)
         logger.info("Loaded signals parquet: %s (%d rows)", parquet.name, len(df))
-        return df
-    if ranked_csv.exists():
+    elif ranked_csv.exists():
         df = pd.read_csv(ranked_csv)
         logger.info("Loaded ranked CSV: %s (%d rows)", ranked_csv.name, len(df))
-        return df
+    else:
+        logger.warning("No signal data found for %s", scan_date)
+        return pd.DataFrame()
 
-    logger.warning("No signal data found for %s", scan_date)
-    return pd.DataFrame()
+    # Ensure scalping columns are present (computed during run_daily_scan
+    # but may be missing for files generated before this feature was added)
+    if "scalping_label" not in df.columns:
+        logger.info("Scalping columns missing — computing on-the-fly.")
+        df = enrich_df_with_scalping(df)
+
+    return df
 
 
 def _load_articles_by_ticker(scan_date: str) -> dict[str, list[dict]]:
@@ -120,19 +132,32 @@ def run_daily_alert(
     deep_dive_only: bool = False,
     top_picks_only: bool = False,
     top_n_deep_dive: int = 2,
-    top_n_picks: int = 7,
+    top_n_picks: int = 10,
     send_delay: float = _SEND_DELAY_SEC,
+    send_scalping: bool = True,
+    send_swing_full: bool = True,
+    send_daily_report: bool = True,
 ) -> None:
-    """Load signals and send deep-dive + top-picks alerts.
+    """Load signals and send all alert types.
+
+    Alert sequence (in order):
+        1. Deep-dive (2 top BREAKOUT/PRE_MARKUP — detailed analysis)
+        2. Scalping High alert (format_scalping_alert)
+        3. Swing full alert (ALL BREAKOUT + PRE_MARKUP, auto-split)
+        4. Top-picks compact list (top N, backward-compat)
+        5. Daily report document (Markdown file sent as attachment)
 
     Args:
-        scan_date       : YYYY-MM-DD
-        dry_run         : Print messages to stdout instead of sending.
-        deep_dive_only  : Skip top-picks message.
-        top_picks_only  : Skip deep-dive messages.
-        top_n_deep_dive : Number of deep-dive candidates (default 2).
-        top_n_picks     : Number of top picks (default 7).
-        send_delay      : Seconds between Telegram sends (default 2).
+        scan_date        : YYYY-MM-DD
+        dry_run          : Print messages to stdout instead of sending.
+        deep_dive_only   : Only send deep-dive, skip all others.
+        top_picks_only   : Only send top-picks compact list.
+        top_n_deep_dive  : Number of deep-dive candidates (default 2).
+        top_n_picks      : Number of top picks in compact list (default 10).
+        send_delay       : Seconds between Telegram sends.
+        send_scalping    : Send scalping alert (default True).
+        send_swing_full  : Send full swing alert (all BREAKOUT+PRE_MARKUP).
+        send_daily_report: Generate and send daily .md report (default True).
     """
     logger.info("=== IDX Daily Alert — %s ===", scan_date)
 
@@ -148,6 +173,7 @@ def run_daily_alert(
     # 2. Build messages
     messages: list[str] = []
 
+    # ── Deep dive ──────────────────────────────────────────────────────────
     if not top_picks_only:
         logger.info("Building deep-dive messages (top %d)...", top_n_deep_dive)
         deep_dives = build_all_breakout_deep_dive_messages(
@@ -161,27 +187,118 @@ def run_daily_alert(
         else:
             logger.warning("  → No deep-dive candidates found.")
 
-    if not deep_dive_only:
+    if deep_dive_only:
+        # Skip all other alerts if deep-dive-only mode
+        if dry_run:
+            _dry_run_print(messages)
+        else:
+            _send_messages(messages, send_delay)
+        return
+
+    # ── Scalping alert ─────────────────────────────────────────────────────
+    if send_scalping and not top_picks_only:
+        logger.info("Building scalping alert...")
+        scalp_msgs = format_scalping_alert(signals, scan_date=scan_date)
+        if scalp_msgs:
+            messages.extend(scalp_msgs)
+            logger.info("  → %d scalping message(s) ready.", len(scalp_msgs))
+        else:
+            logger.info("  → No SCALPING_HIGH candidates.")
+
+    # ── Swing full alert (ALL BREAKOUT + PRE_MARKUP) ───────────────────────
+    if send_swing_full and not top_picks_only:
+        logger.info("Building swing full alert...")
+        swing_msgs = format_swing_full_alert(signals, scan_date=scan_date)
+        if swing_msgs:
+            messages.extend(swing_msgs)
+            logger.info("  → %d swing message(s) ready.", len(swing_msgs))
+        else:
+            logger.info("  → No swing candidates.")
+
+    # ── Top picks compact (backward-compat, optional) ──────────────────────
+    # Only include if swing_full is NOT sent (to avoid duplication)
+    if not send_swing_full or top_picks_only:
         logger.info("Building top-picks message (top %d)...", top_n_picks)
         top_picks_msg = build_telegram_top_picks_message(
             signals,
             date=scan_date,
             top_n=top_n_picks,
         )
-        # Split if it's somehow over limit (shouldn't happen but safety net)
         picks_chunks = split_long_message(top_picks_msg, limit=4000)
         messages.extend(picks_chunks)
         logger.info("  → Top-picks message ready (%d chunk(s)).", len(picks_chunks))
 
+    # 3. Send text messages (or dry-run print)
     if not messages:
         logger.warning("No messages to send.")
-        return
-
-    # 3. Send or dry-run
-    if dry_run:
+    elif dry_run:
         _dry_run_print(messages)
-        return
+    else:
+        _send_messages(messages, send_delay)
 
+    # ── Daily report document ──────────────────────────────────────────────
+    if send_daily_report and not top_picks_only:
+        _handle_daily_report(df, signals, scan_date, dry_run, send_delay)
+
+
+def _handle_daily_report(
+    df: "pd.DataFrame",
+    signals: list[dict],
+    scan_date: str,
+    dry_run: bool,
+    send_delay: float,
+) -> None:
+    """Generate daily Markdown report and send as Telegram document."""
+    try:
+        from stock_scanner.alerts.daily_report import (
+            build_report_context,
+            generate_daily_report,
+        )
+
+        logger.info("Building daily report document...")
+        ctx = build_report_context(df, scan_date)
+        result = generate_daily_report(ctx)
+
+        report_path    = result["output_path"]
+        report_summary = result["report_summary"]
+
+        if dry_run:
+            print("\n" + "=" * 60)
+            print(f"DAILY REPORT (dry-run) — {report_path}")
+            print("=" * 60)
+            print("\n--- Telegram Summary ---")
+            print(report_summary)
+            print("\n--- Markdown Preview (first 80 lines) ---")
+            md_preview = "\n".join(result["report_markdown"].split("\n")[:80])
+            print(md_preview)
+            print("=" * 60)
+            return
+
+        sender = TelegramSender()
+        if not sender.bot_token or not sender.chat_id:
+            logger.error("Cannot send daily report: Telegram credentials not set.")
+            return
+
+        # Send summary text first, then file
+        time.sleep(send_delay)
+        res_text = sender.send(report_summary)
+        if not res_text:
+            logger.error("Failed to send report summary: %s", res_text.error)
+
+        time.sleep(send_delay)
+        caption = f"📄 IDX Daily Report — {scan_date}"
+        res_doc = sender.send_document(report_path, caption=caption)
+        if res_doc:
+            logger.info("Daily report document sent: %s", report_path.name)
+        else:
+            logger.error("Failed to send report document: %s", res_doc.error)
+
+    except Exception as exc:
+        logger.error("Daily report generation/send failed: %s", exc)
+
+
+def _send_messages(messages: list[str], send_delay: float = _SEND_DELAY_SEC) -> int:
+    """Send a list of messages via Telegram. Returns success count."""
     sender = TelegramSender()
     if not sender.bot_token or not sender.chat_id:
         logger.error(
@@ -189,22 +306,8 @@ def run_daily_alert(
             "  export TELEGRAM_BOT_TOKEN=<token>\n"
             "  export TELEGRAM_CHAT_ID=<chat_id>"
         )
-        return
-
-    success_count = 0
-    for i, msg in enumerate(messages, 1):
-        logger.info("Sending message %d/%d (%d chars)...", i, len(messages), len(msg))
-        result = sender.send(msg)
-        if result:
-            success_count += 1
-        else:
-            logger.error("  → Failed: %s", result.error)
-        if i < len(messages):
-            time.sleep(send_delay)
-
-    logger.info(
-        "Done — %d/%d messages sent successfully.", success_count, len(messages)
-    )
+        return 0
+    return sender.send_messages_batch(messages, delay_sec=send_delay)
 
 
 def _dry_run_print(messages: list[str]) -> None:
@@ -275,8 +378,23 @@ def main() -> None:
     parser.add_argument(
         "--top-n-picks",
         type=int,
-        default=7,
-        help="Number of top picks (default: 7).",
+        default=10,
+        help="Number of top picks in compact list (default: 10).",
+    )
+    parser.add_argument(
+        "--no-scalping",
+        action="store_true",
+        help="Skip scalping alert.",
+    )
+    parser.add_argument(
+        "--no-swing-full",
+        action="store_true",
+        help="Skip full swing alert (all BREAKOUT+PRE_MARKUP). Falls back to top-picks list.",
+    )
+    parser.add_argument(
+        "--no-daily-report",
+        action="store_true",
+        help="Skip daily Markdown report generation and send.",
     )
     args = parser.parse_args()
 
@@ -294,6 +412,9 @@ def main() -> None:
         top_picks_only=args.top_picks_only,
         top_n_deep_dive=args.top_n_deep_dive,
         top_n_picks=args.top_n_picks,
+        send_scalping=not args.no_scalping,
+        send_swing_full=not args.no_swing_full,
+        send_daily_report=not args.no_daily_report,
     )
 
 

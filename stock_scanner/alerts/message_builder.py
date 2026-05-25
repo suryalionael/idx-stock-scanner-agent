@@ -26,6 +26,10 @@ build_telegram_top_picks_message(signals, date) -> str
 
 split_long_message(text, limit=4000) -> list[str]
     Split a message at paragraph boundaries to respect Telegram's 4096-char cap.
+
+format_swing_full_alert(signals, scan_date) -> list[str]
+    Format ALL BREAKOUT + PRE_MARKUP tickers into Telegram messages.
+    Automatically splits: one message per category (or more if needed).
 """
 from __future__ import annotations
 
@@ -688,6 +692,204 @@ def _build_level_lines(s: dict) -> list[str]:
         lines.append("• <i>Level tidak dapat dihitung — data ATR/MA tidak tersedia.</i>")
 
     return lines
+
+
+# ---------------------------------------------------------------------------
+# Swing full-list formatter  (ALL BREAKOUT + PRE_MARKUP)
+# ---------------------------------------------------------------------------
+
+def format_swing_full_alert(
+    signals: list[dict],
+    scan_date: str = "",
+) -> list[str]:
+    """Format ALL BREAKOUT + PRE_MARKUP tickers into Telegram-ready HTML messages.
+
+    Strategy:
+    - Render BREAKOUT group first, then PRE_MARKUP group.
+    - Each group starts with its own sub-header.
+    - Auto-split each group into multiple messages if > _SAFE_LIMIT.
+    - Each continuation message carries a "sambungan" label.
+
+    Args:
+        signals  : Full list of signal dicts (output of signals_df_to_list).
+        scan_date: YYYY-MM-DD string.
+
+    Returns:
+        List of HTML strings, each ≤ 4000 chars. Empty if no eligible tickers.
+    """
+    breakouts  = [s for s in signals if str(s.get("signal", "")).upper() == "BREAKOUT"]
+    pre_markups = [s for s in signals if str(s.get("signal", "")).upper() == "PRE_MARKUP"]
+
+    # Sort by score desc within each group
+    def _score(s: dict) -> float:
+        return (_safe_num(s.get("enhanced_total_score")) or
+                _safe_num(s.get("total_score")) or 0.0)
+
+    breakouts.sort(key=_score, reverse=True)
+    pre_markups.sort(key=_score, reverse=True)
+
+    total = len(breakouts) + len(pre_markups)
+    if total == 0:
+        logger.info("Swing full alert: no BREAKOUT or PRE_MARKUP candidates.")
+        return []
+
+    date_label = _format_date_id(scan_date)
+    now_str = datetime.now().strftime("%H:%M WIB")
+
+    messages: list[str] = []
+
+    # ── BREAKOUT section ──────────────────────────────────────────────────
+    if breakouts:
+        msgs = _format_signal_group(
+            group=breakouts,
+            group_label="BREAKOUT",
+            group_emoji="🟢",
+            total_in_group=len(breakouts),
+            date_label=date_label,
+            now_str=now_str,
+        )
+        messages.extend(msgs)
+
+    # ── PRE_MARKUP section ────────────────────────────────────────────────
+    if pre_markups:
+        msgs = _format_signal_group(
+            group=pre_markups,
+            group_label="PRE-MARKUP",
+            group_emoji="🔵",
+            total_in_group=len(pre_markups),
+            date_label=date_label,
+            now_str=now_str,
+        )
+        messages.extend(msgs)
+
+    logger.info(
+        "Swing full alert: %d BREAKOUT + %d PRE_MARKUP → %d message(s)",
+        len(breakouts), len(pre_markups), len(messages),
+    )
+    return messages
+
+
+def _format_signal_group(
+    group: list[dict],
+    group_label: str,
+    group_emoji: str,
+    total_in_group: int,
+    date_label: str,
+    now_str: str,
+) -> list[str]:
+    """Format one signal category (BREAKOUT or PRE_MARKUP) into messages."""
+    header = (
+        f"{group_emoji} <b>SWING {group_label}</b>  —  {date_label}\n"
+        f"<i>{total_in_group} saham</i>\n"
+        "─────────────────────"
+    )
+    footer = (
+        "\n─────────────────────\n"
+        "<i>⚠️ Bukan rekomendasi investasi. DYOR.</i>\n"
+        f"<i>📡 {now_str}  ·  🤖 IDX Scanner Agent</i>"
+    )
+    cont_header = f"{group_emoji} <b>SWING {group_label}</b> (sambungan)"
+
+    blocks: list[str] = []
+    for i, s in enumerate(group, 1):
+        blocks.append(_build_swing_compact_block(i, s))
+
+    return _pack_blocks_into_messages(
+        header=header,
+        footer=footer,
+        cont_header=cont_header,
+        blocks=blocks,
+        limit=_SAFE_LIMIT,
+    )
+
+
+def _build_swing_compact_block(idx: int, s: dict) -> str:
+    """One compact line-block for a swing ticker."""
+    ticker = _ticker_clean(s.get("ticker", "?"))
+    score  = _safe_num(s.get("enhanced_total_score")) or _safe_num(s.get("total_score"))
+    close  = _safe_num(s.get("close"))
+    rsi    = _safe_num(s.get("rsi14"))
+    vol    = _safe_num(s.get("vol_ratio_20d"))
+    url    = _STOCKBIT_URL.format(code=ticker)
+
+    # Level computation (reuse existing compute_trading_levels)
+    try:
+        row_series = pd.Series(s)
+        lvl = compute_trading_levels(row_series)
+    except Exception:
+        lvl = {"entry_low": 0, "entry_high": 0, "tp_low": 0, "tp_high": 0, "cutloss": 0}
+
+    el  = lvl.get("entry_low", 0)
+    eh  = lvl.get("entry_high", 0)
+    tl  = lvl.get("tp_low", 0)
+    th  = lvl.get("tp_high", 0)
+    cl  = lvl.get("cutloss", 0)
+    st  = lvl.get("trade_setup_status", "inactive")
+
+    score_str = f"{score:.1f}" if score else "—"
+    close_str = f"Rp{int(close):,}" if close else "—"
+
+    lines: list[str] = []
+    # Title line
+    lines.append(
+        f'{idx}. <a href="{url}"><b>${ticker}</b></a>  '
+        f'Skor <code>{score_str}</code>  <code>{close_str}</code>'
+    )
+
+    # Levels line (compact — one line)
+    if st == "active" and el and tl and cl:
+        entry_str = f"{el:,}–{eh:,}" if el != eh else f"{el:,}"
+        tp_str    = f"{tl:,}–{th:,}" if tl != th else f"{tl:,}"
+        lines.append(
+            f"   <code>E:{entry_str}  TP:{tp_str}  CL:{cl:,}</code>"
+        )
+    elif st == "low_rr" and el and cl:
+        lines.append(f"   <code>E:{el:,}  CL:{cl:,}</code>  <i>R:R rendah</i>")
+    else:
+        lines.append(f"   <i>Level tidak aktif</i>")
+
+    # Mini stats
+    info: list[str] = []
+    if rsi:
+        info.append(f"RSI {rsi:.0f}")
+    if vol and vol > 0:
+        info.append(f"Vol×{vol:.1f}")
+    if info:
+        lines.append(f"   <i>{'  ·  '.join(info)}</i>")
+
+    return "\n".join(lines)
+
+
+def _pack_blocks_into_messages(
+    header: str,
+    footer: str,
+    cont_header: str,
+    blocks: list[str],
+    limit: int = _SAFE_LIMIT,
+) -> list[str]:
+    """Pack blocks with header/footer into ≤limit-char messages."""
+    messages: list[str] = []
+    sep = "\n\n"
+    current: list[str] = [header]
+    current_len = len(header) + len(footer) + 2
+
+    for block in blocks:
+        bl = len(block) + len(sep)
+        if current_len + bl > limit and len(current) > 1:
+            # flush
+            messages.append(sep.join(current) + footer)
+            current = [cont_header, block]
+            current_len = len(cont_header) + len(footer) + bl + len(sep)
+        else:
+            current.append(block)
+            current_len += bl
+
+    if len(current) > 1:
+        messages.append(sep.join(current) + footer)
+    elif not messages:
+        messages.append(header + "\n<i>Tidak ada data.</i>" + footer)
+
+    return messages
 
 
 def _build_conclusion(s: dict, articles: list[dict] | None = None) -> str:

@@ -28,6 +28,7 @@ from stock_scanner.pipeline.ml_ranker import load_ranker, score_candidates
 from stock_scanner.pipeline.news_sentiment import enrich_with_news
 from stock_scanner.pipeline.shareholder import PlaceholderShareholderFetcher, enrich_with_shareholders
 from stock_scanner.alerts.level_calculator import enrich_df_with_levels
+from stock_scanner.pipeline.scalping import enrich_df_with_scalping
 from stock_scanner.pipeline.signal_engine import compute_signal, save_signals
 from stock_scanner.pipeline.validator import validate
 
@@ -160,7 +161,13 @@ def main(config_path: Path = _DEFAULT_CONFIG) -> None:
     else:
         logger.info("Explain agent dinonaktifkan")
 
-    # --- Step 8b: Trading levels (entry / TP / cutloss) with R:R validation ---
+    # --- Step 8b: Scalping scores ---
+    signals_df = enrich_df_with_scalping(signals_df)
+    scalp_high = (signals_df.get("scalping_label") == "SCALPING_HIGH").sum() \
+                 if "scalping_label" in signals_df.columns else 0
+    logger.info(f"Scalping: {scalp_high} SCALPING_HIGH candidates")
+
+    # --- Step 8c: Trading levels (entry / TP / cutloss) with R:R validation ---
     min_rr = config.get("min_rr", 1.5)
     signals_df = enrich_df_with_levels(signals_df, min_rr=min_rr)
     active_count = (signals_df.get("trade_setup_status") == "active").sum() \
