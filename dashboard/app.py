@@ -1472,9 +1472,15 @@ with st.sidebar:
         )
         if _remote_payload:
             gen_at = _remote_payload.get("generated_at", "—")
-            st.caption(f"Diperbarui: {gen_at}")
+            # Distinguish: freshly fetched from remote vs loaded from local fallback
+            scan_date_str = _remote_payload.get("scan_date", "")
+            st.caption(f"Data: {scan_date_str} · {gen_at[:10] if gen_at != '—' else '—'}")
         else:
-            st.error("⚠️ Gagal memuat data dari server. Cek REMOTE_DATA_URL.")
+            st.warning(
+                "⚠️ Data tidak tersedia.\n\n"
+                "Pastikan `data/published/latest_scan.json` sudah di-commit ke repo, "
+                "atau set secret `REMOTE_DATA_URL` dengan URL yang benar."
+            )
     else:
         st.markdown(
             '<div style="background:#14532d;border-radius:6px;padding:4px 10px;'

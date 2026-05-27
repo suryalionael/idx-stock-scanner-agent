@@ -24,13 +24,20 @@ import pandas as pd
 # Dua mode: "local" (default, baca file lokal) atau "remote" (baca GitHub JSON)
 _DATA_SOURCE: str = os.environ.get("DATA_SOURCE", "local").strip().lower()
 
-# URL published JSON untuk mode remote
-# Ganti dengan URL GitHub raw repo kamu setelah push ke GitHub.
-# Format: https://raw.githubusercontent.com/<user>/<repo>/<branch>/data/published/latest_scan.json
+# URL published JSON untuk mode remote.
+# Default sudah diisi dengan URL repo yang benar — tidak perlu set env var
+# kecuali repo dipindah atau branch berubah.
+# Override via Streamlit secrets: REMOTE_DATA_URL = "https://raw.githubusercontent.com/..."
 _REMOTE_DATA_URL: str = os.environ.get(
     "REMOTE_DATA_URL",
-    "https://raw.githubusercontent.com/PLACEHOLDER_USER/PLACEHOLDER_REPO/main/data/published/latest_scan.json",
+    "https://raw.githubusercontent.com/suryalionael/idx-stock-scanner-agent/main/data/published/latest_scan.json",
 )
+
+# File lokal fallback — tersedia di Streamlit Cloud karena repo di-clone ke /mount/src/
+_LOCAL_PUBLISHED_PATH = Path(__file__).parent.parent / "data" / "published" / "latest_scan.json"
+
+# Marker string yang menandakan URL belum dikonfigurasi dengan benar
+_URL_PLACEHOLDERS = ("PLACEHOLDER_USER", "PLACEHOLDER_REPO", "<username>", "<user>", "<repo>")
 
 # --- Path roots (relatif dari root repo) ---
 _ROOT = Path(__file__).parent.parent
@@ -376,27 +383,83 @@ def is_remote_mode() -> bool:
 
 
 def load_published_payload(url: str | None = None) -> dict:
-    """Fetch latest_scan.json dari GitHub raw URL.
+    """Fetch latest_scan.json dari GitHub raw URL, dengan fallback ke file lokal.
+
+    Urutan prioritas:
+      1. Remote HTTP fetch dari `url` (atau _REMOTE_DATA_URL)
+      2. File lokal data/published/latest_scan.json (tersedia di Streamlit Cloud
+         karena repo di-clone ke /mount/src/)
 
     Args:
-        url: Override URL (default: _REMOTE_DATA_URL dari env var).
+        url: Override URL. Default: _REMOTE_DATA_URL dari env var.
 
     Returns:
-        Parsed dict payload, atau {} jika gagal.
+        Parsed dict payload, atau {} jika semua sumber gagal.
     """
     import json
+    import sys
     import urllib.request
 
     target_url = url or _REMOTE_DATA_URL
+
+    # Deteksi URL yang masih placeholder — langsung skip ke local fallback
+    if any(p in target_url for p in _URL_PLACEHOLDERS):
+        print(
+            f"[data_loader] INFO: REMOTE_DATA_URL masih placeholder ({target_url!r}) "
+            f"— langsung pakai file lokal.",
+            file=sys.stderr,
+        )
+        return _load_local_published()
+
+    # ── Coba remote ──────────────────────────────────────────────────────────
     try:
         with urllib.request.urlopen(target_url, timeout=10) as resp:
             raw = resp.read().decode("utf-8")
         payload = json.loads(raw)
+        print(
+            f"[data_loader] INFO: Remote payload loaded dari {target_url} "
+            f"(scan_date={payload.get('scan_date', '?')})",
+            file=sys.stderr,
+        )
         return payload
     except Exception as exc:
-        # Log ke stderr — tidak crash dashboard
-        import sys
-        print(f"[data_loader] WARNING: Gagal load remote payload dari {target_url}: {exc}", file=sys.stderr)
+        print(
+            f"[data_loader] WARNING: Gagal load remote payload dari {target_url}: {exc} "
+            f"— mencoba file lokal sebagai fallback.",
+            file=sys.stderr,
+        )
+
+    # ── Fallback ke file lokal ────────────────────────────────────────────────
+    return _load_local_published()
+
+
+def _load_local_published() -> dict:
+    """Baca data/published/latest_scan.json dari disk.
+
+    File ini ada di repo (di-commit ke git) sehingga tersedia di Streamlit
+    Cloud pada path /mount/src/<repo>/data/published/latest_scan.json.
+    """
+    import json
+    import sys
+
+    if not _LOCAL_PUBLISHED_PATH.exists():
+        print(
+            f"[data_loader] WARNING: File lokal tidak ditemukan: {_LOCAL_PUBLISHED_PATH}",
+            file=sys.stderr,
+        )
+        return {}
+
+    try:
+        with open(_LOCAL_PUBLISHED_PATH, encoding="utf-8") as f:
+            payload = json.load(f)
+        print(
+            f"[data_loader] INFO: Local payload loaded dari {_LOCAL_PUBLISHED_PATH.name} "
+            f"(scan_date={payload.get('scan_date', '?')})",
+            file=sys.stderr,
+        )
+        return payload
+    except Exception as exc:
+        print(f"[data_loader] ERROR: Gagal baca file lokal: {exc}", file=sys.stderr)
         return {}
 
 
