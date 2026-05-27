@@ -59,12 +59,18 @@ idx-alert  = "stock_scanner.alerts.telegram_alert:main"
 where = ["."]
 include = ["stock_scanner*"]
 
-# ── uv (Streamlit Community Cloud) ──────────────────────────────────────────
-# uv menjalankan `uv sync --no-dev` di Streamlit Cloud. Karena nama project
-# (idx-stock-scanner-agent) tidak cocok dengan nama direktori package
-# (stock_scanner/), uv tidak bisa install project ini sebagai Python package.
-# package = false → uv hanya install dependencies, tidak install project.
-# app.py sudah punya sys.path.insert() sehingga stock_scanner tetap importable.
+# ── Poetry (Streamlit Community Cloud) ───────────────────────────────────────
+# Streamlit Cloud menjalankan Poetry untuk proyek dengan pyproject.toml.
+# Poetry mencari direktori bernama idx_stock_scanner_agent/ (normalized dari
+# nama project), tapi direktori yang ada adalah stock_scanner/ — tidak cocok.
+#
+# package-mode = false → Poetry hanya manage dependencies, tidak install
+# project ini sebagai Python package. app.py sudah punya sys.path.insert()
+# sehingga stock_scanner tetap importable tanpa pip install.
+[tool.poetry]
+package-mode = false
+
+# ── uv (fallback jika Streamlit Cloud ganti ke uv di masa depan) ─────────────
 [tool.uv]
 package = false
 
