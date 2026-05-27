@@ -205,6 +205,10 @@ def main(config_path: Path = _DEFAULT_CONFIG) -> None:
     save_signals(signals_df, signals_dir, scan_date)
     _save_ranked(signals_df, ranked_dir, scan_date, config=config)
     _print_summary(signals_df, scan_date)
+
+    # --- Step 10: Publish payload untuk dashboard online (non-fatal) ---
+    _publish_dashboard_data(signals_df, scan_date, base_dir)
+
     logger.info(f"=== Scan selesai: {scan_date} ===")
 
 
@@ -306,6 +310,30 @@ def _save_ranked(
     sig_counts = ranked["signal"].value_counts().to_dict()
     status_counts = ranked["final_status"].value_counts().to_dict() if "final_status" in ranked.columns else {}
     logger.info(f"Ranked output → {path} ({len(ranked)} tickers) | signals={sig_counts} | status={status_counts}")
+
+
+def _publish_dashboard_data(
+    signals_df: pd.DataFrame,
+    scan_date: str,
+    base_dir: Path,
+) -> None:
+    """Generate data/published/latest_scan.json — non-fatal wrapper.
+
+    Jika publish gagal (disk full, permission error, dll) pipeline tetap
+    dianggap berhasil. Error di-log tapi tidak di-raise.
+    """
+    try:
+        from stock_scanner.pipeline.publisher import export_latest_dashboard_data
+
+        output_path = base_dir / "data" / "published" / "latest_scan.json"
+        export_latest_dashboard_data(
+            signals_df=signals_df,
+            scan_date=scan_date,
+            ai_summary=None,   # daily_report summary akan di-attach oleh runner.py
+            output_path=output_path,
+        )
+    except Exception as exc:
+        logger.warning(f"Publish dashboard data gagal (non-fatal): {exc}")
 
 
 def _print_summary(df: pd.DataFrame, scan_date: str) -> None:
