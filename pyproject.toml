@@ -60,17 +60,24 @@ where = ["."]
 include = ["stock_scanner*"]
 
 # ── Poetry (Streamlit Community Cloud) ───────────────────────────────────────
-# Streamlit Cloud menjalankan Poetry untuk proyek dengan pyproject.toml.
-# Poetry mencari direktori bernama idx_stock_scanner_agent/ (normalized dari
-# nama project), tapi direktori yang ada adalah stock_scanner/ — tidak cocok.
+# Streamlit Cloud menggunakan Poetry untuk proyek dengan pyproject.toml.
+# Poetry membaca [tool.poetry] untuk konfigurasi khusus-nya, termasuk di mana
+# direktori Python package berada.
 #
-# package-mode = false → Poetry hanya manage dependencies, tidak install
-# project ini sebagai Python package. app.py sudah punya sys.path.insert()
-# sehingga stock_scanner tetap importable tanpa pip install.
+# Tanpa `packages`, Poetry mencari idx_stock_scanner_agent/ (normalized dari
+# nama project) → tidak ada → error. Dengan `packages`, Poetry tahu bahwa
+# Python package yang di-install adalah stock_scanner/.
+#
+# Minimum required fields untuk Poetry bisa membaca section ini:
+# name, version, description, authors.
 [tool.poetry]
-package-mode = false
+name        = "idx-stock-scanner-agent"
+version     = "0.1.0"
+description = "AI-powered IDX Stock Scanner: rules + ML + LLM"
+authors     = []
+packages    = [{include = "stock_scanner"}]
 
-# ── uv (fallback jika Streamlit Cloud ganti ke uv di masa depan) ─────────────
+# ── uv (fallback jika Streamlit Cloud ganti ke uv) ───────────────────────────
 [tool.uv]
 package = false
 
