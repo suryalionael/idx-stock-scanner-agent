@@ -1,35 +1,26 @@
-# IDX Stock Scanner — requirements.txt untuk Streamlit Community Cloud
-# Dibuat dari pyproject.toml [project.dependencies]
-# Python >= 3.11 required
+# IDX Stock Scanner — Streamlit Community Cloud requirements
+# ─────────────────────────────────────────────────────────────────────────────
+# HANYA berisi dependency yang benar-benar dibutuhkan oleh dashboard runtime.
+# Scanner pipeline (yfinance, ta, xgboost, scikit-learn) diinstall terpisah
+# di lokal dengan: pip install -e ".[scanner]"
+#
+# Streamlit Cloud otomatis juga menjalankan `pip install .` karena ada
+# pyproject.toml — dependency [project.dependencies] sudah dibuat minimal
+# (pandas, numpy, pyarrow, loguru, pyyaml, requests) agar tidak bentrok.
+# ─────────────────────────────────────────────────────────────────────────────
 
-# Core data
+# Dashboard
+streamlit>=1.35,<2.0
+plotly>=5.22
+
+# Data
 pandas>=2.1
 numpy>=1.26
 pyarrow>=15.0
 
-# Technical indicators
-ta>=0.11
-
-# ML ranking
-scikit-learn>=1.4
-xgboost>=2.0
-
-# LLM explain agent
-anthropic>=0.30
-
-# Config
+# Config & logging
 pyyaml>=6.0
-
-# Logging
 loguru>=0.7
 
-# Dashboard
-streamlit>=1.35
-plotly>=5.22
-
-# HTTP (Telegram alerts, yfinance)
+# HTTP (remote payload fetch dari GitHub raw URL)
 requests>=2.31
-
-# Data fetch — dibutuhkan oleh reference/issuers dan pipeline import
-# Streamlit Cloud tidak menjalankan scan harian, tapi modul tetap diimport
-yfinance>=0.2.40
