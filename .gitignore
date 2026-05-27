@@ -12,6 +12,10 @@ build/
 venv/
 env/
 
+# uv
+.uv/
+uv.lock
+
 # Data files (jangan commit raw data ke git)
 # data/ di-exclude per-subdirektori agar data/published/ bisa di-track
 data/raw/

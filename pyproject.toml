@@ -59,6 +59,15 @@ idx-alert  = "stock_scanner.alerts.telegram_alert:main"
 where = ["."]
 include = ["stock_scanner*"]
 
+# ── uv (Streamlit Community Cloud) ──────────────────────────────────────────
+# uv menjalankan `uv sync --no-dev` di Streamlit Cloud. Karena nama project
+# (idx-stock-scanner-agent) tidak cocok dengan nama direktori package
+# (stock_scanner/), uv tidak bisa install project ini sebagai Python package.
+# package = false → uv hanya install dependencies, tidak install project.
+# app.py sudah punya sys.path.insert() sehingga stock_scanner tetap importable.
+[tool.uv]
+package = false
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
