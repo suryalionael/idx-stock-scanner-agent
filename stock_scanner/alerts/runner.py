@@ -150,6 +150,49 @@ def run_alerts(
 
 
 # ---------------------------------------------------------------------------
+# Step 3 — Publish to GitHub
+# ---------------------------------------------------------------------------
+
+def _publish_to_github(scan_date: str) -> None:
+    """Commit dan push latest_scan.json ke GitHub remote.
+
+    Non-fatal: jika gagal, log warning saja — scan dianggap berhasil.
+    Script bash dipakai agar git identity bisa di-set per-command tanpa
+    mengubah global git config.
+    """
+    import subprocess
+
+    script = _ROOT / "scripts" / "publish_to_github.sh"
+    if not script.exists():
+        logger.warning("publish_to_github.sh tidak ditemukan — skip GitHub publish.")
+        return
+
+    logger.info("Publishing to GitHub: %s", scan_date)
+    try:
+        result = subprocess.run(
+            ["bash", str(script)],
+            cwd=str(_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if result.stdout:
+            for line in result.stdout.strip().splitlines():
+                logger.info("[publish] %s", line)
+        if result.stderr:
+            for line in result.stderr.strip().splitlines():
+                logger.warning("[publish] %s", line)
+        if result.returncode != 0:
+            logger.warning("publish_to_github.sh exited %d — dashboard data mungkin stale.", result.returncode)
+        else:
+            logger.info("GitHub publish selesai.")
+    except subprocess.TimeoutExpired:
+        logger.warning("GitHub publish timed out (120s) — skip.")
+    except Exception as exc:
+        logger.warning("GitHub publish gagal (non-fatal): %s", exc)
+
+
+# ---------------------------------------------------------------------------
 # Error notification
 # ---------------------------------------------------------------------------
 
@@ -259,6 +302,12 @@ def main() -> int:
     if not alert_ok:
         notify_failure("daily_alert", "Alert dispatch raised an exception. Check logs.")
         return 2
+
+    # ── Step 3: Publish ke GitHub (non-fatal) ────────────────────────────
+    if not args.dry_run:
+        _publish_to_github(scan_date)
+    else:
+        logger.info("Dry-run: skip GitHub publish.")
 
     logger.info("=" * 60)
     logger.info("Pipeline complete — %s", scan_date)

@@ -1,11 +1,36 @@
 """Data loading utilities untuk dashboard.
 
 Semua I/O terpusat di sini agar app.py tetap bersih dari path logic.
+
+Mode operasi dikontrol oleh environment variable DATA_SOURCE:
+  DATA_SOURCE=local   (default) — baca file lokal di data/
+  DATA_SOURCE=remote            — baca published JSON dari GitHub raw URL
+
+Untuk deploy ke Streamlit Community Cloud, set:
+  DATA_SOURCE=remote
+  REMOTE_DATA_URL=https://raw.githubusercontent.com/<user>/<repo>/main/data/published/latest_scan.json
 """
+import os
 from pathlib import Path
 from datetime import date
+from typing import Any
 
 import pandas as pd
+
+# ---------------------------------------------------------------------------
+# Data source config
+# ---------------------------------------------------------------------------
+
+# Dua mode: "local" (default, baca file lokal) atau "remote" (baca GitHub JSON)
+_DATA_SOURCE: str = os.environ.get("DATA_SOURCE", "local").strip().lower()
+
+# URL published JSON untuk mode remote
+# Ganti dengan URL GitHub raw repo kamu setelah push ke GitHub.
+# Format: https://raw.githubusercontent.com/<user>/<repo>/<branch>/data/published/latest_scan.json
+_REMOTE_DATA_URL: str = os.environ.get(
+    "REMOTE_DATA_URL",
+    "https://raw.githubusercontent.com/PLACEHOLDER_USER/PLACEHOLDER_REPO/main/data/published/latest_scan.json",
+)
 
 # --- Path roots (relatif dari root repo) ---
 _ROOT = Path(__file__).parent.parent
@@ -339,3 +364,115 @@ def get_fundamental_row(ticker: str, scan_date: str) -> dict:
     if row.empty:
         return {}
     return row.iloc[0].to_dict()
+
+
+# ---------------------------------------------------------------------------
+# Remote mode — baca published JSON dari GitHub
+# ---------------------------------------------------------------------------
+
+def is_remote_mode() -> bool:
+    """Return True jika DATA_SOURCE=remote."""
+    return _DATA_SOURCE == "remote"
+
+
+def load_published_payload(url: str | None = None) -> dict:
+    """Fetch latest_scan.json dari GitHub raw URL.
+
+    Args:
+        url: Override URL (default: _REMOTE_DATA_URL dari env var).
+
+    Returns:
+        Parsed dict payload, atau {} jika gagal.
+    """
+    import json
+    import urllib.request
+
+    target_url = url or _REMOTE_DATA_URL
+    try:
+        with urllib.request.urlopen(target_url, timeout=10) as resp:
+            raw = resp.read().decode("utf-8")
+        payload = json.loads(raw)
+        return payload
+    except Exception as exc:
+        # Log ke stderr — tidak crash dashboard
+        import sys
+        print(f"[data_loader] WARNING: Gagal load remote payload dari {target_url}: {exc}", file=sys.stderr)
+        return {}
+
+
+def df_from_published_payload(payload: dict) -> pd.DataFrame:
+    """Ubah payload JSON menjadi DataFrame mirip signals_df.
+
+    Menggabungkan semua tier (breakout + pre_markup + watch + scalping-only)
+    menjadi satu DataFrame, dengan kolom yang sama seperti file lokal.
+
+    Scalping tickers yang bukan BREAKOUT/PRE_MARKUP/WATCH tidak dimasukkan
+    ke DataFrame utama (sudah tercovering dari signal tier mereka).
+    """
+    rows: list[dict] = []
+    seen_tickers: set = set()
+
+    # Urutkan tier agar ranking konsisten: breakout > pre_markup > watch
+    for tier_key in ("breakout", "pre_markup", "watch"):
+        for row in payload.get(tier_key, []):
+            ticker = row.get("ticker", "")
+            if ticker and ticker not in seen_tickers:
+                rows.append(row)
+                seen_tickers.add(ticker)
+
+    # Tambah scalping yang belum masuk tier above (edge case: AVOID ticker dengan scalping_label)
+    for row in payload.get("scalping", []):
+        ticker = row.get("ticker", "")
+        if ticker and ticker not in seen_tickers:
+            rows.append(row)
+            seen_tickers.add(ticker)
+
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+    return _normalize_bool_cols(df)
+
+
+def available_dates_remote(payload: dict) -> list[str]:
+    """Kembalikan list tanggal dari payload remote.
+
+    Untuk sementara hanya satu tanggal (latest_scan.json hanya berisi 1 hari).
+    """
+    scan_date = payload.get("scan_date", "")
+    if scan_date:
+        return [scan_date]
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Unified API — pakai local atau remote tergantung DATA_SOURCE
+# ---------------------------------------------------------------------------
+
+def available_dates_unified(payload: dict | None = None) -> list[str]:
+    """Kembalikan daftar tanggal yang tersedia.
+
+    - Mode local : baca dari file ranked + signals.
+    - Mode remote: kembalikan [scan_date] dari payload.
+    """
+    if is_remote_mode():
+        if payload is None:
+            payload = load_published_payload()
+        return available_dates_remote(payload)
+    return available_dates()
+
+
+def load_all_tickers_unified(
+    scan_date: str,
+    payload: dict | None = None,
+) -> pd.DataFrame:
+    """Load semua ticker — local file atau remote payload.
+
+    - Mode local : load_all_tickers_for_date(scan_date)
+    - Mode remote: df_from_published_payload(payload)
+    """
+    if is_remote_mode():
+        if payload is None:
+            payload = load_published_payload()
+        return df_from_published_payload(payload)
+    return load_all_tickers_for_date(scan_date)

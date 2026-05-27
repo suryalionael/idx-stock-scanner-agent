@@ -26,11 +26,15 @@ from dashboard.charts import (
 )
 from dashboard.data_loader import (
     available_dates,
+    available_dates_unified,
     get_table_df,
+    is_remote_mode,
     load_all_ranked,
     load_all_tickers_for_date,
+    load_all_tickers_unified,
     load_broker_for_ticker,
     load_broker_history,
+    load_published_payload,
     load_raw,
     latest_ranked_date,
     load_fundamentals_for_date,
@@ -1439,27 +1443,78 @@ def _bool_val(val) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Remote mode bootstrap (fetch payload once, share across sidebar + tabs)
+# ---------------------------------------------------------------------------
+_remote_mode = is_remote_mode()
+_remote_payload: dict = {}
+
+if _remote_mode:
+    @st.cache_data(ttl=300, show_spinner="Memuat data dari server...")
+    def _fetch_remote_payload() -> dict:
+        return load_published_payload()
+
+    _remote_payload = _fetch_remote_payload()
+
+
+# ---------------------------------------------------------------------------
 # SIDEBAR
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.markdown("## 📈 IDX Scanner")
+
+    # Mode badge
+    if _remote_mode:
+        st.markdown(
+            '<div style="background:#1e3a5f;border-radius:6px;padding:4px 10px;'
+            'font-size:11px;color:#38bdf8;margin-bottom:6px;">'
+            '☁️ Mode: <b>Online</b> — data dari GitHub</div>',
+            unsafe_allow_html=True,
+        )
+        if _remote_payload:
+            gen_at = _remote_payload.get("generated_at", "—")
+            st.caption(f"Diperbarui: {gen_at}")
+        else:
+            st.error("⚠️ Gagal memuat data dari server. Cek REMOTE_DATA_URL.")
+    else:
+        st.markdown(
+            '<div style="background:#14532d;border-radius:6px;padding:4px 10px;'
+            'font-size:11px;color:#4ade80;margin-bottom:6px;">'
+            '💻 Mode: <b>Lokal</b></div>',
+            unsafe_allow_html=True,
+        )
+
     st.divider()
 
-    all_dates = available_dates()
+    all_dates = available_dates_unified(_remote_payload if _remote_mode else None)
     if not all_dates:
-        st.warning(
-            "Belum ada data scan.\n\nJalankan dulu:\n"
-            "```\npython -m stock_scanner.pipeline.run_daily_scan\n```"
-        )
+        if _remote_mode:
+            st.error(
+                "Tidak ada data dari server.\n\n"
+                "Pastikan REMOTE_DATA_URL sudah benar dan scan sudah pernah dijalankan."
+            )
+        else:
+            st.warning(
+                "Belum ada data scan.\n\nJalankan dulu:\n"
+                "```\npython -m stock_scanner.pipeline.run_daily_scan\n```"
+            )
         st.stop()
 
     selected_date = st.selectbox("Tanggal Scan", options=all_dates, index=0)
     st.divider()
 
-    # Load ALL tickers for date
-    df_all = load_all_tickers_for_date(selected_date)
+    # Load ALL tickers for date (local or remote)
+    if _remote_mode:
+        df_all = load_all_tickers_unified(selected_date, _remote_payload)
+    else:
+        df_all = load_all_tickers_for_date(selected_date)
     if df_all.empty:
-        st.error(f"Tidak ada data untuk {selected_date}.")
+        if _remote_mode:
+            st.error(
+                f"Data server untuk {selected_date} kosong atau belum tersedia.\n\n"
+                "Scan mungkin belum selesai hari ini."
+            )
+        else:
+            st.error(f"Tidak ada data untuk {selected_date}.")
         st.stop()
 
     # Mini signal summary
@@ -1480,6 +1535,14 @@ with st.sidebar:
                     f'</div>',
                     unsafe_allow_html=True,
                 )
+
+    # Fitur tidak tersedia di remote mode
+    if _remote_mode:
+        st.divider()
+        st.caption(
+            "⚠️ Mode online: chart OHLCV, broker flow, news articles, "
+            "dan history tidak tersedia. Hanya data sinyal & level trading."
+        )
 
     st.divider()
     st.markdown("**Filter Signal**")
