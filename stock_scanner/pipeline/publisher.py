@@ -41,32 +41,47 @@ _ROOT           = Path(__file__).parent.parent.parent
 _PUBLISHED_DIR  = _ROOT / "data" / "published"
 _PUBLISHED_PATH = _PUBLISHED_DIR / "latest_scan.json"
 
-# Kolom ticker yang diikutsertakan dalam payload
+# Kolom ticker yang diikutsertakan dalam payload (tier lists + all_tickers).
+# Harus mencakup semua kolom yang dibutuhkan Scalping tab, Long Term tab,
+# dan Swing tab di dashboard agar parity local == deployed terjaga.
 _TICKER_COLS = [
+    # Identity
     "ticker",
     "signal",
+    # Composite scores
     "total_score",
     "quality_adjusted_score",
+    "enhanced_total_score",
+    "trend_score", "momentum_score", "breakout_score", "volume_score",
+    "penalty_score", "news_score",
+    # Scalping outputs (computed in pipeline step 8b)
     "scalping_label",
     "scalping_score",
-    # Price levels
+    "scalping_reason",
+    # Price levels (from level_calculator)
     "close",
     "entry_low", "entry_high",
     "tp_low",    "tp_high",
     "cutloss",
     "trade_setup_status",
-    # Key scores
-    "trend_score", "momentum_score", "breakout_score", "volume_score",
-    "penalty_score", "enhanced_total_score",
-    # Key features
-    "rsi14", "adx", "atr_pct", "vol_ratio_20d",
-    "pct_from_52w_high", "supertrend_bullish", "squeeze_on",
-    # Fundamental
+    # Technical indicators — core
+    "rsi14", "adx", "atr_pct", "atr14",
+    "vol_ratio_20d", "pct_from_52w_high",
+    "supertrend_bullish", "squeeze_on",
+    # Technical indicators — scalping signals
+    "atr_breakout", "vol_spike", "hist_vol_20d",
+    "roc5", "roc20",
+    # Technical indicators — long-term / trend
+    "ma20", "ma50", "ma200",
+    "macd_histogram", "obv_trend",
+    # Fundamental — valuation
     "pe_ratio", "pbv", "roe_pct", "der", "public_float_pct",
-    "ebitda", "fundamental_status",
+    "ebitda", "fundamental_status", "eps",
+    # Fundamental — growth (needed by Long Term tab)
+    "revenue_growth_pct", "profit_growth_pct", "div_yield_pct",
     # News
     "news_sentiment_score", "news_count_3d", "news_data_status",
-    # Quality
+    # Quality filters
     "final_status", "risk_flags",
     # ML
     "ml_prob",
@@ -74,12 +89,18 @@ _TICKER_COLS = [
 
 # Kolom yang harus dinormalisasi agar JSON-serializable
 _FLOAT_COLS = {
-    "total_score", "quality_adjusted_score", "scalping_score", "close",
-    "entry_low", "entry_high", "tp_low", "tp_high", "cutloss",
+    "total_score", "quality_adjusted_score", "enhanced_total_score",
+    "scalping_score",
+    "close", "entry_low", "entry_high", "tp_low", "tp_high", "cutloss",
     "trend_score", "momentum_score", "breakout_score", "volume_score",
-    "penalty_score", "enhanced_total_score", "rsi14", "adx", "atr_pct",
-    "vol_ratio_20d", "pct_from_52w_high", "pe_ratio", "pbv", "roe_pct",
-    "der", "public_float_pct", "ebitda", "news_sentiment_score", "ml_prob",
+    "penalty_score", "news_score",
+    "rsi14", "adx", "atr_pct", "atr14",
+    "vol_ratio_20d", "pct_from_52w_high",
+    "roc5", "roc20", "hist_vol_20d",
+    "ma20", "ma50", "ma200", "macd_histogram",
+    "pe_ratio", "pbv", "roe_pct", "der", "public_float_pct",
+    "ebitda", "eps", "revenue_growth_pct", "profit_growth_pct", "div_yield_pct",
+    "news_sentiment_score", "ml_prob",
 }
 
 _WIB = timezone(timedelta(hours=7))
@@ -153,6 +174,9 @@ def build_published_payload(
         dict yang bisa di-json.dumps().
     """
     df = signals_df.copy()
+    # Simpan referensi ke semua ticker (sebelum filter EXCLUDED_STATUSES)
+    # agar all_tickers payload mencakup SEMUA 957 ticker persis seperti local.
+    signals_df_original = df.copy()
 
     # -- Hitung meta --
     sig_col = df["signal"] if "signal" in df.columns else pd.Series(dtype=str)
@@ -183,6 +207,12 @@ def build_published_payload(
             scalp_df = scalp_df.sort_values("scalping_score", ascending=False)
         scalp_list = [_row_to_dict(row) for _, row in scalp_df.iterrows()]
 
+    # ALL tickers — untuk parity local == deployed di Scalping & Long Term tabs.
+    # Menggunakan signals_df asli (sebelum exclude EXCLUDED_STATUSES di atas)
+    # agar semua 957 ticker tersedia di dashboard cloud persis seperti local.
+    # signals_df_original sudah di-copy sebelum filter EXCLUDED_STATUSES.
+    all_ticker_list = [_row_to_dict(row) for _, row in signals_df_original.iterrows()]
+
     now_wib = datetime.now(_WIB).strftime("%Y-%m-%dT%H:%M:%S+07:00")
 
     payload = {
@@ -196,16 +226,17 @@ def build_published_payload(
             "avoid_count":      av_cnt,
             "scalping_high_count": len(scalp_list),
         },
-        "breakout":   breakout_list,
-        "pre_markup": pre_markup_list,
-        "scalping":   scalp_list,
-        "watch":      watch_list,
-        "ai_summary": ai_summary,
+        "breakout":    breakout_list,
+        "pre_markup":  pre_markup_list,
+        "scalping":    scalp_list,
+        "watch":       watch_list,
+        "all_tickers": all_ticker_list,   # semua ticker — dashboard parity
+        "ai_summary":  ai_summary,
     }
 
     logger.debug(
-        "Payload built: %d breakout, %d pre_markup, %d scalping, %d watch",
-        len(breakout_list), len(pre_markup_list), len(scalp_list), len(watch_list),
+        "Payload built: %d breakout, %d pre_markup, %d scalping, %d watch, %d all_tickers",
+        len(breakout_list), len(pre_markup_list), len(scalp_list), len(watch_list), len(all_ticker_list),
     )
     return payload
 
@@ -240,11 +271,12 @@ def export_latest_dashboard_data(
 
     size_kb = out_path.stat().st_size / 1024
     logger.info(
-        "Published payload written: %s (%.1f KB, breakout=%d, pre_markup=%d, scalping=%d)",
+        "Published payload written: %s (%.1f KB, breakout=%d, pre_markup=%d, scalping=%d, all=%d)",
         out_path.name,
         size_kb,
         len(payload["breakout"]),
         len(payload["pre_markup"]),
         len(payload["scalping"]),
+        len(payload.get("all_tickers", [])),
     )
     return out_path

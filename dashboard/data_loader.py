@@ -466,12 +466,22 @@ def _load_local_published() -> dict:
 def df_from_published_payload(payload: dict) -> pd.DataFrame:
     """Ubah payload JSON menjadi DataFrame mirip signals_df.
 
-    Menggabungkan semua tier (breakout + pre_markup + watch + scalping-only)
-    menjadi satu DataFrame, dengan kolom yang sama seperti file lokal.
+    Strategi (v2 payload dengan all_tickers):
+      - Jika payload berisi kunci "all_tickers", gunakan langsung sebagai
+        sumber data utama — berisi SEMUA ticker (957 baris) persis seperti
+        file lokal, termasuk AVOID/NONE/scalping candidates.
+      - Fallback ke rekonstruksi dari tier lists (breakout + pre_markup +
+        watch + scalping) untuk payload lama yang belum punya all_tickers.
 
-    Scalping tickers yang bukan BREAKOUT/PRE_MARKUP/WATCH tidak dimasukkan
-    ke DataFrame utama (sudah tercovering dari signal tier mereka).
+    Ini memastikan parity local == deployed di semua tab dashboard.
     """
+    # ── v2 payload: all_tickers tersedia (parity mode) ───────────────────────
+    all_tickers = payload.get("all_tickers")
+    if all_tickers:
+        df = pd.DataFrame(all_tickers)
+        return _normalize_bool_cols(df)
+
+    # ── v1 fallback: rekonstruksi dari tier lists (25 baris) ─────────────────
     rows: list[dict] = []
     seen_tickers: set = set()
 
