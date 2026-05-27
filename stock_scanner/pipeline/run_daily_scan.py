@@ -26,6 +26,11 @@ from stock_scanner.pipeline.foreign_flow import PlaceholderForeignFetcher, enric
 from stock_scanner.pipeline.fundamental import enrich_with_fundamentals
 from stock_scanner.pipeline.ml_ranker import load_ranker, score_candidates
 from stock_scanner.pipeline.news_sentiment import enrich_with_news
+from stock_scanner.pipeline.quality_filters import (
+    enrich_df_with_quality_filters,
+    load_risk_overrides,
+    EXCLUDED_STATUSES,
+)
 from stock_scanner.pipeline.shareholder import PlaceholderShareholderFetcher, enrich_with_shareholders
 from stock_scanner.alerts.level_calculator import enrich_df_with_levels
 from stock_scanner.pipeline.scalping import enrich_df_with_scalping
@@ -54,7 +59,9 @@ def main(config_path: Path = _DEFAULT_CONFIG) -> None:
     model_path       = base_dir / config.get("model_path",        "models/ranker.pkl")
     universe_path    = base_dir / config.get("universe_path",     "stock_scanner/configs/idx_universe.csv")
 
-    for d in [ranked_dir, news_dir, foreign_dir, broker_dir, shareholder_dir, fundamentals_dir]:
+    risk_dir = base_dir / config.get("risk_dir", "data/risk")
+
+    for d in [ranked_dir, news_dir, foreign_dir, broker_dir, shareholder_dir, fundamentals_dir, risk_dir]:
         d.mkdir(parents=True, exist_ok=True)
 
     # --- Step 1: Load ticker universe ---
@@ -137,8 +144,26 @@ def main(config_path: Path = _DEFAULT_CONFIG) -> None:
             delay_between_tickers=delay,
         )
 
+    # --- Step 5d: Load UMA / special monitoring overrides ---
+    risk_overrides = load_risk_overrides(risk_dir)
+    if risk_overrides:
+        logger.info(f"Risk overrides loaded: {len(risk_overrides)} tickers flagged")
+    else:
+        logger.info("No UMA/special monitoring overrides active")
+
     # --- Step 6: Signal engine (rules) ---
     signals_df = compute_signal(feature_df, config)
+
+    # --- Step 6b: Quality filters (hard exclusion + risk flags) ---
+    signals_df = enrich_df_with_quality_filters(signals_df, config, risk_overrides)
+    eligible_count   = (signals_df["final_status"] == "eligible").sum()
+    watch_count      = (signals_df["final_status"] == "watch_with_risk").sum()
+    excluded_count   = signals_df["final_status"].isin(EXCLUDED_STATUSES).sum()
+    insuff_count     = (signals_df["final_status"] == "insufficient_data").sum()
+    logger.info(
+        f"Quality filter: {eligible_count} eligible, {watch_count} watch_with_risk, "
+        f"{excluded_count} excluded, {insuff_count} insufficient_data"
+    )
 
     # --- Step 7: ML ranking (opsional) ---
     model_config = _load_model_config(config_path.parent / "model_config.yaml")
@@ -218,10 +243,14 @@ def _save_ranked(
     scan_date: str,
     config: dict | None = None,
 ) -> None:
-    """Save ranked signals with per-tier caps applied.
+    """Save ranked signals with per-tier caps and quality filter applied.
+
+    Excludes tickers with final_status in EXCLUDED_STATUSES
+    (excluded_fundamental, excluded_float_structure, excluded_regulatory).
+    'insufficient_data' tickers are kept but sorted last within each tier.
 
     Caps are read from config['signal_caps'] (default: BREAKOUT=15, PRE_MARKUP=30, WATCH=50).
-    Sorting: signal tier first, then ml_prob (if available), then total_score descending.
+    Sort order: signal tier → quality_adjusted_score (if present) → ml_prob → total_score.
     """
     caps_cfg = (config or {}).get("signal_caps", {})
     caps = {
@@ -233,10 +262,22 @@ def _save_ranked(
     priority = ["BREAKOUT", "PRE_MARKUP", "WATCH"]
     ranked = df[df["signal"].isin(priority)].copy()
 
-    # Sort within each tier
+    # Exclude hard-excluded tickers (leave insufficient_data tickers in, flagged)
+    if "final_status" in ranked.columns:
+        from stock_scanner.pipeline.quality_filters import EXCLUDED_STATUSES
+        before = len(ranked)
+        ranked = ranked[~ranked["final_status"].isin(EXCLUDED_STATUSES)]
+        excluded_n = before - len(ranked)
+        if excluded_n:
+            logger.info(f"Ranked: removed {excluded_n} tickers with excluded_* status")
+
+    # Sort within each tier: quality_adjusted_score > ml_prob > total_score
     sort_cols = ["signal"]
     asc = [True]
-    if "ml_prob" in ranked.columns:
+    if "quality_adjusted_score" in ranked.columns:
+        sort_cols.append("quality_adjusted_score")
+        asc.append(False)
+    elif "ml_prob" in ranked.columns:
         sort_cols.append("ml_prob")
         asc.append(False)
     sort_cols.append("total_score")
@@ -263,7 +304,8 @@ def _save_ranked(
     ranked.to_csv(path, index=False)
 
     sig_counts = ranked["signal"].value_counts().to_dict()
-    logger.info(f"Ranked output → {path} ({len(ranked)} tickers) | {sig_counts}")
+    status_counts = ranked["final_status"].value_counts().to_dict() if "final_status" in ranked.columns else {}
+    logger.info(f"Ranked output → {path} ({len(ranked)} tickers) | signals={sig_counts} | status={status_counts}")
 
 
 def _print_summary(df: pd.DataFrame, scan_date: str) -> None:

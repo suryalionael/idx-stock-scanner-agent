@@ -592,7 +592,11 @@ def _build_news_lines(s: dict, articles: list[dict] | None = None) -> list[str]:
 
 
 def _build_fundamental_lines(s: dict) -> list[str]:
-    """Build fundamental snapshot lines."""
+    """Build fundamental snapshot lines.
+
+    DER note: stored as ratio (×), e.g. 1.5 = 150% D/E.
+    EBITDA: absolute IDR amount (positive = profitable at operating level).
+    """
     status = str(s.get("fundamental_status", "")).lower()
 
     if status == "missing":
@@ -604,23 +608,17 @@ def _build_fundamental_lines(s: dict) -> list[str]:
         ]
 
     lines: list[str] = []
-    pe  = _safe_num(s.get("pe_ratio"))
-    pbv = _safe_num(s.get("pbv"))
-    roe = _safe_num(s.get("roe_pct"))
-    der = _safe_num(s.get("der"))
-    div = _safe_num(s.get("div_yield_pct"))
+    pe        = _safe_num(s.get("pe_ratio"))
+    pbv       = _safe_num(s.get("pbv"))
+    roe       = _safe_num(s.get("roe_pct"))
+    der       = _safe_num(s.get("der"))       # ratio (×), NOT percent
+    div       = _safe_num(s.get("div_yield_pct"))
+    ebitda    = _safe_num(s.get("ebitda"))    # absolute IDR
+    float_pct = _safe_num(s.get("public_float_pct"))
 
     # PE
     if pe is not None:
-        pe_label = ""
-        if pe < 10:
-            pe_label = "murah"
-        elif pe < 20:
-            pe_label = "wajar"
-        elif pe < 30:
-            pe_label = "premium"
-        else:
-            pe_label = "mahal"
+        pe_label = "murah" if pe < 10 else ("wajar" if pe < 20 else ("premium" if pe < 30 else "mahal"))
         lines.append(f"• P/E: <code>{pe:.1f}×</code>  ({pe_label})")
 
     # PBV
@@ -633,14 +631,40 @@ def _build_fundamental_lines(s: dict) -> list[str]:
         roe_label = "sangat profitable" if roe >= 25 else ("profitable" if roe >= 15 else "lemah")
         lines.append(f"• ROE: <code>{roe:.1f}%</code>  ({roe_label})")
 
-    # DER
+    # DER — stored as ratio (1.5 = 150% D/E)
     if der is not None:
         der_label = "aman" if der <= 1.0 else ("moderat" if der <= 2.5 else "leverage tinggi ⚠️")
         lines.append(f"• DER: <code>{der:.2f}×</code>  ({der_label})")
 
+    # EBITDA
+    if ebitda is not None:
+        if ebitda >= 0:
+            ebitda_b = ebitda / 1e9
+            lines.append(f"• EBITDA: <code>Rp{ebitda_b:,.1f}B</code>  ✅")
+        else:
+            ebitda_b = abs(ebitda) / 1e9
+            lines.append(f"• EBITDA: <code>-Rp{ebitda_b:,.1f}B</code>  ⚠️ negatif")
+
     # Dividend
     if div is not None and div > 0:
         lines.append(f"• Dividend Yield: <code>{div:.2f}%</code>")
+
+    # Public float
+    if float_pct is not None:
+        float_label = ""
+        if float_pct < 5:
+            float_label = "⚠️ sangat rendah (bandar)"
+        elif float_pct < 10:
+            float_label = "rendah — hati-hati"
+        elif float_pct > 70:
+            float_label = "blue-chip / liquid"
+        lines.append(f"• Public Float: <code>{float_pct:.1f}%</code>  {float_label}")
+
+    # Risk flags (if quality filter has run)
+    risk_flags = str(s.get("risk_flags", "") or "")
+    final_status = str(s.get("final_status", "") or "")
+    if risk_flags and final_status == "watch_with_risk":
+        lines.append(f"• <b>⚠️ Risk Flags:</b> <i>{risk_flags}</i>")
 
     if not lines:
         if status == "partial":
@@ -856,6 +880,14 @@ def _build_swing_compact_block(idx: int, s: dict) -> str:
         info.append(f"Vol×{vol:.1f}")
     if info:
         lines.append(f"   <i>{'  ·  '.join(info)}</i>")
+
+    # Risk flag (watch_with_risk) — show first flag only to keep compact
+    final_status = str(s.get("final_status", "") or "")
+    if final_status == "watch_with_risk":
+        risk_flags = str(s.get("risk_flags", "") or "")
+        if risk_flags:
+            first_flag = risk_flags.split(",")[0].strip()
+            lines.append(f"   ⚠️ <i>{first_flag}</i>")
 
     return "\n".join(lines)
 

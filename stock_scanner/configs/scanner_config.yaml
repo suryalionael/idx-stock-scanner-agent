@@ -13,6 +13,7 @@ foreign_dir: "data/foreign"
 broker_dir: "data/broker"
 shareholder_dir: "data/shareholders"
 fundamentals_dir: "data/fundamentals"
+risk_dir: "data/risk"           # UMA / special monitoring override CSV
 model_path: "models/ranker.pkl"
 
 # --- Data fetch ---
@@ -86,6 +87,43 @@ explain:
 # min_rr: minimum Risk:Reward setelah tick rounding untuk trade_setup_status = "active"
 # Di bawah ini → "low_rr" (level tetap dihitung, tapi tidak di-rank aktif)
 min_rr: 1.5
+
+# ---------------------------------------------------------------------------
+# QUALITY FILTERS — hard exclusion + risk-flag penalty layer
+# ---------------------------------------------------------------------------
+# evaluate_hard_filters() di pipeline/quality_filters.py membaca section ini.
+#
+# DER dalam rasio (×), BUKAN persen.  Contoh: DER 1.5 = 150% debt/equity.
+# Catatan: yfinance mengembalikan debtToEquity dalam %, sudah dikonversi
+# di fundamental.py (÷100) sebelum disimpan ke cache.
+quality_filters:
+
+  # -- Fundamental hard exclusion (passes_hard_filters = False) --
+  der_max: 4.0              # DER > 4.0× → excluded_fundamental
+  pbv_max: 3.5              # PBV > 3.5× → excluded_fundamental
+  # EBITDA: hard exclude hanya jika EBITDA < 0 SEKALI + DER > 2.0
+  # (single quarter EBITDA negatif bukan otomatis exclude — terlalu agresif)
+  # ebitda_negative_exclude: false  ← default off; nyalakan jika mau lebih ketat
+  ebitda_negative_exclude: false
+
+  # -- Volume exhaustion (early distribution warning) --
+  # vol_ratio_20d > threshold DAN market_cap < cap_threshold_idr → risk flag
+  vol_spike_exhaustion_ratio: 5.0
+  vol_spike_cap_threshold_idr: 1_000_000_000_000   # < Rp 1T = speculative board
+
+  # -- Public float filter --
+  float_hard_min_pct: 5.0     # float < 5% → excluded_float_structure
+  float_watch_min_pct: 10.0   # float 5–10% → watch_with_risk
+  float_warn_max_pct: 70.0    # float > 70% → catatan di risk_flags (terlalu liquid/blue-chip)
+
+  # -- Quality score adjustments (applied to quality_adjusted_score) --
+  # Pengurangan dari total_score, bukan dari hard-filter passes/fails
+  penalty_ebitda_negative: 0.5      # EBITDA < 0 → -0.5
+  penalty_der_elevated: 0.3         # DER 2.0–4.0 → -0.3
+  penalty_float_low: 0.3            # float 5–10% → -0.3
+  penalty_vol_exhaustion: 0.2       # vol spike exhaustion → -0.2
+  penalty_uma: 1.0                  # is_uma → -1.0
+  penalty_data_missing: 0.5         # fundamental_status missing → -0.5
 
 # --- Logging ---
 log_level: "INFO"

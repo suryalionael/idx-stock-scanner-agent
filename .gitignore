@@ -45,3 +45,7 @@ logs/
 
 # Config lokal (universe ticker adalah data pribadi)
 stock_scanner/configs/idx_universe.csv
+
+# Risk overrides (manual UMA list — track this if you want, or keep private)
+# Remove the next line to commit uma_overrides.csv to git
+# data/risk/uma_overrides.csv

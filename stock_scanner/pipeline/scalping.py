@@ -182,7 +182,7 @@ def compute_scalping_score(row: dict | pd.Series) -> dict:
         score += 0.5
         reasons.append("Squeeze release")
 
-    # ── 9. ADX / trend confirmation (optional) ────────────────────────────
+    # ── 9. ADX / trend confirmation (optional, 0.3 pts) ──────────────────
     if adx is not None and adx >= 30 and supertrend:
         score += 0.3
 
@@ -193,6 +193,21 @@ def compute_scalping_score(row: dict | pd.Series) -> dict:
 
     # Clip to [0, 10]
     score = round(max(0.0, min(10.0, score)), 2)
+
+    # ── Public float gate (applied AFTER score, affects label only) ───────
+    # float < float_watch_min (10%) → downgrade SCALPING_HIGH → SCALPING_WATCH
+    # float < float_hard_min  (5%)  → downgrade to NOT_SCALPING (bandar territory)
+    float_pct = _f(row.get("public_float_pct"))
+    if float_pct is not None:
+        if float_pct < 5.0:
+            # Very low float: bandar-controlled, entry/exit unpredictable
+            if score >= _SCORE_HIGH:
+                score = min(score, _SCORE_WATCH - 0.1)   # force below HIGH threshold
+            reasons.append(f"Float sangat rendah {float_pct:.1f}% — downgrade")
+        elif float_pct < 10.0:
+            if score >= _SCORE_HIGH:
+                score = min(score, _SCORE_HIGH - 0.1)    # stays HIGH only if dominant signal
+                reasons.append(f"Float rendah {float_pct:.1f}% — hati-hati")
 
     # Determine label
     if score >= _SCORE_HIGH:

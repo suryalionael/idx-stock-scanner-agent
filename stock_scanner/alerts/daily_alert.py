@@ -37,6 +37,7 @@ from stock_scanner.alerts.message_builder import (
 )
 from stock_scanner.alerts.scalping_formatter import format_scalping_alert
 from stock_scanner.alerts.telegram_alert import TelegramSender
+from stock_scanner.pipeline.quality_filters import EXCLUDED_STATUSES
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -92,6 +93,17 @@ def _load_signals(scan_date: str) -> pd.DataFrame:
     if "scalping_label" not in df.columns:
         logger.info("Scalping columns missing — computing on-the-fly.")
         df = enrich_df_with_scalping(df)
+
+    # Filter out hard-excluded tickers (excluded_fundamental, excluded_float, excluded_regulatory)
+    # Tickers with insufficient_data are kept — they just get flagged.
+    if "final_status" in df.columns:
+        before = len(df)
+        df = df[~df["final_status"].isin(EXCLUDED_STATUSES)]
+        removed = before - len(df)
+        if removed:
+            logger.info("Removed %d excluded_* tickers from alert pool", removed)
+    else:
+        logger.debug("final_status column not found — quality filter not applied to alert pool")
 
     return df
 
