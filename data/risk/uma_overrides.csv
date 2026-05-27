@@ -1,0 +1,18 @@
+# IDX UMA / Special Monitoring override list
+# Maintained manually — update whenever IDX umumkan status UMA/monitoring baru.
+# Source: https://idx.co.id/id/data-pasar/saham/uma/
+#
+# Format kolom:
+#   ticker               : ticker IDX lengkap, mis. ABCD.JK
+#   is_uma               : true/false  — Unusual Market Activity (IDX alert)
+#   is_special_monitoring: true/false  — Papan pemantauan khusus IDX
+#   reason               : alasan singkat (opsional, untuk audit trail)
+#   updated_at           : tanggal update terakhir (YYYY-MM-DD)
+#
+# Pipeline membaca file ini setiap run dan menambahkan kolom is_uma,
+# is_special_monitoring ke signals_df.
+# Tickers yang tidak ada di file ini dianggap false/false.
+ticker,is_uma,is_special_monitoring,reason,updated_at
+# Contoh (hapus '#' untuk aktifkan):
+# SATU.JK,true,false,UMA pengumuman akuisisi,2026-05-20
+# DUTI.JK,false,true,Papan pengembangan khusus,2026-05-15

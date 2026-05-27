@@ -10,16 +10,24 @@ FundamentalAggregator
     Tries providers in order; returns status.
 
 Output columns added to feature DataFrame
-    eps              float  — trailing EPS (in IDR)
-    pe_ratio         float  — trailing P/E
-    pbv              float  — price-to-book value
-    roe_pct          float  — return on equity in % (e.g. 22.97)
-    der              float  — debt-to-equity ratio
-    div_yield_pct    float  — dividend yield in % (e.g. 5.44)
-    market_cap       float  — market cap in IDR
+    eps                float — trailing EPS (in IDR)
+    pe_ratio           float — trailing P/E
+    pbv                float — price-to-book value
+    roe_pct            float — return on equity in % (e.g. 22.97)
+    der                float — debt-to-equity RATIO (×), e.g. 1.5 means 150%
+                                ⚠️  yfinance debtToEquity is in % — we divide by 100.
+    div_yield_pct      float — dividend yield in % (e.g. 5.44)
+    market_cap         float — market cap in IDR
     revenue_growth_pct float — YoY revenue growth in %
     profit_growth_pct  float — YoY earnings growth in %
+    ebitda             float — EBITDA in IDR (positive = profitable at operating level)
+    public_float_pct   float — public float as % of shares outstanding
     fundamental_status  str — "ok" | "partial" | "missing"
+
+DER scale note
+    yfinance `debtToEquity` returns values in PERCENT (e.g. 15.234 for ACES).
+    We store DER as a ratio (÷100), so ACES → der = 0.15.
+    Threshold "DER ≤ 4.0" in scanner_config.yaml is in RATIO units.
 
 Status semantics
     "ok"      : ≥3 key metrics available (PE/PBV/ROE at minimum)
@@ -74,15 +82,18 @@ class BaseFundamentalProvider(ABC):
 
 # Fields to extract from yfinance .info with their output column names
 _YFINANCE_FIELD_MAP = {
-    "trailingEps":    "eps",
-    "trailingPE":     "pe_ratio",
-    "priceToBook":    "pbv",
-    "returnOnEquity": "roe_raw",         # needs × 100
-    "debtToEquity":   "der",
-    "dividendYield":  "div_yield_raw",   # needs normalization
-    "marketCap":      "market_cap",
-    "revenueGrowth":  "revenue_growth_raw",  # needs × 100
-    "earningsGrowth": "profit_growth_raw",   # needs × 100
+    "trailingEps":      "eps",
+    "trailingPE":       "pe_ratio",
+    "priceToBook":      "pbv",
+    "returnOnEquity":   "roe_raw",              # needs × 100
+    "debtToEquity":     "der_raw",              # yfinance is in %; needs ÷ 100 → ratio
+    "dividendYield":    "div_yield_raw",        # needs normalization
+    "marketCap":        "market_cap",
+    "revenueGrowth":    "revenue_growth_raw",   # needs × 100
+    "earningsGrowth":   "profit_growth_raw",    # needs × 100
+    "ebitda":           "ebitda",               # absolute IDR amount (new)
+    "floatShares":      "_float_shares",        # for public_float_pct (new)
+    "sharesOutstanding": "_shares_outstanding", # for public_float_pct (new)
 }
 
 # Key metrics used to determine status
@@ -124,6 +135,7 @@ class YFinanceFundamentalProvider(BaseFundamentalProvider):
                     pass
 
         # ── Normalize percentages ──────────────────────────────────────────
+
         # roe: stored as decimal fraction (0.229 = 22.9%)
         if "roe_raw" in result:
             result["roe_pct"] = round(result.pop("roe_raw") * 100, 2)
@@ -139,6 +151,18 @@ class YFinanceFundamentalProvider(BaseFundamentalProvider):
         if "div_yield_raw" in result:
             dy = result.pop("div_yield_raw")
             result["div_yield_pct"] = round(dy if dy > 1.0 else dy * 100, 2)
+
+        # ── DER: yfinance debtToEquity is in % → convert to ratio ────────
+        # Example: yfinance returns 15.234 for ACES, which is 15.234% = 0.15×
+        # We store as ratio so threshold config (e.g. der_max: 4.0) is intuitive.
+        if "der_raw" in result:
+            result["der"] = round(result.pop("der_raw") / 100.0, 4)
+
+        # ── Public float % ───────────────────────────────────────────────
+        float_shares = result.pop("_float_shares", None)
+        total_shares = result.pop("_shares_outstanding", None)
+        if float_shares and total_shares and total_shares > 0:
+            result["public_float_pct"] = round(float_shares / total_shares * 100, 2)
 
         return result
 
@@ -198,10 +222,13 @@ def _determine_status(data: dict) -> str:
 _DEFAULT_AGGREGATOR = FundamentalAggregator()
 
 # All columns that enrich_with_fundamentals adds to the DataFrame
+# DER is stored as RATIO (×), not percent. ebitda is absolute IDR.
 FUNDAMENTAL_COLS = [
     "eps", "pe_ratio", "pbv", "roe_pct", "der",
     "div_yield_pct", "market_cap",
     "revenue_growth_pct", "profit_growth_pct",
+    "ebitda",               # new: EBITDA in IDR (positive = profitable operating level)
+    "public_float_pct",     # new: float shares / total shares × 100
     "fundamental_status",
 ]
 
