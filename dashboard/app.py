@@ -695,18 +695,34 @@ def render_ticker_detail(
 # ---------------------------------------------------------------------------
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _prepare_scalping_df(scan_date: str) -> pd.DataFrame:
-    """Load signals and enrich with scalping scores. Cached 5 min."""
-    df = load_all_tickers_for_date(scan_date)
+def _prepare_scalping_df(scan_date: str, df_preloaded: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Load signals and enrich with scalping scores. Cached 5 min.
+
+    Jika df_preloaded sudah tersedia (misalnya sudah di-load dari published
+    payload atau local file oleh caller), gunakan langsung tanpa I/O ulang.
+    Ini memastikan Scalping tab bekerja di remote mode (Streamlit Cloud).
+    """
+    if df_preloaded is not None and not df_preloaded.empty:
+        df = df_preloaded.copy()
+    else:
+        df = load_all_tickers_for_date(scan_date)
     if df.empty:
         return df
     return enrich_df_with_scalping(df)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _prepare_longterm_df(scan_date: str) -> pd.DataFrame:
-    """Load signals and enrich with long-term scores. Cached 5 min."""
-    df = load_all_tickers_for_date(scan_date)
+def _prepare_longterm_df(scan_date: str, df_preloaded: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Load signals and enrich with long-term scores. Cached 5 min.
+
+    Jika df_preloaded sudah tersedia (misalnya sudah di-load dari published
+    payload atau local file oleh caller), gunakan langsung tanpa I/O ulang.
+    Ini memastikan Long Term tab bekerja di remote mode (Streamlit Cloud).
+    """
+    if df_preloaded is not None and not df_preloaded.empty:
+        df = df_preloaded.copy()
+    else:
+        df = load_all_tickers_for_date(scan_date)
     if df.empty:
         return df
     # Build sector map from issuers reference
@@ -742,9 +758,11 @@ def render_scalping_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | Non
         "dan ATR breakout dari data harian. ⚠️ Tidak ada data intraday — semua berbasis OHLCV daily."
     )
 
-    # Enrich with scalping scores
+    # Enrich with scalping scores.
+    # df_all sudah berisi semua ticker (local: dari signals parquet;
+    # remote: dari all_tickers section di published JSON).
     with st.spinner("Menghitung scalping score..."):
-        df_scalp = _prepare_scalping_df(scan_date)
+        df_scalp = _prepare_scalping_df(scan_date, df_preloaded=df_all)
 
     if df_scalp.empty or "scalping_score" not in df_scalp.columns:
         st.warning("Tidak ada data scalping tersedia.")
@@ -1017,9 +1035,11 @@ def render_longterm_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | Non
         "Fundamental dominan; teknikal hanya sebagai timing helper."
     )
 
-    # Enrich with long-term scores
+    # Enrich with long-term scores.
+    # df_all sudah berisi semua ticker (local: dari signals parquet;
+    # remote: dari all_tickers section di published JSON).
     with st.spinner("Menghitung long-term score..."):
-        df_lt = _prepare_longterm_df(scan_date)
+        df_lt = _prepare_longterm_df(scan_date, df_preloaded=df_all)
 
     if df_lt.empty or "long_term_score" not in df_lt.columns:
         st.warning("Tidak ada data long-term tersedia.")
