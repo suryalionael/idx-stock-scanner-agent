@@ -91,6 +91,28 @@ def main(config_path: Path = _DEFAULT_CONFIG) -> None:
                 skipped += 1
                 continue
 
+            # ── Strip trailing zero-volume rows (yfinance holiday artefact) ──────
+            # yfinance kadang mengembalikan baris dengan volume=0 dan OHLC di-ffill
+            # untuk hari libur (misal: cuti bersama, Kenaikan Isa Almasih).
+            # Jika baris terakhir volume=0, _hard_gate() akan langsung AVOID semua.
+            # Solusi: potong baris trailing zero-volume agar feature_builder
+            # selalu menggunakan hari perdagangan terakhir yang nyata.
+            non_zero_vol = clean["volume"].fillna(0) > 0
+            if non_zero_vol.any():
+                last_real_idx = clean[non_zero_vol].index[-1]
+                n_trailing = (clean.index > last_real_idx).sum()
+                if n_trailing > 0:
+                    logger.debug(
+                        f"{ticker}: stripped {n_trailing} trailing zero-volume row(s) "
+                        f"(holiday artefact from yfinance)"
+                    )
+                    clean = clean.loc[:last_real_idx]
+            else:
+                # Seluruh series tidak punya volume — biasanya suspended/delisted
+                logger.debug(f"{ticker}: entire series has zero volume — skipped")
+                skipped += 1
+                continue
+
             # Step 4: Features (ambil baris terakhir untuk scanning)
             features = build_features(clean)
             if features.empty:
