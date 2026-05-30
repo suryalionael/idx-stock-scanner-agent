@@ -1027,12 +1027,9 @@ def render_swing_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | None,
             if col in display.columns:
                 display[col] = display[col].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
 
-        st.caption("💡 Klik baris untuk melihat Detail Ticker di bawah")
-        tbl_event = st.dataframe(
+        st.dataframe(
             display,
             use_container_width=True, hide_index=True, height=320,
-            on_select="rerun",
-            selection_mode="single-row",
             column_config={
                 "ticker":               st.column_config.TextColumn("Ticker",      width="small"),
                 "signal":               st.column_config.TextColumn("Signal",      width="small"),
@@ -1049,15 +1046,6 @@ def render_swing_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | None,
                 "vol_spike":            st.column_config.CheckboxColumn("Vol Spike"),
             },
         )
-        # Table row click → queue ticker change (consumed next rerun before sidebar renders)
-        sel_rows = tbl_event.selection.rows if tbl_event.selection else []
-        if sel_rows:
-            row_idx = sel_rows[0]
-            if row_idx < len(df_table):
-                clicked = df_table.iloc[row_idx]["ticker"]
-                if clicked != st.session_state.get("active_ticker"):
-                    st.session_state["_pending_ticker"] = clicked
-                    st.rerun()
     else:
         st.info("Tidak ada ticker dengan signal yang dipilih.")
 
@@ -1153,13 +1141,10 @@ def render_longterm_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | Non
         tbl_lt["margin_of_safety"] = tbl_lt["margin_of_safety"].apply(
             lambda x: f"{float(x):+.0f}%" if pd.notna(x) else "-")
 
-    st.caption("💡 Klik baris untuk melihat Detail Fundamental di bawah")
-    lt_event = st.dataframe(
+    st.dataframe(
         tbl_lt,
         use_container_width=True, hide_index=True,
         height=min(38 * len(tbl_lt) + 40, 520),
-        on_select="rerun",
-        selection_mode="single-row",
         column_config={
             "ticker":              st.column_config.TextColumn("Ticker",        width="small"),
             "long_term_score":     st.column_config.TextColumn("LT Score",      width="small"),
@@ -1179,37 +1164,17 @@ def render_longterm_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | Non
             "long_term_reason":    st.column_config.TextColumn("Ringkasan",     width="large"),
         },
     )
-    # LT table row click → queue detail ticker change
-    lt_sel_rows = lt_event.selection.rows if lt_event.selection else []
-    if lt_sel_rows:
-        lt_row_idx = lt_sel_rows[0]
-        if lt_row_idx < len(df_lt_show):
-            lt_clicked = df_lt_show.iloc[lt_row_idx]["ticker"]
-            if lt_clicked != st.session_state.get("lt_active_ticker"):
-                st.session_state["_lt_pending_ticker"] = lt_clicked
-                st.rerun()
 
     # Expandable ticker detail
     st.divider()
     st.markdown("#### Detail Fundamental Ticker")
     lt_ticker_list = df_lt_show["ticker"].tolist()
-
-    # Consume any pending LT table click before selectbox renders
-    _lt_pending = st.session_state.pop("_lt_pending_ticker", None)
-    if _lt_pending and _lt_pending in lt_ticker_list:
-        st.session_state["lt_active_ticker"] = _lt_pending
-
-    _lt_active = st.session_state.get("lt_active_ticker")
-    _lt_idx = lt_ticker_list.index(_lt_active) if (_lt_active and _lt_active in lt_ticker_list) else 0
-
     sel_lt = st.selectbox(
         "Pilih ticker:",
         options=lt_ticker_list,
-        index=_lt_idx,
         format_func=lambda t: f"{t.replace('.JK','')} — {get_company_name(t)}",
         key="lt_detail_select",
     )
-    st.session_state["lt_active_ticker"] = sel_lt
     if sel_lt:
         lt_row = df_lt_show[df_lt_show["ticker"] == sel_lt].iloc[0]
         _render_longterm_detail(lt_row, scan_date, api_key)
@@ -1674,26 +1639,16 @@ with st.sidebar:
     st.divider()
     st.markdown(f"**Daftar Saham** ({len(sidebar_tickers)} ticker)")
 
-    # Consume pending table-click ticker BEFORE selectbox renders so the
-    # selectbox reflects the row the user just clicked on.
-    _pending = st.session_state.pop("_pending_ticker", None)
-    if _pending and _pending in sidebar_tickers:
-        st.session_state["active_ticker"] = _pending
-
     selected_ticker: str | None = None
     if not sidebar_tickers:
         st.caption("Tidak ada ticker dengan signal yang dipilih.")
     else:
-        _active = st.session_state.get("active_ticker")
-        _sb_idx = sidebar_tickers.index(_active) if (_active and _active in sidebar_tickers) else 0
         selected_ticker = st.selectbox(
             "Pilih ticker:",
             options=sidebar_tickers,
-            index=_sb_idx,
             format_func=_fmt_sidebar_ticker,
             label_visibility="collapsed",
         )
-        st.session_state["active_ticker"] = selected_ticker
 
     st.divider()
     api_key_input = st.text_input(
@@ -1727,19 +1682,15 @@ with tab_scalping:
 with tab_swing:
     render_swing_tab(df_all, selected_date, active_api_key, signal_filter)
 
-    # Ticker detail — driven by sidebar selectbox OR table row click.
-    # session_state["active_ticker"] is the single source of truth:
-    #   • updated by sidebar selectbox (see sidebar block above)
-    #   • overridden by table row click via the _pending_ticker pattern
+    # Ticker detail (driven by sidebar selectbox)
     st.divider()
     st.markdown("### Detail Ticker")
-    effective_ticker = st.session_state.get("active_ticker") or selected_ticker
-    if not effective_ticker:
-        st.info("Pilih ticker dari sidebar atau klik baris pada tabel di atas.")
+    if not selected_ticker:
+        st.info("Pilih ticker dari sidebar untuk melihat detail chart dan analisis.")
     else:
-        ticker_rows = df_all[df_all["ticker"] == effective_ticker]
+        ticker_rows = df_all[df_all["ticker"] == selected_ticker]
         if ticker_rows.empty:
-            st.warning(f"Data untuk {effective_ticker} tidak ditemukan.")
+            st.warning(f"Data untuk {selected_ticker} tidak ditemukan.")
         else:
             render_ticker_detail(ticker_rows.iloc[0], selected_date, active_api_key, key_prefix="sw_")
 
