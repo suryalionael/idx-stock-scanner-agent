@@ -1524,10 +1524,18 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
         if _remote_payload:
-            gen_at = _remote_payload.get("generated_at", "—")
-            # Distinguish: freshly fetched from remote vs loaded from local fallback
+            gen_at        = _remote_payload.get("generated_at", "—")
             scan_date_str = _remote_payload.get("scan_date", "")
+            exec_date_str = _remote_payload.get("execution_date", scan_date_str)
+            is_live       = _remote_payload.get("is_live_scan", True)
             st.caption(f"Data: {scan_date_str} · {gen_at[:10] if gen_at != '—' else '—'}")
+            if not is_live:
+                st.warning(
+                    f"⚠️ **Data bukan sesi live**\n\n"
+                    f"Script jalan {exec_date_str} (hari libur bursa). "
+                    f"Data market yang dipakai: **{scan_date_str}** (last trading day).",
+                    icon="⚠️",
+                )
         else:
             st.warning(
                 "⚠️ Data tidak tersedia.\n\n"
@@ -1602,6 +1610,19 @@ with st.sidebar:
             "⚠️ Mode online: chart OHLCV, broker flow, news articles, "
             "dan history tidak tersedia. Hanya data sinyal & level trading."
         )
+    else:
+        # Local mode: detect scan_date vs market_data_date mismatch
+        # If most tickers' last data row is older than selected_date, it's a stale scan.
+        if not df_all.empty and "date" in df_all.columns:
+            _max_market_date = str(pd.to_datetime(df_all["date"]).max().date())
+            if _max_market_date < selected_date:
+                st.divider()
+                st.warning(
+                    f"⚠️ **Data bukan sesi live** — "
+                    f"scan_date: {selected_date}, "
+                    f"market data terakhir: **{_max_market_date}** "
+                    f"(kemungkinan hari libur bursa)."
+                )
 
     st.divider()
     st.markdown("**Filter Signal**")

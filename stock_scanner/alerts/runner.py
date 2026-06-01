@@ -86,7 +86,10 @@ def check_scan_output(scan_date: str) -> bool:
 # Step 1 — Daily scan
 # ---------------------------------------------------------------------------
 
-def run_scan(config_path: Path | None = None) -> bool:
+def run_scan(
+    config_path: Path | None = None,
+    force_holiday: bool = False,
+) -> bool:
     """Run the daily OHLCV + signal scan.
 
     Returns True on success (output files created).
@@ -95,6 +98,8 @@ def run_scan(config_path: Path | None = None) -> bool:
     cmd = [sys.executable, "-m", "stock_scanner.pipeline.run_daily_scan"]
     if config_path:
         cmd += ["--config", str(config_path)]
+    if force_holiday:
+        cmd += ["--force-holiday"]
 
     logger.info("Starting daily scan: %s", " ".join(cmd))
     try:
@@ -253,6 +258,15 @@ def main() -> int:
     parser.add_argument("--no-daily-report",  action="store_true")
     parser.add_argument("--config",     type=Path, default=None,
                         help="Path to scanner_config.yaml (optional override).")
+    parser.add_argument(
+        "--force-holiday",
+        action="store_true",
+        default=False,
+        help=(
+            "Lanjutkan scan meskipun hari ini bukan hari bursa IDX. "
+            "Diteruskan ke run_daily_scan. Berguna untuk backfill / testing manual."
+        ),
+    )
     args = parser.parse_args()
 
     scan_date = args.date or date.today().strftime("%Y-%m-%d")
@@ -269,7 +283,7 @@ def main() -> int:
     if args.skip_scan:
         logger.info("--skip-scan: skipping daily scan.")
     else:
-        scan_ok = run_scan(config_path=args.config)
+        scan_ok = run_scan(config_path=args.config, force_holiday=args.force_holiday)
         if not scan_ok:
             notify_failure("daily_scan", "run_daily_scan exited with error. Check logs.")
             return 1

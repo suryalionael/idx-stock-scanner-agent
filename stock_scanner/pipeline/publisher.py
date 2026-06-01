@@ -161,14 +161,20 @@ def build_published_payload(
     signals_df: pd.DataFrame,
     scan_date: str,
     ai_summary: str | None = None,
+    execution_date: str | None = None,
+    is_live_scan: bool = True,
 ) -> dict:
     """Bangun payload JSON dari signals DataFrame.
 
     Args:
-        signals_df : DataFrame hasil scan harian (sudah di-enrich semua step).
-        scan_date  : Format YYYY-MM-DD.
-        ai_summary : Ringkasan teks Claude (opsional). Jika ada daily_report
-                     sudah dibuat, pass report_summary-nya ke sini.
+        signals_df     : DataFrame hasil scan harian (sudah di-enrich semua step).
+        scan_date      : Tanggal data market (YYYY-MM-DD) — bisa berbeda dari
+                         execution_date pada hari libur bursa.
+        ai_summary     : Ringkasan teks Claude (opsional).
+        execution_date : Tanggal script dijalankan (YYYY-MM-DD). Sama dengan
+                         scan_date pada hari bursa normal. Berbeda saat libur.
+        is_live_scan   : True jika execution_date == scan_date (hari bursa aktif).
+                         False = data berasal dari last trading day sebelumnya.
 
     Returns:
         dict yang bisa di-json.dumps().
@@ -216,8 +222,13 @@ def build_published_payload(
     now_wib = datetime.now(_WIB).strftime("%Y-%m-%dT%H:%M:%S+07:00")
 
     payload = {
-        "scan_date":    scan_date,
-        "generated_at": now_wib,
+        # scan_date = tanggal data market yang dipakai (last real trading day)
+        # execution_date = kapan script dijalankan (bisa sama atau lebih baru)
+        # is_live_scan = True jika pipeline jalan pada hari bursa aktif
+        "scan_date":      scan_date,
+        "execution_date": execution_date or scan_date,
+        "is_live_scan":   is_live_scan,
+        "generated_at":   now_wib,
         "meta": {
             "total_tickers":    total,
             "breakout_count":   bo_cnt,
@@ -246,6 +257,8 @@ def export_latest_dashboard_data(
     scan_date: str,
     ai_summary: str | None = None,
     output_path: Path | None = None,
+    execution_date: str | None = None,
+    is_live_scan: bool = True,
 ) -> Path:
     """Build payload dan tulis ke data/published/latest_scan.json.
 
@@ -264,7 +277,11 @@ def export_latest_dashboard_data(
     out_path = output_path or _PUBLISHED_PATH
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    payload = build_published_payload(signals_df, scan_date, ai_summary)
+    payload = build_published_payload(
+        signals_df, scan_date, ai_summary,
+        execution_date=execution_date,
+        is_live_scan=is_live_scan,
+    )
 
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)

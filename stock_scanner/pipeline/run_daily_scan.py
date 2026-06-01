@@ -40,10 +40,36 @@ from stock_scanner.pipeline.validator import validate
 _DEFAULT_CONFIG = Path(__file__).parent.parent / "configs" / "scanner_config.yaml"
 
 
-def main(config_path: Path = _DEFAULT_CONFIG) -> None:
+def main(config_path: Path = _DEFAULT_CONFIG, force_holiday: bool = False) -> None:
     config = _load_config(config_path)
-    scan_date = date.today().strftime("%Y-%m-%d")
-    logger.info(f"=== IDX Daily Scan: {scan_date} ===")
+
+    # ── Trading calendar guard ───────────────────────────────────────────────
+    # Bedakan execution_date (kapan script jalan) vs scan_date/market_date
+    # (tanggal data market yang sebenarnya dipakai).
+    # scan_date akan diperbarui dari data aktual setelah feature build.
+    from stock_scanner.utils.trading_calendar import is_trading_day, last_trading_day
+
+    execution_date     = date.today()
+    execution_date_str = execution_date.strftime("%Y-%m-%d")
+
+    if not is_trading_day(execution_date):
+        last_td = last_trading_day(execution_date)
+        if not force_holiday:
+            logger.info(
+                f"=== {execution_date_str} bukan hari bursa IDX "
+                f"(last trading day: {last_td}). "
+                f"Pipeline tidak dijalankan. Gunakan --force-holiday untuk override. ==="
+            )
+            return
+        logger.warning(
+            f"--force-holiday aktif: {execution_date_str} bukan hari bursa, "
+            f"pipeline tetap dijalankan. Last trading day: {last_td}."
+        )
+
+    # Tentative scan_date = execution date; akan di-override dari data aktual
+    # setelah feature build (lihat "Determine actual market_date" di bawah).
+    scan_date = execution_date_str
+    logger.info(f"=== IDX Daily Scan: execution={execution_date_str} ===")
 
     # --- Paths dari config ---
     base_dir = Path(config.get("base_dir", "."))
@@ -130,6 +156,29 @@ def main(config_path: Path = _DEFAULT_CONFIG) -> None:
         return
 
     feature_df = pd.concat(all_latest_features, ignore_index=True)
+
+    # ── Determine actual market_date from data ───────────────────────────────
+    # scan_date = tanggal market data yang benar-benar dipakai (bukan execution date).
+    # Setelah zero-volume strip, setiap ticker sudah punya baris dari last real
+    # trading day. Kita ambil tanggal terbaru dari feature_df sebagai scan_date.
+    if "date" in feature_df.columns:
+        market_date = pd.to_datetime(feature_df["date"]).max().date()
+        market_date_str = market_date.strftime("%Y-%m-%d")
+        if market_date_str != scan_date:
+            logger.info(
+                f"Market data date: {market_date_str} "
+                f"(execution: {execution_date_str}) — scan_date diperbarui dari data."
+            )
+        scan_date = market_date_str
+
+    is_live_scan: bool = (scan_date == execution_date_str)
+    if not is_live_scan:
+        logger.info(
+            f"⚠ Non-live scan: execution={execution_date_str}, "
+            f"market_data={scan_date}. "
+            f"Dashboard akan menampilkan staleness warning."
+        )
+
     save_features(feature_df, features_dir, scan_date)
 
     # --- Step 5: Enrichment (news, foreign, shareholder) ---
@@ -229,7 +278,11 @@ def main(config_path: Path = _DEFAULT_CONFIG) -> None:
     _print_summary(signals_df, scan_date)
 
     # --- Step 10: Publish payload untuk dashboard online (non-fatal) ---
-    _publish_dashboard_data(signals_df, scan_date, base_dir)
+    _publish_dashboard_data(
+        signals_df, scan_date, base_dir,
+        execution_date=execution_date_str,
+        is_live_scan=is_live_scan,
+    )
 
     logger.info(f"=== Scan selesai: {scan_date} ===")
 
@@ -338,6 +391,8 @@ def _publish_dashboard_data(
     signals_df: pd.DataFrame,
     scan_date: str,
     base_dir: Path,
+    execution_date: str | None = None,
+    is_live_scan: bool = True,
 ) -> None:
     """Generate data/published/latest_scan.json — non-fatal wrapper.
 
@@ -353,6 +408,8 @@ def _publish_dashboard_data(
             scan_date=scan_date,
             ai_summary=None,   # daily_report summary akan di-attach oleh runner.py
             output_path=output_path,
+            execution_date=execution_date,
+            is_live_scan=is_live_scan,
         )
     except Exception as exc:
         logger.warning(f"Publish dashboard data gagal (non-fatal): {exc}")
@@ -374,5 +431,14 @@ def _print_summary(df: pd.DataFrame, scan_date: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="IDX Stock Scanner — daily scan")
     parser.add_argument("--config", type=Path, default=_DEFAULT_CONFIG)
+    parser.add_argument(
+        "--force-holiday",
+        action="store_true",
+        default=False,
+        help=(
+            "Jalankan pipeline meskipun hari ini adalah non-trading day IDX. "
+            "Berguna untuk backfill manual atau testing pada hari libur."
+        ),
+    )
     args = parser.parse_args()
-    main(args.config)
+    main(args.config, force_holiday=args.force_holiday)
