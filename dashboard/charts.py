@@ -114,17 +114,29 @@ def price_chart(
     )
 
     # --- Signal date marker ---
+    # Pass x as ISO string, NOT pd.Timestamp, to avoid:
+    #   TypeError: Addition/subtraction of integers and integer-arrays
+    #   with Timestamp is no longer supported  (pandas 2.0+, Plotly
+    #   annotation-anchor arithmetic internally hits this).
+    # Label text added via a separate add_annotation call.
     if signal_date:
         sig_ts = pd.to_datetime(signal_date)
         if df["date"].min() <= sig_ts <= df["date"].max():
+            sig_str = sig_ts.strftime("%Y-%m-%d")
             fig.add_vline(
-                x=sig_ts,
+                x=sig_str,
                 line_width=1.5,
                 line_dash="dash",
                 line_color="#facc15",
-                annotation_text="Signal",
-                annotation_position="top right",
-                annotation_font_color="#facc15",
+            )
+            fig.add_annotation(
+                x=sig_str,
+                y=1,
+                yref="paper",
+                text="Signal",
+                showarrow=False,
+                xanchor="left",
+                font=dict(color="#facc15", size=11),
             )
 
     fig.update_layout(
