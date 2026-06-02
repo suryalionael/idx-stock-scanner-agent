@@ -54,8 +54,12 @@ _SEND_DELAY_SEC = 2.0  # polite delay between Telegram messages
 # Data loading helpers
 # ---------------------------------------------------------------------------
 
-def _find_latest_date(max_days_back: int = 7) -> str | None:
-    """Return most recent date with a signals or ranked file."""
+def _find_latest_date(max_days_back: int = 10) -> str | None:
+    """Return most recent date with a signals or ranked file.
+
+    Walks back from today up to max_days_back calendar days.
+    Default raised to 10 so long-weekend + holiday gaps (≥4 days) are covered.
+    """
     today = date.today()
     for delta in range(max_days_back + 1):
         d = (today - timedelta(days=delta)).strftime("%Y-%m-%d")
@@ -66,26 +70,91 @@ def _find_latest_date(max_days_back: int = 7) -> str | None:
     return None
 
 
+def _resolve_scan_date(requested_date: str) -> str:
+    """Resolve a requested scan_date to the nearest available data file.
+
+    Since the pipeline now saves files under market_date (last real trading
+    day from feature data), not execution_date, there can be a gap when the
+    user passes an execution_date that has no matching file.
+
+    Strategy:
+      1. If the exact file exists → return as-is.
+      2. Walk back from requested_date up to 10 calendar days looking for
+         the nearest parquet/csv that does exist.
+      3. Log clearly what date was resolved to so the caller knows.
+
+    Returns:
+        The resolved date string (YYYY-MM-DD). Falls back to requested_date
+        unchanged if nothing is found (let _load_signals handle the miss).
+    """
+    # 1. Direct match
+    if (_SIGNALS_DIR / f"{requested_date}.parquet").exists():
+        return requested_date
+    if (_RANKED_DIR / f"ranked_{requested_date}.csv").exists():
+        return requested_date
+
+    # 2. Walk back from requested_date
+    try:
+        req_dt = date.fromisoformat(requested_date)
+    except ValueError:
+        logger.warning(
+            "Cannot parse date '{}' — using as-is.", requested_date
+        )
+        return requested_date
+
+    for delta in range(1, 11):
+        cand_dt  = req_dt - timedelta(days=delta)
+        cand_str = cand_dt.strftime("%Y-%m-%d")
+        if (_SIGNALS_DIR / f"{cand_str}.parquet").exists():
+            logger.info(
+                "No signal file for {} (pipeline saved under market_date). "
+                "Resolved to nearest available: {} (delta={} day(s)).",
+                requested_date, cand_str, delta,
+            )
+            return cand_str
+        if (_RANKED_DIR / f"ranked_{cand_str}.csv").exists():
+            logger.info(
+                "No signal file for {} (pipeline saved under market_date). "
+                "Resolved to nearest available: {} (delta={} day(s)).",
+                requested_date, cand_str, delta,
+            )
+            return cand_str
+
+    # Nothing found — return unchanged; _load_signals will emit the error
+    logger.warning(
+        "No signal file found within 10 days of {}. "
+        "Run: python -m stock_scanner.pipeline.run_daily_scan",
+        requested_date,
+    )
+    return requested_date
+
+
 def _load_signals(scan_date: str) -> pd.DataFrame:
     """Load signals DataFrame for a given date.
 
     Priority: signals/{scan_date}.parquet → ranked_{scan_date}.csv
 
+    Caller should pre-resolve scan_date via _resolve_scan_date() so that
+    the pipeline's market_date filenames are correctly matched.
     If scalping columns are missing (older files), they are computed on-the-fly.
     """
     from stock_scanner.pipeline.scalping import enrich_df_with_scalping
 
-    parquet = _SIGNALS_DIR / f"{scan_date}.parquet"
-    ranked_csv = _RANKED_DIR / f"ranked_{scan_date}.csv"
+    parquet    = _SIGNALS_DIR / f"{scan_date}.parquet"
+    ranked_csv = _RANKED_DIR  / f"ranked_{scan_date}.csv"
 
     if parquet.exists():
         df = pd.read_parquet(parquet)
-        logger.info("Loaded signals parquet: %s (%d rows)", parquet.name, len(df))
+        logger.info("Loaded signals parquet: {} ({} rows)", parquet.name, len(df))
     elif ranked_csv.exists():
         df = pd.read_csv(ranked_csv)
-        logger.info("Loaded ranked CSV: %s (%d rows)", ranked_csv.name, len(df))
+        logger.info("Loaded ranked CSV: {} ({} rows)", ranked_csv.name, len(df))
     else:
-        logger.warning("No signal data found for %s", scan_date)
+        logger.warning(
+            "No signal data found for {} "
+            "(checked: data/signals/{}.parquet, data/ranked/ranked_{}.csv)",
+            scan_date, scan_date, scan_date,
+        )
         return pd.DataFrame()
 
     # Ensure scalping columns are present (computed during run_daily_scan
@@ -97,11 +166,11 @@ def _load_signals(scan_date: str) -> pd.DataFrame:
     # Filter out hard-excluded tickers (excluded_fundamental, excluded_float, excluded_regulatory)
     # Tickers with insufficient_data are kept — they just get flagged.
     if "final_status" in df.columns:
-        before = len(df)
-        df = df[~df["final_status"].isin(EXCLUDED_STATUSES)]
+        before  = len(df)
+        df      = df[~df["final_status"].isin(EXCLUDED_STATUSES)]
         removed = before - len(df)
         if removed:
-            logger.info("Removed %d excluded_* tickers from alert pool", removed)
+            logger.info("Removed {} excluded_* tickers from alert pool", removed)
     else:
         logger.debug("final_status column not found — quality filter not applied to alert pool")
 
@@ -116,7 +185,7 @@ def _load_articles_by_ticker(scan_date: str) -> dict[str, list[dict]]:
     """
     articles_path = _NEWS_ARTICLES_DIR / f"{scan_date}.parquet"
     if not articles_path.exists():
-        logger.warning("No articles parquet for %s — news bullets disabled", scan_date)
+        logger.info("No articles parquet for {} — news bullets disabled", scan_date)
         return {}
 
     try:
@@ -127,10 +196,10 @@ def _load_articles_by_ticker(scan_date: str) -> dict[str, list[dict]]:
         for ticker, grp in df.groupby("ticker"):
             clean = str(ticker).replace(".JK", "").replace(".jk", "")
             grouped[clean] = grp.where(grp.notna(), other=None).to_dict(orient="records")
-        logger.info("Loaded articles for %d tickers from %s", len(grouped), articles_path.name)
+        logger.info("Loaded articles for {} tickers from {}", len(grouped), articles_path.name)
         return grouped
     except Exception as exc:
-        logger.error("Failed to load articles parquet: %s", exc)
+        logger.error("Failed to load articles parquet: {}", exc)
         return {}
 
 
@@ -171,12 +240,17 @@ def run_daily_alert(
         send_swing_full  : Send full swing alert (all BREAKOUT+PRE_MARKUP).
         send_daily_report: Generate and send daily .md report (default True).
     """
-    logger.info("=== IDX Daily Alert — %s ===", scan_date)
+    # Resolve scan_date: pipeline saves files under market_date (last real
+    # trading day from data), which may differ from the execution_date the
+    # caller received. _resolve_scan_date walks back to find the right file.
+    scan_date = _resolve_scan_date(scan_date)
+
+    logger.info("=== IDX Daily Alert — {} ===", scan_date)
 
     # 1. Load data
     df = _load_signals(scan_date)
     if df.empty:
-        logger.error("No signal data for %s — aborting.", scan_date)
+        logger.error("No signal data for {} — aborting.", scan_date)
         return
 
     signals = signals_df_to_list(df, scan_date)
@@ -187,7 +261,7 @@ def run_daily_alert(
 
     # ── Deep dive ──────────────────────────────────────────────────────────
     if not top_picks_only:
-        logger.info("Building deep-dive messages (top %d)...", top_n_deep_dive)
+        logger.info("Building deep-dive messages (top {})...", top_n_deep_dive)
         deep_dives = build_all_breakout_deep_dive_messages(
             signals,
             articles_by_ticker=articles_by_ticker,
@@ -195,7 +269,7 @@ def run_daily_alert(
         )
         if deep_dives:
             messages.extend(deep_dives)
-            logger.info("  → %d deep-dive message(s) ready.", len(deep_dives))
+            logger.info("  → {} deep-dive message(s) ready.", len(deep_dives))
         else:
             logger.warning("  → No deep-dive candidates found.")
 
@@ -213,7 +287,7 @@ def run_daily_alert(
         scalp_msgs = format_scalping_alert(signals, scan_date=scan_date)
         if scalp_msgs:
             messages.extend(scalp_msgs)
-            logger.info("  → %d scalping message(s) ready.", len(scalp_msgs))
+            logger.info("  → {} scalping message(s) ready.", len(scalp_msgs))
         else:
             logger.info("  → No SCALPING_HIGH candidates.")
 
@@ -223,14 +297,14 @@ def run_daily_alert(
         swing_msgs = format_swing_full_alert(signals, scan_date=scan_date)
         if swing_msgs:
             messages.extend(swing_msgs)
-            logger.info("  → %d swing message(s) ready.", len(swing_msgs))
+            logger.info("  → {} swing message(s) ready.", len(swing_msgs))
         else:
             logger.info("  → No swing candidates.")
 
     # ── Top picks compact (backward-compat, optional) ──────────────────────
     # Only include if swing_full is NOT sent (to avoid duplication)
     if not send_swing_full or top_picks_only:
-        logger.info("Building top-picks message (top %d)...", top_n_picks)
+        logger.info("Building top-picks message (top {})...", top_n_picks)
         top_picks_msg = build_telegram_top_picks_message(
             signals,
             date=scan_date,
@@ -238,7 +312,7 @@ def run_daily_alert(
         )
         picks_chunks = split_long_message(top_picks_msg, limit=4000)
         messages.extend(picks_chunks)
-        logger.info("  → Top-picks message ready (%d chunk(s)).", len(picks_chunks))
+        logger.info("  → Top-picks message ready ({} chunk(s)).", len(picks_chunks))
 
     # 3. Send text messages (or dry-run print)
     if not messages:
@@ -295,18 +369,18 @@ def _handle_daily_report(
         time.sleep(send_delay)
         res_text = sender.send(report_summary)
         if not res_text:
-            logger.error("Failed to send report summary: %s", res_text.error)
+            logger.error("Failed to send report summary: {}", res_text.error)
 
         time.sleep(send_delay)
         caption = f"📄 IDX Daily Report — {scan_date}"
         res_doc = sender.send_document(report_path, caption=caption)
         if res_doc:
-            logger.info("Daily report document sent: %s", report_path.name)
+            logger.info("Daily report document sent: {}", report_path.name)
         else:
-            logger.error("Failed to send report document: %s", res_doc.error)
+            logger.error("Failed to send report document: {}", res_doc.error)
 
     except Exception as exc:
-        logger.error("Daily report generation/send failed: %s", exc)
+        logger.error("Daily report generation/send failed: {}", exc)
 
 
 def _send_messages(messages: list[str], send_delay: float = _SEND_DELAY_SEC) -> int:

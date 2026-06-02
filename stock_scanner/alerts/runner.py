@@ -290,17 +290,21 @@ def main() -> int:
 
     # Verify output exists
     if not check_scan_output(scan_date):
-        # If no data for today, try most recent date within 3 days
-        for delta in range(1, 4):
+        # Pipeline now saves files under market_date (last trading day), not
+        # execution_date. A long weekend + public holiday can create a 4+ day
+        # gap (e.g. Fri market data after Tue run crossing Mon holiday + weekend).
+        # Extend look-back from 3 → 7 calendar days to cover these cases.
+        for delta in range(1, 8):
             fallback = (date.today() - timedelta(days=delta)).strftime("%Y-%m-%d")
             if check_scan_output(fallback):
                 logger.warning(
-                    "No scan data for %s — falling back to %s", scan_date, fallback
+                    "No scan data for {} — falling back to {} (delta={} day(s))",
+                    scan_date, fallback, delta,
                 )
                 scan_date = fallback
                 break
         else:
-            err = f"No scan data found for {scan_date} or recent dates."
+            err = f"No scan data found for {scan_date} or within 7 days."
             logger.error(err)
             notify_failure("data_check", err)
             return 1
