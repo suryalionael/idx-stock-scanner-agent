@@ -54,6 +54,24 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[scanner]"
 
+      # ── 2b. Write the private universe file from a secret ────────────────
+      # idx_universe.csv is gitignored (private watchlist) so it is NOT in the
+      # checkout. Recreate it from the IDX_UNIVERSE_CSV secret before scanning.
+      # Passing the secret via env (not inline ${{ }}) avoids quoting/injection
+      # issues and lets GitHub mask it in logs.
+      - name: Write universe file from secret
+        env:
+          IDX_UNIVERSE_CSV: ${{ secrets.IDX_UNIVERSE_CSV }}
+        run: |
+          mkdir -p stock_scanner/configs
+          printf '%s\n' "$IDX_UNIVERSE_CSV" > stock_scanner/configs/idx_universe.csv
+          rows=$(grep -cve '^[[:space:]]*$' stock_scanner/configs/idx_universe.csv || true)
+          echo "Universe rows written: $rows"
+          if [ "$rows" -lt 2 ]; then
+            echo "::error::IDX_UNIVERSE_CSV secret is empty or unset — scan will have no tickers."
+            exit 1
+          fi
+
       # ── 3. Restore scan data cache ───────────────────────────────────────
       # Cache key includes the universe file hash so a universe change
       # invalidates the data cache and triggers a fresh download.
