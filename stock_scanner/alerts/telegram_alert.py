@@ -39,6 +39,12 @@ _SIGNALS_DIR = _ROOT / "data" / "signals"
 _TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
 _MAX_MSG_LEN = 4096  # Telegram hard limit per message
 
+# Fallback chat ID (the IDX Scanner Telegram group). The bot TOKEN is the real
+# secret and must always come from TELEGRAM_BOT_TOKEN. The chat ID is not
+# sensitive, so we allow a hardcoded fallback to keep automation running even if
+# TELEGRAM_CHAT_ID is not explicitly set. Prefer the env var when present.
+_DEFAULT_CHAT_ID = "-1003764018733"
+
 # Signal display config
 _SIG_EMOJI = {
     "BREAKOUT":   "🟢",
@@ -70,7 +76,14 @@ class TelegramSender(BaseAlertSender):
         parse_mode: str = "HTML",
     ) -> None:
         self.bot_token = bot_token or os.getenv("TELEGRAM_BOT_TOKEN", "")
-        self.chat_id = chat_id or os.getenv("TELEGRAM_CHAT_ID", "")
+        # Chat ID resolution order: explicit arg → env var → hardcoded group default.
+        env_chat = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+        self.chat_id = chat_id or env_chat or _DEFAULT_CHAT_ID
+        if not chat_id and not env_chat:
+            logger.warning(
+                "TELEGRAM_CHAT_ID not set — falling back to default group {}",
+                _DEFAULT_CHAT_ID,
+            )
         self.parse_mode = parse_mode
 
     @property
@@ -79,11 +92,15 @@ class TelegramSender(BaseAlertSender):
 
     def send(self, message: str) -> AlertResult:
         """Send one message. Truncates to Telegram's 4096-char limit."""
-        if not self.bot_token or not self.chat_id:
+        if not self.bot_token:
             err = (
-                "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set. "
-                "Export both env vars before sending."
+                "TELEGRAM_BOT_TOKEN not set. "
+                "Export it before sending: export TELEGRAM_BOT_TOKEN=<token>"
             )
+            logger.error(err)
+            return AlertResult(success=False, channel=self.channel_name, error=err)
+        if not self.chat_id:
+            err = "No chat ID resolved (TELEGRAM_CHAT_ID empty and no default)."
             logger.error(err)
             return AlertResult(success=False, channel=self.channel_name, error=err)
 
@@ -113,7 +130,7 @@ class TelegramSender(BaseAlertSender):
                 body = json.loads(resp.read())
 
             if body.get("ok"):
-                logger.info("Telegram: message sent (chat_id=%s, len=%d)", self.chat_id, len(text))
+                logger.info("Telegram: message sent (chat_id={}, len={})", self.chat_id, len(text))
                 return AlertResult(success=True, channel=self.channel_name)
             else:
                 err = f"Telegram API error: {body}"
@@ -121,7 +138,7 @@ class TelegramSender(BaseAlertSender):
                 return AlertResult(success=False, channel=self.channel_name, error=err)
 
         except Exception as exc:
-            logger.error("Telegram send failed: %s", exc)
+            logger.error("Telegram send failed: {}", exc)
             return AlertResult(success=False, channel=self.channel_name, error=str(exc))
 
 
@@ -359,6 +376,7 @@ def build_morning_message(scan_date: str, top_n: int = 7) -> str:
     if not ranked.empty:
         # Filter priority signals
         top = ranked[ranked["signal"].isin(_PRIORITY_SIGNALS)].copy()
+        has_priority = not top.empty
         if top.empty:
             top = ranked.copy()  # fallback: show all if no priority signals
 
@@ -368,7 +386,11 @@ def build_morning_message(scan_date: str, top_n: int = 7) -> str:
 
         top = top.head(top_n)
 
-        lines.append(f"<b>🏆 Top {len(top)} Pick Hari Ini</b>")
+        if has_priority:
+            lines.append(f"<b>🏆 Top {len(top)} Pick Hari Ini</b>")
+        else:
+            lines.append("<i>⚪ Tidak ada sinyal prioritas (BREAKOUT/PRE_MARKUP) hari ini.</i>")
+            lines.append(f"<b>👀 Top {len(top)} Watchlist</b>")
         for i, (_, row) in enumerate(top.iterrows(), 1):
             ticker = str(row.get("ticker", "?"))
             sig = str(row.get("signal", ""))
@@ -452,19 +474,42 @@ def main() -> None:
         action="store_true",
         help="Print message to stdout instead of sending to Telegram.",
     )
+    parser.add_argument(
+        "--skip-if-empty",
+        action="store_true",
+        help=(
+            "If no priority signals (BREAKOUT/PRE_MARKUP) are found, skip sending "
+            "entirely. Default behaviour is to still send a short status message "
+            "so you have daily confirmation the job ran."
+        ),
+    )
     args = parser.parse_args()
 
     # Resolve date
     scan_date = args.date or _find_latest_date()
     if scan_date is None:
         logger.error(
-            "No scan data found in %s or %s.\n"
+            "No scan data found in {} or {}. "
             "Run: python -m stock_scanner.pipeline.run_daily_scan",
             _RANKED_DIR, _SIGNALS_DIR,
         )
         raise SystemExit(1)
 
-    logger.info("Building morning alert for scan date: %s", scan_date)
+    logger.info("Building morning alert for scan date: {}", scan_date)
+
+    # Count priority picks for the --skip-if-empty option.
+    ranked, _ = _load_scan(scan_date)
+    n_priority = 0
+    if not ranked.empty and "signal" in ranked.columns:
+        n_priority = int(ranked["signal"].isin(_PRIORITY_SIGNALS).sum())
+
+    if n_priority == 0 and args.skip_if_empty:
+        logger.info(
+            "No priority signals for {} and --skip-if-empty set — skipping send.",
+            scan_date,
+        )
+        return
+
     message = build_morning_message(scan_date, top_n=args.top_n)
 
     if args.dry_run:
@@ -479,9 +524,9 @@ def main() -> None:
     result = sender.send(message)
 
     if result:
-        logger.info("Morning alert sent successfully.")
+        logger.info("Morning alert sent successfully ({} priority pick(s)).", n_priority)
     else:
-        logger.error("Failed to send alert: %s", result.error)
+        logger.error("Failed to send alert: {}", result.error)
         raise SystemExit(1)
 
 
