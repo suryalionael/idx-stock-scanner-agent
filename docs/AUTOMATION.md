@@ -9,7 +9,7 @@ GitHub Actions schedule, the required secrets, and how to verify it works.
 ## TL;DR
 
 - **Scheduler:** GitHub Actions, `.github/workflows/morning-alert.yml`
-- **When:** 08:00 WIB (01:00 UTC), Monday–Friday
+- **When:** 06:00 WIB (23:00 UTC prev day), Monday–Friday
 - **Target group:** `-1003764018733` (default fallback if the chat-id secret is unset)
 - **Local one-command run:** `python scripts/run_daily_signal.py`
 
@@ -50,12 +50,13 @@ python scripts/run_daily_signal.py --skip-scan
 
 | Code | Meaning |
 |---|---|
-| 0 | Sent, dry-run, or intentionally skipped |
+| 0 | Normal alert sent / dry-run / stale notice sent (without `--require-fresh`) / skipped |
 | 1 | Failed to send (e.g. `TELEGRAM_BOT_TOKEN` missing, Telegram API error) |
-| 2 | No scan data available at all |
+| 2 | No fresh data — stale (with `--require-fresh`) or no scan data at all. The stale notice is still sent. |
 
-A scan failure is **non-fatal**: the alert still goes out using the most recent
-cached scan (up to 7 days back), so you always get a morning message.
+A scan failure is **non-fatal** for delivery: the alert step still runs, but the
+freshness guard ensures it sends the **stale notice** (not an old session's
+signals) when the expected trading session's data is missing.
 
 ---
 
@@ -106,12 +107,32 @@ Repo → **Settings → Secrets and variables → Actions → New repository sec
 ```yaml
 on:
   schedule:
-    - cron: "0 1 * * 1-5"   # 08:00 WIB (01:00 UTC), Mon–Fri
-  workflow_dispatch:        # manual trigger from the Actions tab
+    - cron: "0 23 * * 0-4"   # 06:00 WIB, Mon–Fri (23:00 UTC Sun–Thu)
+  workflow_dispatch:         # manual trigger from the Actions tab
 ```
 
-GitHub cron is always **UTC**. WIB = UTC+7, so 08:00 WIB = 01:00 UTC.
-The alert lands before the 09:00 WIB market open.
+GitHub cron is always **UTC**. WIB = UTC+7, so **06:00 WIB = 23:00 UTC the
+previous calendar day**. Firing 06:00 WIB Mon–Fri therefore means 23:00 UTC
+Sun–Thu → cron `0 23 * * 0-4`. The job sets `TZ: Asia/Jakarta` so the runner's
+wall-clock matches the Indonesian calendar day.
+
+### Market data date vs run date (freshness)
+
+At 06:00 WIB the current day's IDX session has not happened yet, so the alert
+reports the **last completed trading session**:
+
+| Run (WIB) | Market data used |
+|---|---|
+| Thursday morning | Wednesday |
+| Monday morning | previous Friday |
+| Morning after a holiday | last valid trading day before it |
+
+A freshness guard compares the latest available scan against that expected
+session. If the data is older (e.g. the provider hasn't published yesterday's
+bar yet), the job sends a short **"Data Belum Update"** notice instead of a
+normal alert and exits `2` (`--require-fresh`). A stale session is therefore
+**never** delivered as a normal morning alert — even if the scan step failed or
+the cache is old.
 
 ### Job flow
 
@@ -150,7 +171,7 @@ python -m stock_scanner.alerts.telegram_alert --date <latest-date>
    - First do a **dry run** (set the `dry_run` input to `true`) — this runs the
      scan and prints the message in the logs without sending.
    - Then run it again with `dry_run=false` to confirm a real message arrives.
-4. Once a manual run posts to the group, the daily 08:00 WIB schedule will do
+4. Once a manual run posts to the group, the daily 06:00 WIB schedule will do
    the same automatically.
 
 > Note: scheduled workflows only run from the **default branch** (`main`), and

@@ -1,15 +1,20 @@
 name: Morning Alert (IDX Scanner)
 
-# Scheduled daily IDX scan + Telegram alert.
+# Scheduled daily IDX scan + Telegram alert at 06:00 WIB.
 #
-# Timezone math: GitHub Actions cron is ALWAYS UTC. WIB = UTC+7.
-#   08:00 WIB = 01:00 UTC  →  cron "0 1 * * 1-5"
-#   (weekdays only: Mon–Fri = 1–5; IDX is closed on weekends)
+# Timezone math: GitHub Actions cron is ALWAYS UTC. WIB = UTC+7, so
+#   06:00 WIB = 23:00 UTC the PREVIOUS calendar day.
+# To fire 06:00 WIB Mon–Fri we therefore schedule 23:00 UTC Sun–Thu:
+#   Mon 06:00 WIB = Sun 23:00 UTC  ... Fri 06:00 WIB = Thu 23:00 UTC
+#   → cron "0 23 * * 0-4"   (UTC days 0–4 = Sun–Thu)
 #
-# The alert lands ~08:00–08:30 WIB, before the 09:00 WIB market open.
+# At 06:00 WIB the current day's IDX session has NOT happened yet, so the alert
+# reports the LAST COMPLETED trading session (e.g. Thursday 06:00 → Wednesday's
+# data). A freshness guard in telegram_alert refuses to send a normal alert if
+# that session's data is not yet available (see --require-fresh below).
 on:
   schedule:
-    - cron: "0 1 * * 1-5"   # 08:00 WIB, Mon–Fri
+    - cron: "0 23 * * 0-4"   # 06:00 WIB, Mon–Fri (23:00 UTC Sun–Thu)
 
   # Allow manual trigger from the GitHub Actions UI — useful for testing.
   workflow_dispatch:
@@ -33,6 +38,10 @@ jobs:
     name: Scan + Telegram Alert
     runs-on: ubuntu-latest
     timeout-minutes: 120   # generous: first run downloads full history (cold cache)
+    # Run the whole job on WIB wall-clock so date.today() in the scan and the
+    # alert's freshness logic agree on the Indonesian calendar day.
+    env:
+      TZ: Asia/Jakarta
 
     steps:
       # ── 1. Checkout ─────────────────────────────────────────────────────
@@ -106,17 +115,20 @@ jobs:
           key: idx-scan-data-${{ runner.os }}-${{ hashFiles('stock_scanner/configs/idx_universe.csv') }}
 
       # ── 6. Send morning alert ────────────────────────────────────────────
-      # if: always() → the alert is sent even if the scan step above failed.
-      # In that case the sender falls back to the most recent cached scan
-      # (up to 7 days back), so you still get a message every morning. A failed
-      # scan still turns the overall job red for visibility.
+      # if: always() → the alert step runs even if the scan failed. The
+      # freshness guard (--require-fresh) compares the latest available scan
+      # against the expected last-completed trading session:
+      #   • fresh  → sends the normal morning alert (exit 0)
+      #   • stale  → sends a short "data belum update" notice, exit 2 (job red)
+      # This guarantees an OLD session is never delivered as a normal alert,
+      # whether the cause is a scan failure, stale cache, or data-provider lag.
       - name: Send morning alert to Telegram
         if: always()
         run: |
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            python -m stock_scanner.alerts.telegram_alert --dry-run
+            python -m stock_scanner.alerts.telegram_alert --dry-run --require-fresh
           else
-            python -m stock_scanner.alerts.telegram_alert
+            python -m stock_scanner.alerts.telegram_alert --require-fresh
           fi
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
