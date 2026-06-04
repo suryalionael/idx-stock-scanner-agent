@@ -1,20 +1,21 @@
 name: Morning Alert (IDX Scanner)
 
-# Scheduled daily IDX scan + Telegram alert at 06:00 WIB.
+# Scheduled daily IDX scan + Telegram alert at 07:00 WIB.
 #
 # Timezone math: GitHub Actions cron is ALWAYS UTC. WIB = UTC+7, so
-#   06:00 WIB = 23:00 UTC the PREVIOUS calendar day.
-# To fire 06:00 WIB Mon–Fri we therefore schedule 23:00 UTC Sun–Thu:
-#   Mon 06:00 WIB = Sun 23:00 UTC  ... Fri 06:00 WIB = Thu 23:00 UTC
-#   → cron "0 23 * * 0-4"   (UTC days 0–4 = Sun–Thu)
+#   07:00 WIB = 00:00 UTC the SAME calendar day.
+# To fire 07:00 WIB Mon–Fri we schedule 00:00 UTC Mon–Fri:
+#   → cron "0 0 * * 1-5"   (UTC days 1–5 = Mon–Fri)
 #
-# At 06:00 WIB the current day's IDX session has NOT happened yet, so the alert
-# reports the LAST COMPLETED trading session (e.g. Thursday 06:00 → Wednesday's
-# data). A freshness guard in telegram_alert refuses to send a normal alert if
-# that session's data is not yet available (see --require-fresh below).
+# 07:00 WIB gives the data provider (yfinance) extra time to publish the prior
+# session's bar versus 06:00, reducing stale-notice mornings. At 07:00 WIB the
+# current day's IDX session has NOT happened yet, so the alert reports the LAST
+# COMPLETED trading session (e.g. Thursday 07:00 → Wednesday's data). A freshness
+# guard in telegram_alert refuses to send a normal alert if that session's data
+# is not yet available (see --require-fresh below).
 on:
   schedule:
-    - cron: "0 23 * * 0-4"   # 06:00 WIB, Mon–Fri (23:00 UTC Sun–Thu)
+    - cron: "0 0 * * 1-5"   # 07:00 WIB, Mon–Fri (00:00 UTC Mon–Fri)
 
   # Allow manual trigger from the GitHub Actions UI — useful for testing.
   workflow_dispatch:
