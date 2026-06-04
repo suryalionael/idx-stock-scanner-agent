@@ -27,12 +27,13 @@ from dashboard.charts import (
 from dashboard.data_loader import (
     available_dates,
     available_dates_unified,
+    available_broker_dates_for_ticker,
+    fetch_broker_summary,
     get_table_df,
     is_remote_mode,
     load_all_ranked,
     load_all_tickers_for_date,
     load_all_tickers_unified,
-    load_broker_for_ticker,
     load_broker_history,
     load_published_payload,
     load_raw,
@@ -61,6 +62,12 @@ from stock_scanner.pipeline.long_term import (
     enrich_df_with_long_term,
 )
 from stock_scanner.reference.issuers import get_company_name, get_sector, ticker_display
+
+# ---------------------------------------------------------------------------
+# Internal config
+# ---------------------------------------------------------------------------
+
+_BROKER_DIR = Path(__file__).parent.parent / "data" / "broker"
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -478,73 +485,223 @@ def render_shareholders_section(ticker: str, scan_date: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Broker section (reusable, with net_lot coloring)
+# Broker section (reusable, with real Index Alpha data)
 # ---------------------------------------------------------------------------
 
-def render_broker_section(ticker: str, scan_date: str) -> None:
-    """Render broker activity panel with colored net_lot.
+def _load_broker_data_from_cache(ticker: str, scan_date: str) -> pd.DataFrame:
+    """Load broker data dari cache parquet file saja (no API calls).
 
-    Fully isolated: any exception shows a friendly message instead of crashing.
+    Path: data/broker/{ticker}_{scan_date}.parquet
+    Returns empty DataFrame jika file tidak ditemukan.
     """
-    try:
-        with st.spinner("Memuat data broker..."):
-            df_broker = load_broker_for_ticker(ticker, scan_date, use_mock=True)
-    except Exception as exc:
-        st.warning(f"⚠️ Data broker tidak dapat dimuat. ({exc})")
-        return
+    from stock_scanner.pipeline.broker_summary import load_broker_summary
 
-    if df_broker.empty:
-        st.caption("Tidak ada data broker untuk ticker ini.")
-        return
+    # Use absolute path from repo root (same as data_loader)
+    return load_broker_summary(ticker, scan_date, _BROKER_DIR)
 
-    # Net total summary badge
-    if "net_lot" in df_broker.columns:
-        net_total = pd.to_numeric(df_broker["net_lot"], errors="coerce").fillna(0).sum()
-        color = "#4ade80" if net_total >= 0 else "#ef4444"
-        sign = "+" if net_total >= 0 else ""
-        st.markdown(
-            f'<span style="color:{color};font-weight:600">'
-            f'Net total: {sign}{net_total:,.0f} lot</span>',
-            unsafe_allow_html=True,
+
+def _format_number(val: float | None, decimals: int = 0) -> str:
+    """Format number dengan thousand separator rapi."""
+    if val is None or pd.isna(val):
+        return "—"
+    if decimals == 0:
+        return f"{int(val):,}"
+    return f"{float(val):,.{decimals}f}"
+
+
+def _format_rp(val) -> str:
+    """Compact Rupiah formatter: T (triliun) / M (miliar) / Jt (juta)."""
+    if val is None or pd.isna(val):
+        return "—"
+    v = float(val)
+    sign = "-" if v < 0 else ""
+    a = abs(v)
+    if a >= 1e12:
+        return f"{sign}Rp {a / 1e12:.2f} T"
+    if a >= 1e9:
+        return f"{sign}Rp {a / 1e9:.2f} M"
+    if a >= 1e6:
+        return f"{sign}Rp {a / 1e6:.1f} Jt"
+    return f"{sign}Rp {a:,.0f}"
+
+
+def _broker_side_table(df: pd.DataFrame, side: str, view_mode: str, has_value: bool) -> pd.DataFrame:
+    """Build a Stockbit-style top-7 buyers/sellers table.
+
+    side      : "buy" | "sell"
+    view_mode : "Net" (rank by net_lot) | "Gross" (rank by gross buy/sell lot)
+    """
+    d = df.copy()
+    if view_mode == "Net":
+        if side == "buy":
+            d = d[d["net_lot"] > 0].sort_values("net_lot", ascending=False)
+        else:
+            d = d[d["net_lot"] < 0].sort_values("net_lot", ascending=True)
+        lot_col, val_col, avg_col = "net_lot", "net_value", None
+    else:  # Gross
+        if side == "buy":
+            d = d.sort_values("buy_lot", ascending=False)
+            lot_col, val_col, avg_col = "buy_lot", "buy_value", "buy_avg_price"
+        else:
+            d = d.sort_values("sell_lot", ascending=False)
+            lot_col, val_col, avg_col = "sell_lot", "sell_value", "sell_avg_price"
+
+    d = d.head(7)
+    if d.empty:
+        return pd.DataFrame()
+
+    out = pd.DataFrame()
+    out["Kode"] = d["broker_code"].astype(str)
+    if "broker_name" in d.columns:
+        out["Broker"] = d["broker_name"].astype(str)
+    out["Lot"] = d[lot_col].apply(_format_number) if lot_col in d.columns else "—"
+    if has_value and val_col in d.columns:
+        out["Value"] = d[val_col].apply(_format_rp)
+    if avg_col and has_value and avg_col in d.columns:
+        out["Avg"] = d[avg_col].apply(lambda x: _format_number(x, decimals=0))
+    return out
+
+
+def render_broker_section(ticker: str, scan_date: str) -> None:
+    """Stockbit-style Broker Summary — inline on the stock's own detail page.
+
+    Real data from the Index Alpha API (cache-first; no mock data). Shows the
+    net summary, top buyers, top sellers, and a full broker activity table with
+    buy/sell value & average price when available.
+    """
+    st.markdown("#### 🏦 Broker Summary")
+
+    dates = available_broker_dates_for_ticker(ticker)
+
+    c1, c2, c3 = st.columns([1.5, 1.4, 1.1])
+    with c1:
+        if dates:
+            sel_date = st.selectbox(
+                "Tanggal data", options=dates, index=0,
+                key=f"brk_date_{ticker}_{scan_date}",
+            )
+        else:
+            sel_date = scan_date
+            st.caption("Belum ada cache broker untuk saham ini.")
+    with c2:
+        view_mode = st.radio(
+            "Mode", ["Net", "Gross"], horizontal=True,
+            key=f"brk_mode_{ticker}_{scan_date}",
+            help="Net = net beli/jual per broker. Gross = total beli/jual per broker.",
+        )
+    with c3:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        refresh = st.button(
+            "🔄 Ambil Index Alpha", key=f"brk_refresh_{ticker}_{scan_date}",
+            help="Ambil data broker terbaru dari Index Alpha API (memakai 1 kuota harian).",
         )
 
-    # Mirror bar chart
-    try:
-        st.plotly_chart(
-            broker_chart(df_broker, ticker),
-            use_container_width=True,
-            key=f"broker_{ticker}_{scan_date}",
+    # Cache-first; only hits the API when refresh is clicked or no cache exists.
+    with st.spinner("Memuat data broker…"):
+        df, err = fetch_broker_summary(ticker, sel_date, force_refresh=bool(refresh))
+
+    # ── Empty / error states (never silent) ─────────────────────────────
+    if df is None or df.empty:
+        if err:
+            st.error(f"⚠️ {err}")
+        else:
+            st.info("ℹ️ Belum ada data broker untuk saham & tanggal ini. "
+                    "Klik **🔄 Ambil Index Alpha** untuk mengambilnya.")
+        return
+    if err:
+        st.warning(f"⚠️ {err}")
+
+    st.caption(f"Sumber: Index Alpha API · {ticker.replace('.JK', '')} · {sel_date}")
+
+    # ── Numeric coercion ─────────────────────────────────────────────────
+    for col in ["buy_lot", "sell_lot", "net_lot", "buy_value", "sell_value",
+                "net_value", "buy_avg_price", "sell_avg_price", "buy_freq", "sell_freq"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    if "net_lot" not in df.columns and {"buy_lot", "sell_lot"} <= set(df.columns):
+        df["net_lot"] = df["buy_lot"].fillna(0) - df["sell_lot"].fillna(0)
+
+    has_value = "net_value" in df.columns and df["net_value"].notna().any()
+
+    # ── Summary metrics ──────────────────────────────────────────────────
+    total_net_lot = df["net_lot"].fillna(0).sum() if "net_lot" in df.columns else 0.0
+    total_net_value = df["net_value"].fillna(0).sum() if has_value else None
+    if total_net_lot > 0:
+        indikasi = "🟢 Akumulasi"
+    elif total_net_lot < 0:
+        indikasi = "🔴 Distribusi"
+    else:
+        indikasi = "⚪ Netral"
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Net Lot", _format_number(total_net_lot))
+    m2.metric("Net Value", _format_rp(total_net_value) if total_net_value is not None else "—")
+    m3.metric("Indikasi", indikasi)
+
+    st.markdown("")
+
+    # ── Top Buyers / Top Sellers (Stockbit-like) ─────────────────────────
+    col_buy, col_sell = st.columns(2)
+    with col_buy:
+        st.markdown("**🟢 Top Buyer**")
+        tb = _broker_side_table(df, "buy", view_mode, has_value)
+        if tb.empty:
+            st.caption("—")
+        else:
+            st.dataframe(tb, use_container_width=True, hide_index=True)
+    with col_sell:
+        st.markdown("**🔴 Top Seller**")
+        ts = _broker_side_table(df, "sell", view_mode, has_value)
+        if ts.empty:
+            st.caption("—")
+        else:
+            st.dataframe(ts, use_container_width=True, hide_index=True)
+
+    # ── Full activity table ──────────────────────────────────────────────
+    with st.expander("📋 Semua broker (detail)"):
+        cols = [c for c in [
+            "broker_code", "broker_name", "buy_lot", "sell_lot", "net_lot",
+            "buy_value", "sell_value", "net_value", "buy_avg_price", "sell_avg_price",
+            "buy_freq", "sell_freq",
+        ] if c in df.columns]
+        d = (
+            df.assign(_abs=lambda x: x["net_lot"].abs())
+            .sort_values("_abs", ascending=False)[cols]
+            .copy()
         )
-    except Exception as e:
-        st.caption(f"Chart broker tidak dapat dimuat: {e}")
+        for c in ["buy_lot", "sell_lot", "net_lot"]:
+            if c in d.columns:
+                d[c] = d[c].apply(_format_number)
+        for c in ["buy_value", "sell_value", "net_value"]:
+            if c in d.columns:
+                d[c] = d[c].apply(_format_rp)
+        for c in ["buy_avg_price", "sell_avg_price"]:
+            if c in d.columns:
+                d[c] = d[c].apply(lambda x: _format_number(x, decimals=0))
+        for c in ["buy_freq", "sell_freq"]:
+            if c in d.columns:
+                d[c] = d[c].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "—")
+        st.dataframe(
+            d, use_container_width=True, hide_index=True,
+            column_config={
+                "broker_code": st.column_config.TextColumn("Kode", width="small"),
+                "broker_name": st.column_config.TextColumn("Broker", width="medium"),
+                "buy_lot": st.column_config.TextColumn("Beli (lot)", width="small"),
+                "sell_lot": st.column_config.TextColumn("Jual (lot)", width="small"),
+                "net_lot": st.column_config.TextColumn("Net (lot)", width="small"),
+                "buy_value": st.column_config.TextColumn("Nilai Beli", width="small"),
+                "sell_value": st.column_config.TextColumn("Nilai Jual", width="small"),
+                "net_value": st.column_config.TextColumn("Net Value", width="small"),
+                "buy_avg_price": st.column_config.TextColumn("Avg Beli", width="small"),
+                "sell_avg_price": st.column_config.TextColumn("Avg Jual", width="small"),
+                "buy_freq": st.column_config.TextColumn("Freq Beli", width="small"),
+                "sell_freq": st.column_config.TextColumn("Freq Jual", width="small"),
+            },
+        )
 
-    # Detailed table with colored net_lot
-    with st.expander("Tabel detail broker"):
-        try:
-            disp_cols = [c for c in ["broker_code", "broker_name", "buy_lot", "sell_lot", "net_lot"]
-                         if c in df_broker.columns]
-            tbl = df_broker[disp_cols].copy()
-
-            # Coerce lot columns to numeric before any styling
-            for col in ["buy_lot", "sell_lot", "net_lot"]:
-                if col in tbl.columns:
-                    tbl[col] = pd.to_numeric(tbl[col], errors="coerce")
-
-            # Try styled render first; fall back to plain table on any Styler error
-            try:
-                styled = _style_broker_table(tbl)
-                st.dataframe(styled, use_container_width=True, hide_index=True)
-            except Exception:
-                # Fallback: add a formatted text column so colors are still implied
-                tbl_plain = tbl.copy()
-                if "net_lot" in tbl_plain.columns:
-                    tbl_plain["net_lot"] = tbl_plain["net_lot"].apply(
-                        lambda x: (f"+{x:,.0f}" if x > 0 else f"{x:,.0f}")
-                        if pd.notna(x) else "—"
-                    )
-                st.dataframe(tbl_plain, use_container_width=True, hide_index=True)
-        except Exception as e:
-            st.caption(f"Tabel broker tidak dapat dimuat: {e}")
+    if not has_value:
+        st.caption("ℹ️ Cache ini versi ringkas (lot saja). Klik **🔄 Ambil Index Alpha** "
+                   "untuk mengambil nilai beli/jual & harga rata-rata.")
 
 
 # ---------------------------------------------------------------------------
@@ -742,38 +899,20 @@ def _fetch_financial_comparison(ticker: str) -> dict:
 def _fetch_broker_intelligence(ticker: str, scan_date: str = "") -> dict:
     """Load broker history and compute accumulation intelligence. Cached 5 min.
 
-    Ketika tidak ada file broker nyata di data/broker/, generates mock multi-day
-    data menggunakan PlaceholderBrokerFetcher (deterministik per ticker+date)
-    supaya Broker Intelligence section tetap bisa ditampilkan untuk demo.
+    Reads ONLY from real cache files (data/broker/{ticker}_{date}.parquet).
+    If insufficient real cache data exists, returns inactive/zero result.
+    No mock fallback — dashboard shows empty state when data unavailable.
+
+    Returns dict with:
+        broker_accumulation_label, broker_accumulation_score, foreign_net_buy_*,
+        big_broker_net_buy_*, top_buyer_brokers, top_seller_brokers, strengths, red_flags
     """
     from stock_scanner.pipeline.broker_intelligence import compute_broker_intelligence
 
+    # Load real multi-day broker history from cache only
     broker_df = load_broker_history(ticker, n_days=20)
 
-    if broker_df.empty:
-        # Tidak ada data nyata — generate mock untuk demo
-        from stock_scanner.pipeline.broker_summary import PlaceholderBrokerFetcher
-        fetcher = PlaceholderBrokerFetcher()
-        base = pd.Timestamp(scan_date) if scan_date else pd.Timestamp.today()
-        frames: list[pd.DataFrame] = []
-        trading_days = 0
-        for i in range(35):                    # ~5 weeks back
-            d = base - pd.Timedelta(days=i)
-            if d.weekday() >= 5:               # skip Sat / Sun
-                continue
-            day_str = d.strftime("%Y-%m-%d")
-            try:
-                df_day = fetcher.fetch(ticker, day_str).copy()
-                df_day["date"] = day_str
-                frames.append(df_day)
-            except Exception:
-                pass
-            trading_days += 1
-            if trading_days >= 20:
-                break
-        if frames:
-            broker_df = pd.concat(frames, ignore_index=True)
-
+    # compute_broker_intelligence returns _INACTIVE_RESULT (all zeros/empty) if broker_df empty
     return compute_broker_intelligence(ticker, broker_df)
 
 
@@ -1680,6 +1819,7 @@ with st.sidebar:
     )
     active_api_key = api_key_input.strip() or None
     st.caption(f"Mode explain: {'🤖 Claude API' if active_api_key else '📋 Rule-based'}")
+
 
 
 # ---------------------------------------------------------------------------
