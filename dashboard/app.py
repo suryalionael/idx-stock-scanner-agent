@@ -27,8 +27,9 @@ from dashboard.charts import (
 from dashboard.data_loader import (
     available_dates,
     available_dates_unified,
-    available_broker_dates_for_ticker,
-    fetch_broker_summary,
+    fetch_broker_latest,
+    fetch_broker_range,
+    broker_range_bounds,
     get_table_df,
     is_remote_mode,
     load_all_ranked,
@@ -562,58 +563,23 @@ def _broker_side_table(df: pd.DataFrame, side: str, view_mode: str, has_value: b
     return out
 
 
-def render_broker_section(ticker: str, scan_date: str) -> None:
-    """Stockbit-style Broker Summary — inline on the stock's own detail page.
+@st.cache_data(ttl=1800, show_spinner=False)
+def _cached_broker_latest(ticker: str):
+    """Cached (30 min) latest-session fetch — avoids re-hitting the API on every
+    Streamlit rerun. Cleared by the Refresh button."""
+    return fetch_broker_latest(ticker)
 
-    Real data from the Index Alpha API (cache-first; no mock data). Shows the
-    net summary, top buyers, top sellers, and a full broker activity table with
-    buy/sell value & average price when available.
-    """
-    st.markdown("#### 🏦 Broker Summary")
 
-    dates = available_broker_dates_for_ticker(ticker)
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_broker_range(ticker: str, from_date: str, to_date: str, investor: str, market: str):
+    """Cached (60 min) historical range fetch. Key = all args (ticker+from+to+
+    investor+market). Historical aggregates are stable, so a long TTL is fine."""
+    return fetch_broker_range(ticker, from_date, to_date, investor=investor, market=market)
 
-    c1, c2, c3 = st.columns([1.5, 1.4, 1.1])
-    with c1:
-        if dates:
-            sel_date = st.selectbox(
-                "Tanggal data", options=dates, index=0,
-                key=f"brk_date_{ticker}_{scan_date}",
-            )
-        else:
-            sel_date = scan_date
-            st.caption("Belum ada cache broker untuk saham ini.")
-    with c2:
-        view_mode = st.radio(
-            "Mode", ["Net", "Gross"], horizontal=True,
-            key=f"brk_mode_{ticker}_{scan_date}",
-            help="Net = net beli/jual per broker. Gross = total beli/jual per broker.",
-        )
-    with c3:
-        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-        refresh = st.button(
-            "🔄 Ambil Index Alpha", key=f"brk_refresh_{ticker}_{scan_date}",
-            help="Ambil data broker terbaru dari Index Alpha API (memakai 1 kuota harian).",
-        )
 
-    # Cache-first; only hits the API when refresh is clicked or no cache exists.
-    with st.spinner("Memuat data broker…"):
-        df, err = fetch_broker_summary(ticker, sel_date, force_refresh=bool(refresh))
-
-    # ── Empty / error states (never silent) ─────────────────────────────
-    if df is None or df.empty:
-        if err:
-            st.error(f"⚠️ {err}")
-        else:
-            st.info("ℹ️ Belum ada data broker untuk saham & tanggal ini. "
-                    "Klik **🔄 Ambil Index Alpha** untuk mengambilnya.")
-        return
-    if err:
-        st.warning(f"⚠️ {err}")
-
-    st.caption(f"Sumber: Index Alpha API · {ticker.replace('.JK', '')} · {sel_date}")
-
-    # ── Numeric coercion ─────────────────────────────────────────────────
+def _render_broker_summary_body(df: pd.DataFrame, key_suffix: str, period_label: str | None = None) -> None:
+    """Shared Stockbit-style body: Net/Gross toggle, summary, top buyer/seller,
+    detail table. Used by both Latest and Historical modes."""
     for col in ["buy_lot", "sell_lot", "net_lot", "buy_value", "sell_value",
                 "net_value", "buy_avg_price", "sell_avg_price", "buy_freq", "sell_freq"]:
         if col in df.columns:
@@ -623,7 +589,11 @@ def render_broker_section(ticker: str, scan_date: str) -> None:
 
     has_value = "net_value" in df.columns and df["net_value"].notna().any()
 
-    # ── Summary metrics ──────────────────────────────────────────────────
+    view_mode = st.radio(
+        "Tampilan", ["Net", "Gross"], horizontal=True, key=f"brk_view_{key_suffix}",
+        help="Net = net beli/jual per broker. Gross = total beli/jual per broker.",
+    )
+
     total_net_lot = df["net_lot"].fillna(0).sum() if "net_lot" in df.columns else 0.0
     total_net_value = df["net_value"].fillna(0).sum() if has_value else None
     if total_net_lot > 0:
@@ -633,14 +603,14 @@ def render_broker_section(ticker: str, scan_date: str) -> None:
     else:
         indikasi = "⚪ Netral"
 
+    net_label = "Net Lot" + (f" · {period_label}" if period_label else "")
     m1, m2, m3 = st.columns(3)
-    m1.metric("Net Lot", _format_number(total_net_lot))
+    m1.metric(net_label, _format_number(total_net_lot))
     m2.metric("Net Value", _format_rp(total_net_value) if total_net_value is not None else "—")
     m3.metric("Indikasi", indikasi)
 
     st.markdown("")
 
-    # ── Top Buyers / Top Sellers (Stockbit-like) ─────────────────────────
     col_buy, col_sell = st.columns(2)
     with col_buy:
         st.markdown("**🟢 Top Buyer**")
@@ -657,7 +627,6 @@ def render_broker_section(ticker: str, scan_date: str) -> None:
         else:
             st.dataframe(ts, use_container_width=True, hide_index=True)
 
-    # ── Full activity table ──────────────────────────────────────────────
     with st.expander("📋 Semua broker (detail)"):
         cols = [c for c in [
             "broker_code", "broker_name", "buy_lot", "sell_lot", "net_lot",
@@ -700,8 +669,102 @@ def render_broker_section(ticker: str, scan_date: str) -> None:
         )
 
     if not has_value:
-        st.caption("ℹ️ Cache ini versi ringkas (lot saja). Klik **🔄 Ambil Index Alpha** "
-                   "untuk mengambil nilai beli/jual & harga rata-rata.")
+        st.caption("ℹ️ Data versi ringkas (lot saja) — nilai beli/jual & harga rata-rata "
+                   "tidak tersedia di cache ini. Klik **🔄 Refresh** untuk mengambil versi lengkap.")
+
+
+def _render_broker_latest(ticker: str, scan_date: str) -> None:
+    """Latest mode: last completed trading session, fresh-first (cache-safe)."""
+    top = st.columns([3, 1])
+    with top[1]:
+        if st.button("🔄 Refresh", key=f"brk_lat_refresh_{ticker}_{scan_date}",
+                     help="Ambil ulang sesi terbaru dari Index Alpha (memakai 1 kuota)."):
+            _cached_broker_latest.clear()
+
+    with st.spinner("Memuat sesi terbaru…"):
+        df, note, info = _cached_broker_latest(ticker)
+
+    if df is None or df.empty:
+        st.error(f"⚠️ {note}" if note else "ℹ️ Belum ada data broker untuk saham ini.")
+        return
+
+    src = info.get("source")
+    badge = {
+        "fresh": "🟢 Fresh (Index Alpha)",
+        "cache": "🗂️ Cache (sesi terbaru)",
+        "fallback": "⚠️ Fallback",
+    }.get(src, "")
+    st.caption(f"Sumber: Index Alpha · {ticker.replace('.JK', '')} · Sesi {info.get('date')} · {badge}")
+    if note:
+        st.warning(f"⚠️ {note}")
+
+    _render_broker_summary_body(df, key_suffix=f"latest_{ticker}_{scan_date}")
+
+
+def _render_broker_historical(ticker: str, scan_date: str) -> None:
+    """Historical mode: period-aggregated broker summary (1W…1Y / custom)."""
+    from datetime import date as _date
+
+    sel = st.radio(
+        "Range", ["1W", "1M", "3M", "6M", "1Y", "Custom"], index=1, horizontal=True,
+        key=f"brk_hist_range_{ticker}_{scan_date}",
+    )
+
+    if sel == "Custom":
+        def_from, def_to = broker_range_bounds("1M")
+        cc1, cc2 = st.columns(2)
+        with cc1:
+            d_from = st.date_input("Dari", value=_date.fromisoformat(def_from),
+                                   key=f"brk_hist_from_{ticker}_{scan_date}")
+        with cc2:
+            d_to = st.date_input("Sampai", value=_date.fromisoformat(def_to),
+                                 key=f"brk_hist_to_{ticker}_{scan_date}")
+        from_date, to_date = d_from.strftime("%Y-%m-%d"), d_to.strftime("%Y-%m-%d")
+        if from_date > to_date:
+            st.error("❌ Tanggal 'Dari' harus lebih awal atau sama dengan 'Sampai'.")
+            return
+    else:
+        from_date, to_date = broker_range_bounds(sel)
+
+    cap, ref = st.columns([3, 1])
+    with cap:
+        st.caption(f"Periode: **{from_date} → {to_date}** · agregat Index Alpha (RG sejak Jun 2025)")
+    with ref:
+        if st.button("🔄 Refresh", key=f"brk_hist_refresh_{ticker}_{scan_date}",
+                     help="Ambil ulang periode ini dari Index Alpha (memakai 1 kuota)."):
+            _cached_broker_range.clear()
+
+    with st.spinner("Memuat broker summary historical…"):
+        df, err = _cached_broker_range(ticker, from_date, to_date, "all", "RG")
+
+    if df is None or df.empty:
+        st.error(f"⚠️ {err}" if err else "ℹ️ Tidak ada data broker untuk periode ini.")
+        return
+    if err:
+        st.warning(f"⚠️ {err}")
+
+    _render_broker_summary_body(
+        df, key_suffix=f"hist_{ticker}_{scan_date}",
+        period_label=(sel if sel != "Custom" else "periode"),
+    )
+
+
+def render_broker_section(ticker: str, scan_date: str) -> None:
+    """Stockbit-style Broker Summary — inline on the stock's own detail page.
+
+    Two modes (default Latest), both real data from the Index Alpha API:
+      • Latest     — last completed trading session, fresh-first (cache-safe).
+      • Historical — period aggregate (1W/1M/3M/6M/1Y/Custom) via from/to.
+    """
+    st.markdown("#### 🏦 Broker Summary")
+    mode = st.radio(
+        "Mode broker", ["Latest", "Historical"], horizontal=True,
+        key=f"brk_main_mode_{ticker}_{scan_date}", label_visibility="collapsed",
+    )
+    if mode == "Latest":
+        _render_broker_latest(ticker, scan_date)
+    else:
+        _render_broker_historical(ticker, scan_date)
 
 
 # ---------------------------------------------------------------------------
