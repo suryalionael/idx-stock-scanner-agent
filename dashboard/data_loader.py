@@ -16,6 +16,7 @@ from datetime import date
 from typing import Any
 
 import pandas as pd
+import yaml
 
 # ---------------------------------------------------------------------------
 # Data source config
@@ -49,6 +50,7 @@ _NEWS_ARTICLES_DIR = _ROOT / "data" / "news" / "articles"
 _FOREIGN_DIR       = _ROOT / "data" / "foreign"
 _BROKER_DIR        = _ROOT / "data" / "broker"
 _FUNDAMENTALS_DIR  = _ROOT / "data" / "fundamentals"
+_BROKER_CONFIG     = _ROOT / "stock_scanner" / "configs" / "broker_config.yaml"
 
 # Kolom tabel utama (urutan display) — termasuk kolom baru
 TABLE_COLS = [
@@ -68,6 +70,58 @@ HISTORY_COLS = [
     "close", "rsi14", "vol_ratio_20d", "pct_from_52w_high",
     "news_sentiment_score", "foreign_flow_score",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Broker Config
+# ---------------------------------------------------------------------------
+
+def load_broker_config() -> dict:
+    """Load broker_config.yaml untuk Broker Analytics modul.
+
+    Returns:
+        dict dengan structure:
+        {
+          'broker_groups': {
+            'foreign': {'codes': [...], 'description': ...},
+            'institution': {...},
+            'retail': {...},
+            'big_local': {...},
+            'local': {...}
+          },
+          'metrics': {
+            'far': {'thresholds': {...}, 'description': ...},
+            'retail_ratio': {...},
+            'ridr': {...},
+            'smart_money_score': {...}
+          },
+          'display': {...}
+        }
+
+    Returns empty dict jika file tidak ditemukan atau gagal parse.
+    """
+    if not _BROKER_CONFIG.exists():
+        import warnings
+        warnings.warn(
+            f"broker_config.yaml tidak ditemukan di {_BROKER_CONFIG}. "
+            f"Broker Analytics tidak tersedia. Jalankan setup untuk membuat file ini.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return {}
+
+    try:
+        with open(_BROKER_CONFIG, "r") as f:
+            config = yaml.safe_load(f) or {}
+        return config
+    except Exception as e:
+        import warnings
+        warnings.warn(
+            f"Gagal load broker_config.yaml: {e}",
+            UserWarning,
+            stacklevel=2,
+        )
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -232,23 +286,118 @@ def get_table_df(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Broker data
+# Broker data — REAL Index Alpha API (cache-first). No mock data.
 # ---------------------------------------------------------------------------
+#
+# Source of truth: Index Alpha API
+#   GET https://api.indexalpha.id/stocks/broker-summary
+#   params: ticker, from, to, investor (all|f|or|d), market (RG|NG|ALL)
+# Service layer: stock_scanner/pipeline/fetch_indexalpha.py (IndexAlphaFetcher)
+# Auth: env var INDEX_ALPHA_API_KEY (free plan = 5 requests/day → cache-first).
+#
+# Cache: data/broker/{TICKER}.JK_{YYYY-MM-DD}.parquet
+# Normalized columns:
+#   broker_code, broker_name, buy_lot, sell_lot, net_lot,
+#   buy_value, sell_value, net_value, buy_avg_price, sell_avg_price,
+#   buy_freq, sell_freq
 
-def load_broker_for_ticker(ticker: str, selected_date: str, use_mock: bool = True) -> pd.DataFrame:
-    """Load broker summary untuk ticker + tanggal.
 
-    Jika tidak ada file nyata dan use_mock=True, kembalikan mock data.
+def _broker_cache_file(ticker: str, date: str) -> Path:
+    """Canonical broker cache path (consistent with fetch_indexalpha)."""
+    clean = ticker.upper().replace(".JK", "").strip()
+    return _BROKER_DIR / f"{clean}.JK_{date}.parquet"
+
+
+def available_broker_dates_for_ticker(ticker: str) -> list[str]:
+    """Cached broker dates for ONE ticker, newest first. No API call."""
+    if not _BROKER_DIR.exists():
+        return []
+    clean = ticker.upper().replace(".JK", "").strip()
+    dates: set[str] = set()
+    from datetime import datetime as _dt
+    for pattern in (f"{clean}.JK_*.parquet", f"{clean}_*.parquet"):
+        for f in _BROKER_DIR.glob(pattern):
+            parts = f.stem.rsplit("_", 1)
+            if len(parts) == 2:
+                try:
+                    _dt.strptime(parts[1], "%Y-%m-%d")
+                    dates.add(parts[1])
+                except ValueError:
+                    continue
+    return sorted(dates, reverse=True)
+
+
+def fetch_broker_summary(
+    ticker: str,
+    date: str,
+    investor: str = "all",
+    market: str = "RG",
+    force_refresh: bool = False,
+) -> tuple[pd.DataFrame, str | None]:
+    """Real Index Alpha broker summary for ticker+date, CACHE-FIRST.
+
+    Returns (df, error). `error` is None on success, else a human-readable
+    message for the UI (never raises). Quota-safe: only calls the API when no
+    cache exists or force_refresh=True.
+
+    Args:
+        ticker        : IDX ticker (with/without .JK).
+        date          : "YYYY-MM-DD".
+        investor      : "all" | "f" (foreign) | "d" (domestic) | "or".
+        market        : "RG" | "NG" | "ALL".
+        force_refresh : True = hit the API even if cache exists (uses 1 quota).
     """
-    from stock_scanner.pipeline.broker_summary import get_broker_summary, PlaceholderBrokerFetcher
-    return get_broker_summary(
-        ticker=ticker,
-        date=selected_date,
-        broker_dir=_BROKER_DIR,
-        fetcher=PlaceholderBrokerFetcher() if use_mock else None,
-        top_n=10,
-        use_mock_if_empty=use_mock,
-    )
+    cache_path = _broker_cache_file(ticker, date)
+
+    # 1) Cache hit (and not forcing a refresh) → real cached Index Alpha data.
+    if cache_path.exists() and not force_refresh:
+        try:
+            return pd.read_parquet(cache_path), None
+        except Exception as exc:  # noqa: BLE001
+            return pd.DataFrame(), f"Gagal membaca cache broker: {exc}"
+
+    # 2) Need the API. Require a key — otherwise fall back to cache or warn.
+    if not os.environ.get("INDEX_ALPHA_API_KEY", "").strip():
+        if cache_path.exists():
+            try:
+                return pd.read_parquet(cache_path), None
+            except Exception:  # noqa: BLE001
+                pass
+        return pd.DataFrame(), (
+            "INDEX_ALPHA_API_KEY belum diset. Set environment variable "
+            "INDEX_ALPHA_API_KEY untuk mengambil data broker dari Index Alpha."
+        )
+
+    # 3) Call the Index Alpha service layer (caches the parquet on success).
+    try:
+        from stock_scanner.pipeline.fetch_indexalpha import fetch_with_cache
+        df = fetch_with_cache(
+            ticker, date, _BROKER_DIR,
+            investor=investor, market=market, force_refresh=force_refresh,
+        )
+    except Exception as exc:  # noqa: BLE001
+        if cache_path.exists():
+            try:
+                return pd.read_parquet(cache_path), None
+            except Exception:  # noqa: BLE001
+                pass
+        return pd.DataFrame(), f"Gagal mengambil data dari Index Alpha: {exc}"
+
+    if df is None or df.empty:
+        return pd.DataFrame(), (
+            f"Tidak ada data broker dari Index Alpha untuk {ticker} @ {date}. "
+            "Kemungkinan bukan hari bursa, di luar cakupan data, atau kuota harian habis."
+        )
+    return df, None
+
+
+def load_broker_for_ticker(ticker: str, selected_date: str, use_mock: bool = False) -> pd.DataFrame:
+    """[DEPRECATED] Cache-first broker load. Mock removed — use fetch_broker_summary().
+
+    Kept for backward compatibility. `use_mock` is ignored (always real data).
+    """
+    df, _ = fetch_broker_summary(ticker, selected_date)
+    return df
 
 
 def load_broker_history(ticker: str, n_days: int = 20) -> pd.DataFrame:
@@ -313,6 +462,79 @@ def load_broker_history(ticker: str, n_days: int = 20) -> pd.DataFrame:
         )
 
     return combined
+
+
+def available_broker_dates() -> list[str]:
+    """Scan broker directory dan return daftar tanggal unik tersedia.
+
+    Tujuan: Discover tanggal apa saja yang ada broker data di cache.
+
+    Returns:
+        List of date strings (YYYY-MM-DD), sorted descending (newest first).
+        Empty list jika tidak ada broker files.
+
+    Logic:
+        1. Scan data/broker/*.parquet
+        2. Extract date dari filename {TICKER}.JK_{YYYY-MM-DD}.parquet
+        3. Deduplicate dan sort descending.
+    """
+    if not _BROKER_DIR.exists():
+        return []
+
+    files = list(_BROKER_DIR.glob("*.parquet"))
+    dates_set = set()
+
+    for f in files:
+        stem = f.stem
+        # Format: {TICKER}.JK_{YYYY-MM-DD}
+        parts = stem.rsplit("_", 1)  # split from right to isolate date
+        if len(parts) == 2:
+            date_str = parts[1]
+            # Validate date format
+            try:
+                from datetime import datetime
+                datetime.strptime(date_str, "%Y-%m-%d")
+                dates_set.add(date_str)
+            except ValueError:
+                continue
+
+    return sorted(dates_set, reverse=True)
+
+
+def load_broker_history_for_ticker(
+    ticker: str,
+    date_start: str | None = None,
+    date_end: str | None = None,
+    n_days: int = 20,
+) -> pd.DataFrame:
+    """Load broker history untuk satu ticker dengan opsi fleksibel.
+
+    Tujuan: Wrapper sederhana untuk ambil broker history dengan dua modus:
+    1. Recent mode: last n_days (default)
+    2. Range mode: specific [date_start, date_end]
+
+    Args:
+        ticker      : IDX ticker (dengan atau tanpa .JK)
+        date_start  : YYYY-MM-DD (optional, untuk range mode)
+        date_end    : YYYY-MM-DD (optional, untuk range mode)
+        n_days      : default 20, dipakai jika date_start/end tidak ada
+
+    Returns:
+        DataFrame dengan kolom: date, broker_code, broker_name, buy_lot, sell_lot, net_lot
+        Sorted ascending by date (oldest first).
+        Empty DataFrame jika tidak ada data.
+
+    Logic:
+        - Jika date_start dan date_end ada: gunakan range mode
+        - Otherwise: gunakan recent n_days mode
+    """
+    # Range mode
+    if date_start and date_end:
+        from stock_scanner.pipeline.broker_analytics import load_broker_history_multi_day
+        return load_broker_history_multi_day(ticker, date_start, date_end)
+
+    # Recent mode (existing behavior)
+    return load_broker_history(ticker, n_days)
 
 
 # ---------------------------------------------------------------------------
