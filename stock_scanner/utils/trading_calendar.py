@@ -18,7 +18,7 @@ Tanpa external dependency — hanya stdlib.
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 # ---------------------------------------------------------------------------
@@ -213,3 +213,45 @@ def market_date_for_execution(execution_date: Optional[date] = None) -> date:
     if execution_date is None:
         execution_date = date.today()
     return last_trading_day(execution_date)
+
+
+def previous_trading_day(d: date, max_lookback_days: int = 14) -> date:
+    """Hari bursa terakhir STRICTLY sebelum d (exclusive).
+
+    Berbeda dengan last_trading_day() yang inklusif: fungsi ini selalu mundur
+    minimal satu hari, lalu skip weekend/libur.
+
+    Contoh:
+        previous_trading_day(Kamis)  -> Rabu (jika Rabu trading)
+        previous_trading_day(Senin)  -> Jumat sebelumnya
+        previous_trading_day(hari setelah libur) -> trading day valid terakhir
+    """
+    return last_trading_day(d - timedelta(days=1), max_lookback_days=max_lookback_days)
+
+
+# IDX regular session closes ~16:00 WIB. Add a buffer for the data provider to
+# publish the daily bar before we consider "today" a completed session.
+IDX_CLOSE_HOUR_WIB = 17
+
+
+def expected_market_date(now_wib: datetime, close_hour_wib: int = IDX_CLOSE_HOUR_WIB) -> date:
+    """Sesi bursa TERAKHIR YANG SUDAH SELESAI relatif terhadap `now_wib`.
+
+    Aturan:
+      - Untuk morning alert (jalan pagi, sebelum sesi hari ini selesai) →
+        kembalikan hari bursa SEBELUM hari ini (mis. Kamis pagi → Rabu).
+      - Setelah jam tutup bursa (>= close_hour_wib) pada hari bursa, sesi hari
+        ini dianggap selesai → kembalikan hari ini.
+      - Weekend & libur otomatis di-skip.
+
+    Args:
+        now_wib       : waktu sekarang dalam zona WIB (timezone-aware atau naive-WIB).
+        close_hour_wib: jam (WIB) setelah mana sesi hari ini dianggap selesai.
+
+    Returns:
+        Tanggal sesi bursa terakhir yang sudah selesai.
+    """
+    today = now_wib.date()
+    if is_trading_day(today) and now_wib.hour >= close_hour_wib:
+        return today
+    return previous_trading_day(today)

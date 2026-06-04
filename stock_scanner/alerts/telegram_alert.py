@@ -19,8 +19,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 import textwrap
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,16 @@ import pandas as pd
 from loguru import logger
 
 from stock_scanner.alerts.base import AlertResult, BaseAlertSender
+from stock_scanner.utils.trading_calendar import expected_market_date
+
+# WIB is a fixed UTC+7 offset (Indonesia has no DST), so this is always correct
+# regardless of the machine/runner timezone — no tzdata dependency needed.
+_WIB = timezone(timedelta(hours=7))
+
+
+def now_wib() -> datetime:
+    """Current time in WIB (Asia/Jakarta), timezone-aware."""
+    return datetime.now(_WIB)
 
 # ---------------------------------------------------------------------------
 # Paths (resolved relative to repo root)
@@ -328,12 +339,22 @@ def _day_name_id(dt: date) -> str:
     return names[dt.weekday()]
 
 
-def build_morning_message(scan_date: str, top_n: int = 7) -> str:
+def build_morning_message(
+    scan_date: str,
+    top_n: int = 7,
+    run_date: date | None = None,
+) -> str:
     """Build the morning alert HTML message for Telegram.
 
+    The header explicitly distinguishes the SEND date (today, when the alert is
+    delivered) from the MARKET DATA date (the last completed trading session the
+    signals are based on), so a Thursday-morning alert about Wednesday's session
+    is never mistaken for stale data.
+
     Args:
-        scan_date: 'YYYY-MM-DD' string — which day's scan to use.
+        scan_date: 'YYYY-MM-DD' — market data date (last completed trading session).
         top_n    : How many top tickers to list.
+        run_date : The send date (defaults to today in WIB).
 
     Returns:
         HTML-formatted string ready for Telegram parse_mode=HTML.
@@ -343,14 +364,17 @@ def build_morning_message(scan_date: str, top_n: int = 7) -> str:
     # Use signals for distribution if available, else ranked
     dist_source = signals if not signals.empty else ranked
 
-    # --- Header ---
-    dt = datetime.strptime(scan_date, "%Y-%m-%d").date()
-    day_name = _day_name_id(dt)
-    date_str = dt.strftime("%d %b %Y")
+    # --- Header: run date (send) vs market data date ---
+    if run_date is None:
+        run_date = now_wib().date()
+    market_dt = datetime.strptime(scan_date, "%Y-%m-%d").date()
+
+    run_str    = f"{_day_name_id(run_date)}, {run_date.strftime('%d %b %Y')}"
+    market_str = f"{_day_name_id(market_dt)}, {market_dt.strftime('%d %b %Y')}"
 
     lines: list[str] = [
         "📊 <b>IDX Morning Alert</b>",
-        f"<i>{day_name}, {date_str} — Scan: {scan_date}</i>",
+        f"<i>{run_str} — Data market: {market_str}</i>",
         "",
     ]
 
@@ -428,7 +452,7 @@ def build_morning_message(scan_date: str, top_n: int = 7) -> str:
         lines.append("")
 
     # --- Footer ---
-    now_str = datetime.now().strftime("%H:%M WIB")
+    now_str = now_wib().strftime("%H:%M WIB")
     lines += [
         "─────────────────────",
         f"<i>📡 Dikirim: {now_str}</i>",
@@ -438,97 +462,211 @@ def build_morning_message(scan_date: str, top_n: int = 7) -> str:
     return "\n".join(lines)
 
 
+def build_stale_message(
+    expected_md: date,
+    latest_md: date | None,
+    run_date: date | None = None,
+) -> str:
+    """Build a short STATUS message used when the freshest scan is stale.
+
+    Sent INSTEAD of the normal morning alert so the user is explicitly told the
+    data for the expected session is not available yet (rather than silently
+    receiving an old session's signals).
+
+    Args:
+        expected_md: the market date we expected (last completed session).
+        latest_md  : the latest market date actually available (or None).
+        run_date   : the send date (defaults to today in WIB).
+    """
+    if run_date is None:
+        run_date = now_wib().date()
+    now_str = now_wib().strftime("%H:%M WIB")
+
+    run_str = f"{_day_name_id(run_date)}, {run_date.strftime('%d %b %Y')}"
+    exp_str = f"{_day_name_id(expected_md)}, {expected_md.strftime('%d %b %Y')}"
+    latest_str = (
+        f"{_day_name_id(latest_md)}, {latest_md.strftime('%d %b %Y')}"
+        if latest_md is not None else "tidak ada"
+    )
+
+    return "\n".join([
+        "⚠️ <b>IDX Morning Alert — Data Belum Update</b>",
+        f"<i>{run_str} · {now_str}</i>",
+        "",
+        f"<code>Sesi diharapkan : {exp_str}</code>",
+        f"<code>Data tersedia   : {latest_str}</code>",
+        "",
+        "Data sesi bursa terakhir belum masuk (kemungkinan lag penyedia data).",
+        "Morning alert normal <b>ditunda</b> agar tidak mengirim data lama.",
+        "─────────────────────",
+        "<i>🤖 IDX Scanner Agent</i>",
+    ])
+
+
+# ---------------------------------------------------------------------------
+# Freshness resolution
+# ---------------------------------------------------------------------------
+
+def resolve_alert_target(date_arg: str | None, now: datetime | None = None) -> dict:
+    """Decide what the alert should report and whether the data is fresh.
+
+    The freshness check is the root-cause fix for "Thursday morning but
+    Scan: 2026-06-02": it compares the latest available scan against the
+    EXPECTED market date (last completed trading session) and flags stale data
+    so an old session is never sent as a normal morning alert.
+
+    Args:
+        date_arg: explicit --date override (YYYY-MM-DD) or None for auto.
+        now     : current time (defaults to now in WIB).
+
+    Returns:
+        dict with keys:
+          run_date  (date)        — send date in WIB
+          expected  (date)        — last completed trading session
+          scan_date (str | None)  — date string to report
+          latest_md (date | None) — latest available market date
+          verdict   (str)         — "fresh" | "stale" | "nodata" | "manual"
+    """
+    if now is None:
+        now = now_wib()
+    run_date = now.date()
+    expected = expected_market_date(now)
+
+    # Explicit override — trust the caller, skip the freshness gate.
+    if date_arg:
+        return {
+            "run_date": run_date, "expected": expected, "scan_date": date_arg,
+            "latest_md": datetime.strptime(date_arg, "%Y-%m-%d").date(),
+            "verdict": "manual",
+        }
+
+    latest = _find_latest_date()
+    if latest is None:
+        return {
+            "run_date": run_date, "expected": expected, "scan_date": None,
+            "latest_md": None, "verdict": "nodata",
+        }
+
+    latest_md = datetime.strptime(latest, "%Y-%m-%d").date()
+    verdict = "fresh" if latest_md >= expected else "stale"
+    return {
+        "run_date": run_date, "expected": expected, "scan_date": latest,
+        "latest_md": latest_md, "verdict": verdict,
+    }
+
+
+def _print_dry(message: str) -> None:
+    print("\n" + "=" * 50)
+    print("DRY RUN — message NOT sent to Telegram")
+    print("=" * 50)
+    print(message)
+    print("=" * 50)
+
+
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(
         description="IDX Stock Scanner — Morning Alert via Telegram",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent("""
             Environment variables:
               TELEGRAM_BOT_TOKEN   Bot token from @BotFather
-              TELEGRAM_CHAT_ID     Chat / group / channel ID
+              TELEGRAM_CHAT_ID     Chat / group / channel ID (falls back to default group)
+
+            Freshness:
+              The alert auto-resolves the latest scan and compares it to the last
+              completed trading session (WIB-aware). If the data is older than
+              expected it sends a short STALE notice instead of a normal alert.
+              Pass --require-fresh to also exit non-zero (2) on stale data.
+
+            Exit codes:
+              0  normal alert sent / dry-run / stale notice sent (without --require-fresh)
+              1  send failure or no scan data at all
+              2  data stale and --require-fresh set (stale notice still sent)
 
             Examples:
               python -m stock_scanner.alerts.telegram_alert
               python -m stock_scanner.alerts.telegram_alert --dry-run
+              python -m stock_scanner.alerts.telegram_alert --require-fresh
               python -m stock_scanner.alerts.telegram_alert --date 2026-05-09
         """),
     )
-    parser.add_argument(
-        "--date",
-        type=str,
-        default=None,
-        help="Scan date to use (YYYY-MM-DD). Default: latest available.",
-    )
-    parser.add_argument(
-        "--top-n",
-        type=int,
-        default=7,
-        help="Number of top picks to include (default: 7).",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print message to stdout instead of sending to Telegram.",
-    )
-    parser.add_argument(
-        "--skip-if-empty",
-        action="store_true",
-        help=(
-            "If no priority signals (BREAKOUT/PRE_MARKUP) are found, skip sending "
-            "entirely. Default behaviour is to still send a short status message "
-            "so you have daily confirmation the job ran."
-        ),
-    )
+    parser.add_argument("--date", type=str, default=None,
+                        help="Market data date to report (YYYY-MM-DD). Default: latest available. "
+                             "Bypasses the freshness check.")
+    parser.add_argument("--top-n", type=int, default=7,
+                        help="Number of top picks to include (default: 7).")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Print message to stdout instead of sending to Telegram.")
+    parser.add_argument("--skip-if-empty", action="store_true",
+                        help="If no priority signals (BREAKOUT/PRE_MARKUP), skip sending the normal alert.")
+    parser.add_argument("--require-fresh", action="store_true",
+                        help="Exit code 2 if the data is stale (after sending the stale notice). "
+                             "Use in CI so stale days show as a failed job.")
     args = parser.parse_args()
 
-    # Resolve date
-    scan_date = args.date or _find_latest_date()
-    if scan_date is None:
+    target = resolve_alert_target(args.date)
+    run_date, expected = target["run_date"], target["expected"]
+    scan_date, latest_md, verdict = target["scan_date"], target["latest_md"], target["verdict"]
+
+    # ── Observability: log every input to the freshness decision ─────────
+    logger.info("Run date (WIB)        : {}", run_date)
+    logger.info("Expected market date  : {}", expected)
+    logger.info("Latest available scan : {}", scan_date or "NONE")
+    logger.info("Freshness verdict     : {}", verdict.upper())
+
+    # ── No data at all ───────────────────────────────────────────────────
+    if verdict == "nodata":
         logger.error(
-            "No scan data found in {} or {}. "
-            "Run: python -m stock_scanner.pipeline.run_daily_scan",
+            "No scan data found in {} or {}. Run the scan first: "
+            "python -m stock_scanner.pipeline.run_daily_scan",
             _RANKED_DIR, _SIGNALS_DIR,
         )
-        raise SystemExit(1)
+        return 1
 
-    logger.info("Building morning alert for scan date: {}", scan_date)
+    # ── Stale: send a status notice INSTEAD of the normal alert ──────────
+    if verdict == "stale":
+        logger.warning(
+            "STALE DATA: latest scan {} is older than expected session {}. "
+            "Withholding normal morning alert.", scan_date, expected,
+        )
+        msg = build_stale_message(expected, latest_md, run_date)
+        if args.dry_run:
+            _print_dry(msg)
+            return 0
+        result = TelegramSender().send(msg)
+        if not result:
+            logger.error("Failed to send stale notice: {}", result.error)
+            return 1
+        logger.info("Stale notice sent to Telegram.")
+        return 2 if args.require_fresh else 0
 
-    # Count priority picks for the --skip-if-empty option.
+    # ── Fresh (or manual --date): build + send the normal alert ──────────
+    logger.info("Building morning alert — market data {} (verdict={}).", scan_date, verdict)
     ranked, _ = _load_scan(scan_date)
     n_priority = 0
     if not ranked.empty and "signal" in ranked.columns:
         n_priority = int(ranked["signal"].isin(_PRIORITY_SIGNALS).sum())
 
     if n_priority == 0 and args.skip_if_empty:
-        logger.info(
-            "No priority signals for {} and --skip-if-empty set — skipping send.",
-            scan_date,
-        )
-        return
+        logger.info("No priority signals and --skip-if-empty set — skipping send.")
+        return 0
 
-    message = build_morning_message(scan_date, top_n=args.top_n)
-
+    message = build_morning_message(scan_date, top_n=args.top_n, run_date=run_date)
     if args.dry_run:
-        print("\n" + "=" * 50)
-        print("DRY RUN — message NOT sent to Telegram")
-        print("=" * 50)
-        print(message)
-        print("=" * 50)
-        return
+        _print_dry(message)
+        return 0
 
-    sender = TelegramSender()
-    result = sender.send(message)
-
+    result = TelegramSender().send(message)
     if result:
         logger.info("Morning alert sent successfully ({} priority pick(s)).", n_priority)
-    else:
-        logger.error("Failed to send alert: {}", result.error)
-        raise SystemExit(1)
+        return 0
+    logger.error("Failed to send alert: {}", result.error)
+    return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

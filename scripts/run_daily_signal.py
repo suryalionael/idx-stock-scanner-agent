@@ -47,10 +47,12 @@ sys.path.insert(0, str(_ROOT))
 
 from stock_scanner.alerts.telegram_alert import (  # noqa: E402
     TelegramSender,
-    _find_latest_date,
     _load_scan,
     _PRIORITY_SIGNALS,
+    _print_dry,
     build_morning_message,
+    build_stale_message,
+    resolve_alert_target,
 )
 
 
@@ -92,6 +94,8 @@ def main() -> int:
                         help="Print the message to stdout instead of sending to Telegram.")
     parser.add_argument("--skip-if-empty", action="store_true",
                         help="If no priority signals (BREAKOUT/PRE_MARKUP), skip sending.")
+    parser.add_argument("--require-fresh", action="store_true",
+                        help="Exit code 2 if the data is stale (after sending the stale notice).")
     args = parser.parse_args()
 
     logger.info("=" * 60)
@@ -104,17 +108,36 @@ def main() -> int:
     else:
         _run_scan()  # failure is logged but non-fatal; we fall back to cache
 
-    # ── Resolve which date to report ─────────────────────────────────────
-    scan_date = args.date or _find_latest_date()
-    if scan_date is None:
-        logger.error(
-            "No scan data found at all. Run the scan first: "
-            "python -m stock_scanner.pipeline.run_daily_scan"
-        )
-        return 2
-    logger.info("Reporting scan date: {}", scan_date)
+    # ── Step 2: Resolve target + freshness verdict ───────────────────────
+    target = resolve_alert_target(args.date)
+    run_date, expected = target["run_date"], target["expected"]
+    scan_date, latest_md, verdict = target["scan_date"], target["latest_md"], target["verdict"]
 
-    # ── Count priority picks (for logging + --skip-if-empty) ─────────────
+    logger.info("Run date (WIB)        : {}", run_date)
+    logger.info("Expected market date  : {}", expected)
+    logger.info("Latest available scan : {}", scan_date or "NONE")
+    logger.info("Freshness verdict     : {}", verdict.upper())
+
+    if verdict == "nodata":
+        logger.error("No scan data found at all. Run: python -m stock_scanner.pipeline.run_daily_scan")
+        return 2
+
+    # ── Stale: send a status notice instead of the normal alert ──────────
+    if verdict == "stale":
+        logger.warning("STALE DATA: latest {} older than expected {} — withholding normal alert.",
+                       scan_date, expected)
+        msg = build_stale_message(expected, latest_md, run_date)
+        if args.dry_run:
+            _print_dry(msg)
+            return 0
+        result = TelegramSender().send(msg)
+        if not result:
+            logger.error("Failed to send stale notice: {}", result.error)
+            return 1
+        logger.info("Stale notice sent to Telegram.")
+        return 2 if args.require_fresh else 0
+
+    # ── Fresh / manual: build + send the normal alert ────────────────────
     ranked, _ = _load_scan(scan_date)
     n_priority = 0
     if not ranked.empty and "signal" in ranked.columns:
@@ -125,19 +148,12 @@ def main() -> int:
         logger.info("No priority signals and --skip-if-empty set — skipping send.")
         return 0
 
-    # ── Step 2: Build + send ─────────────────────────────────────────────
-    message = build_morning_message(scan_date, top_n=args.top_n)
-
+    message = build_morning_message(scan_date, top_n=args.top_n, run_date=run_date)
     if args.dry_run:
-        print("\n" + "=" * 50)
-        print("DRY RUN — message NOT sent to Telegram")
-        print("=" * 50)
-        print(message)
-        print("=" * 50)
+        _print_dry(message)
         return 0
 
-    sender = TelegramSender()
-    result = sender.send(message)
+    result = TelegramSender().send(message)
     if result:
         logger.info("Morning alert sent successfully ({} priority pick(s)).", n_priority)
         return 0
