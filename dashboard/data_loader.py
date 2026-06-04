@@ -400,6 +400,163 @@ def load_broker_for_ticker(ticker: str, selected_date: str, use_mock: bool = Fal
     return df
 
 
+# Index Alpha Regular-market broker data availability starts June 2025.
+_INDEXALPHA_RG_START = "2025-06-01"
+
+
+def _broker_range_cache_file(
+    ticker: str, from_date: str, to_date: str, investor: str, market: str,
+) -> Path:
+    """Cache path for a HISTORICAL range aggregate.
+
+    Cache key = ticker + from + to + investor + market (kept in a `range/`
+    subdir so the single-day date scanner never picks these up). Net/Gross is a
+    display-only toggle on the same data, so it is NOT part of the key.
+    """
+    clean = ticker.upper().replace(".JK", "").strip()
+    return _BROKER_DIR / "range" / f"{clean}_{from_date}_{to_date}_{investor}_{market}.parquet"
+
+
+def fetch_broker_range(
+    ticker: str,
+    from_date: str,
+    to_date: str,
+    investor: str = "all",
+    market: str = "RG",
+    force_refresh: bool = False,
+) -> tuple[pd.DataFrame, str | None]:
+    """REAL Index Alpha broker summary AGGREGATED over [from_date, to_date].
+
+    Uses GET /stocks/broker-summary with from/to (one request per range — the
+    API returns per-broker totals across the whole period, no per-day breakdown).
+    Cache-first; returns (df, error). Never raises.
+    """
+    cache_path = _broker_range_cache_file(ticker, from_date, to_date, investor, market)
+
+    if cache_path.exists() and not force_refresh:
+        try:
+            return pd.read_parquet(cache_path), None
+        except Exception as exc:  # noqa: BLE001
+            return pd.DataFrame(), f"Gagal membaca cache range: {exc}"
+
+    if not os.environ.get("INDEX_ALPHA_API_KEY", "").strip():
+        if cache_path.exists():
+            try:
+                return pd.read_parquet(cache_path), None
+            except Exception:  # noqa: BLE001
+                pass
+        return pd.DataFrame(), (
+            "INDEX_ALPHA_API_KEY belum diset. Set environment variable untuk "
+            "mengambil broker summary historical dari Index Alpha."
+        )
+
+    try:
+        from stock_scanner.pipeline.fetch_indexalpha import IndexAlphaFetcher
+        df = IndexAlphaFetcher().fetch_range(
+            ticker, from_date, to_date, investor=investor, market=market,
+        )
+    except Exception as exc:  # noqa: BLE001
+        if cache_path.exists():
+            try:
+                return pd.read_parquet(cache_path), None
+            except Exception:  # noqa: BLE001
+                pass
+        return pd.DataFrame(), f"Gagal mengambil historical dari Index Alpha: {exc}"
+
+    if df is None or df.empty:
+        return pd.DataFrame(), (
+            f"Tidak ada data broker untuk {ticker} pada {from_date}…{to_date}. "
+            "Kemungkinan di luar cakupan data (RG mulai Jun 2025) atau kuota habis."
+        )
+
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        df.to_parquet(cache_path, index=False)
+    except Exception:  # noqa: BLE001
+        pass  # caching is best-effort; still return the data
+    return df, None
+
+
+def fetch_broker_latest(
+    ticker: str,
+    investor: str = "all",
+    market: str = "RG",
+) -> tuple[pd.DataFrame, str | None, dict]:
+    """Broker summary for the LAST COMPLETED trading session — fresh-first.
+
+    Order: (1) if that exact session is already cached → use it (0 API calls);
+    (2) else, with an API key, fetch it (1 quota); (3) else / on failure, fall
+    back to the most recent cached session and flag it clearly.
+
+    Returns (df, note, info) where info = {"date": str, "source": fresh|cache|fallback}.
+    `note` is a non-blocking warning (e.g. fallback reason); may be set even when
+    df is non-empty.
+    """
+    from datetime import datetime, timezone, timedelta
+    from stock_scanner.utils.trading_calendar import expected_market_date
+
+    now_wib = datetime.now(timezone(timedelta(hours=7)))
+    target = expected_market_date(now_wib).strftime("%Y-%m-%d")
+    info: dict = {"date": target, "source": None}
+
+    # 1) Right session already cached → fresh enough, no API call.
+    cache_path = _broker_cache_file(ticker, target)
+    if cache_path.exists():
+        try:
+            info["source"] = "cache"
+            return pd.read_parquet(cache_path), None, info
+        except Exception:  # noqa: BLE001
+            pass
+
+    # 2) Not cached. With a key, fetch the target session (1 quota).
+    if os.environ.get("INDEX_ALPHA_API_KEY", "").strip():
+        df, err = fetch_broker_summary(
+            ticker, target, investor=investor, market=market, force_refresh=True,
+        )
+        if df is not None and not df.empty:
+            info["source"] = "fresh"
+            return df, None, info
+        fallback_reason = err or "fetch terbaru gagal"
+    else:
+        fallback_reason = "INDEX_ALPHA_API_KEY belum diset"
+
+    # 3) Fallback: most recent cached session, clearly flagged.
+    dates = available_broker_dates_for_ticker(ticker)
+    if dates:
+        fb = dates[0]
+        try:
+            df = pd.read_parquet(_broker_cache_file(ticker, fb))
+            info["date"] = fb
+            info["source"] = "fallback"
+            note = (f"Menampilkan cache {fb} — sesi terbaru {target} belum tersedia "
+                    f"({fallback_reason}).")
+            return df, note, info
+        except Exception:  # noqa: BLE001
+            pass
+
+    return pd.DataFrame(), f"Tidak ada data broker. {fallback_reason}.", info
+
+
+def broker_range_bounds(quick: str) -> tuple[str, str]:
+    """Compute (from_date, to_date) for a quick historical range.
+
+    to_date = last completed trading session (WIB). from_date = to_date minus the
+    range, clamped to Index Alpha RG availability (Jun 2025). `quick` ∈
+    {"1W","1M","3M","6M","1Y"}.
+    """
+    from datetime import datetime, timezone, timedelta, date as _date
+    from stock_scanner.utils.trading_calendar import expected_market_date
+
+    now_wib = datetime.now(timezone(timedelta(hours=7)))
+    to_d = expected_market_date(now_wib)
+    days = {"1W": 7, "1M": 30, "3M": 91, "6M": 182, "1Y": 365}.get(quick, 30)
+    from_d = to_d - timedelta(days=days)
+    rg_start = _date.fromisoformat(_INDEXALPHA_RG_START)
+    if from_d < rg_start:
+        from_d = rg_start
+    return from_d.strftime("%Y-%m-%d"), to_d.strftime("%Y-%m-%d")
+
+
 def load_broker_history(ticker: str, n_days: int = 20) -> pd.DataFrame:
     """Load last n_days of broker transaction data for a single ticker.
 
