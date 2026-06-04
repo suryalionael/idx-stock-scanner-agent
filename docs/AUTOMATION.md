@@ -9,7 +9,7 @@ GitHub Actions schedule, the required secrets, and how to verify it works.
 ## TL;DR
 
 - **Scheduler:** GitHub Actions, `.github/workflows/morning-alert.yml`
-- **When:** 06:00 WIB (23:00 UTC prev day), Monday–Friday
+- **When:** 07:00 WIB (00:00 UTC), Monday–Friday
 - **Target group:** `-1003764018733` (default fallback if the chat-id secret is unset)
 - **Local one-command run:** `python scripts/run_daily_signal.py`
 
@@ -107,14 +107,15 @@ Repo → **Settings → Secrets and variables → Actions → New repository sec
 ```yaml
 on:
   schedule:
-    - cron: "0 23 * * 0-4"   # 06:00 WIB, Mon–Fri (23:00 UTC Sun–Thu)
-  workflow_dispatch:         # manual trigger from the Actions tab
+    - cron: "0 0 * * 1-5"   # 07:00 WIB, Mon–Fri (00:00 UTC Mon–Fri)
+  workflow_dispatch:        # manual trigger from the Actions tab
 ```
 
-GitHub cron is always **UTC**. WIB = UTC+7, so **06:00 WIB = 23:00 UTC the
-previous calendar day**. Firing 06:00 WIB Mon–Fri therefore means 23:00 UTC
-Sun–Thu → cron `0 23 * * 0-4`. The job sets `TZ: Asia/Jakarta` so the runner's
-wall-clock matches the Indonesian calendar day.
+GitHub cron is always **UTC**. WIB = UTC+7, so **07:00 WIB = 00:00 UTC the same
+calendar day** → cron `0 0 * * 1-5`. The job sets `TZ: Asia/Jakarta` so the
+runner's wall-clock matches the Indonesian calendar day. 07:00 (vs 06:00) gives
+the data provider more time to publish the prior session's bar, reducing
+stale-notice mornings.
 
 ### Market data date vs run date (freshness)
 
@@ -171,7 +172,7 @@ python -m stock_scanner.alerts.telegram_alert --date <latest-date>
    - First do a **dry run** (set the `dry_run` input to `true`) — this runs the
      scan and prints the message in the logs without sending.
    - Then run it again with `dry_run=false` to confirm a real message arrives.
-4. Once a manual run posts to the group, the daily 06:00 WIB schedule will do
+4. Once a manual run posts to the group, the daily 07:00 WIB schedule will do
    the same automatically.
 
 > Note: scheduled workflows only run from the **default branch** (`main`), and
