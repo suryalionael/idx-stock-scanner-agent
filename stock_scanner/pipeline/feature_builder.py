@@ -24,7 +24,7 @@ from loguru import logger
 FEATURE_COLS = [
     "date", "ticker",
     # Trend
-    "ma20", "ma50", "ma200",
+    "ma5", "ma20", "ma50", "ma200",
     "ma_full_alignment", "ma_partial_alignment",
     "slope_ma20", "golden_cross", "price_vs_ma200",
     # Momentum
@@ -104,6 +104,7 @@ def load_features(features_dir: Path, scan_date: str) -> pd.DataFrame:
 
 def _add_trend(df: pd.DataFrame) -> pd.DataFrame:
     c = df["close"]
+    df["ma5"] = c.rolling(5).mean()
     df["ma20"] = c.rolling(20).mean()
     df["ma50"] = c.rolling(50).mean()
     df["ma200"] = c.rolling(200).mean()
