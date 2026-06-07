@@ -62,6 +62,10 @@ from stock_scanner.pipeline.long_term import (
     classify_cyclicality,
     enrich_df_with_long_term,
 )
+from stock_scanner.pipeline.smart_money_screener import (
+    screen_smart_money,
+    load_smart_money_config,
+)
 from stock_scanner.reference.issuers import get_company_name, get_sector, ticker_display
 
 # ---------------------------------------------------------------------------
@@ -1886,10 +1890,147 @@ with st.sidebar:
 
 
 # ---------------------------------------------------------------------------
+# Smart Money Screener tab
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _run_smart_money_screen(scan_date: str, df_all: pd.DataFrame) -> pd.DataFrame:
+    """Run the smart-money screener over all tickers (cached 10 min per date)."""
+    cfg = load_smart_money_config()
+    return screen_smart_money(df_all, scan_date, cfg=cfg)
+
+
+def render_smart_money_tab(df_all: pd.DataFrame, scan_date: str) -> None:
+    """🎯 Smart Money — accumulation-footprint screener across the whole universe."""
+    st.markdown("### 🎯 Smart Money Screener")
+    st.caption(
+        "Mendeteksi saham yang mulai diakumulasi sebelum harga naik: volume naik "
+        "duluan, kepemilikan/broker akumulasi, harga belum naik, fundamental sehat. "
+        "Ownership & broker absorption pakai data REAL Index Alpha (tersedia untuk "
+        "ticker yang sudah di-fetch)."
+    )
+
+    if df_all is None or df_all.empty:
+        st.info("Belum ada data scan untuk tanggal ini.")
+        return
+
+    with st.spinner("Menjalankan screener…"):
+        res = _run_smart_money_screen(scan_date, df_all)
+
+    if res is None or res.empty:
+        st.warning("Screener tidak menghasilkan kandidat.")
+        return
+
+    # ── Summary counts ───────────────────────────────────────────────────
+    n_strong = int((res["smart_money_label"] == "🔥 Strong Candidate").sum())
+    n_watch = int((res["smart_money_label"] == "👀 Watch").sum())
+    n_hidden = int(res["hidden_accum"].isin(
+        ["Hidden Accumulation", "Strong Accumulation"]).sum())
+    n_absorb = int(res["broker_absorption"].isin(
+        ["Strong Accumulation", "Moderate Accumulation"]).sum())
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("🔥 Strong Candidate", n_strong)
+    s2.metric("👀 Watch", n_watch)
+    s3.metric("Hidden Accumulation", n_hidden)
+    s4.metric("Broker Absorption", n_absorb)
+
+    # ── Filters ──────────────────────────────────────────────────────────
+    f1, f2, f3 = st.columns([2, 2, 1])
+    with f1:
+        labels = st.multiselect(
+            "Kandidat", ["🔥 Strong Candidate", "👀 Watch", "—"],
+            default=["🔥 Strong Candidate", "👀 Watch"], key="sm_label",
+        )
+    with f2:
+        grades = st.multiselect(
+            "Grade fundamental", ["A", "B", "C", "N/A"],
+            default=["A", "B"], key="sm_grade",
+        )
+    with f3:
+        min_pillars = st.number_input("Min pillar", 1, 5, 2, 1, key="sm_pillars")
+
+    show = res.copy()
+    if labels:
+        show = show[show["smart_money_label"].isin(labels)]
+    if grades:
+        show = show[show["fundamental_grade"].isin(grades)]
+    show = show[show["smart_money_pillars"] >= int(min_pillars)]
+
+    st.caption(f"Menampilkan {len(show)} dari {len(res)} saham.")
+
+    if show.empty:
+        st.info("Tidak ada saham yang cocok dengan filter ini.")
+        return
+
+    # ── Table ────────────────────────────────────────────────────────────
+    disp = show.copy()
+    disp["close"] = disp["close"].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "—")
+    disp["vol_ratio_20d"] = disp["vol_ratio_20d"].apply(
+        lambda x: f"{float(x):.1f}×" if pd.notna(x) else "—")
+    disp["roc20"] = disp["roc20"].apply(lambda x: f"{float(x):+.1f}%" if pd.notna(x) else "—")
+    disp["absorb_share"] = disp["absorb_share"].apply(
+        lambda x: f"{float(x) * 100:.0f}%" if pd.notna(x) else "—")
+    disp["fundamental_score"] = disp["fundamental_score"].apply(
+        lambda x: f"{int(x)}" if pd.notna(x) else "—")
+
+    cols = ["ticker", "smart_money_label", "smart_money_pillars", "close",
+            "volume_accum", "vol_ratio_20d", "roc20", "ownership",
+            "broker_absorption", "absorb_broker", "absorb_share",
+            "hidden_accum", "fundamental_grade", "fundamental_score"]
+    st.dataframe(
+        disp[cols], use_container_width=True, hide_index=True,
+        height=min(40 * len(disp) + 44, 560),
+        column_config={
+            "ticker": st.column_config.TextColumn("Ticker", width="small"),
+            "smart_money_label": st.column_config.TextColumn("Kandidat", width="medium"),
+            "smart_money_pillars": st.column_config.NumberColumn("Pillar", width="small"),
+            "close": st.column_config.TextColumn("Close", width="small"),
+            "volume_accum": st.column_config.TextColumn("Vol Accum", width="small"),
+            "vol_ratio_20d": st.column_config.TextColumn("Vol×", width="small"),
+            "roc20": st.column_config.TextColumn("ROC20", width="small"),
+            "ownership": st.column_config.TextColumn("Ownership", width="small"),
+            "broker_absorption": st.column_config.TextColumn("Broker Absorb", width="medium"),
+            "absorb_broker": st.column_config.TextColumn("Top Brk", width="small"),
+            "absorb_share": st.column_config.TextColumn("Share", width="small"),
+            "hidden_accum": st.column_config.TextColumn("Hidden Accum", width="medium"),
+            "fundamental_grade": st.column_config.TextColumn("Grade", width="small"),
+            "fundamental_score": st.column_config.TextColumn("F.Score", width="small"),
+        },
+    )
+
+    # ── Per-ticker reason detail ─────────────────────────────────────────
+    st.divider()
+    sel = st.selectbox(
+        "Lihat alasan detail:", options=show["ticker"].tolist(),
+        format_func=lambda t: f"{t.replace('.JK', '')} — {get_company_name(t)}",
+        key="sm_detail",
+    )
+    if sel:
+        r = show[show["ticker"] == sel].iloc[0]
+        st.markdown(f"**{sel}** — {r['smart_money_label']} ({int(r['smart_money_pillars'])} pillar)")
+        st.markdown(f"- Alasan: {r['reasons']}")
+        st.markdown(f"- Ownership: **{r['ownership']}** · Broker absorption: "
+                    f"**{r['broker_absorption']}**"
+                    + (f" oleh {r['absorb_broker']}" if pd.notna(r.get('absorb_broker')) else ""))
+        st.markdown(f"- Hidden accumulation: **{r['hidden_accum']}** · "
+                    f"Fundamental: **{r['fundamental_grade']}** "
+                    f"({r['fundamental_score'] if pd.notna(r['fundamental_score']) else '—'}/100)")
+        st.caption("Buka tab detail saham (Search/Swing) untuk Broker Summary lengkap.")
+
+    st.caption(
+        "ℹ️ Ownership & broker absorption hanya untuk ticker dengan data broker "
+        "Index Alpha (kuota 5/hari → fetch dari Broker Summary tiap saham). "
+        "Volume, harga, dan fundamental tersedia untuk seluruh universe."
+    )
+
+
+
+# ---------------------------------------------------------------------------
 # MAIN TABS
 # ---------------------------------------------------------------------------
-tab_scalping, tab_swing, tab_longterm, tab_search, tab_history = st.tabs(
-    ["📈 Scalping", "🔄 Swing Trading", "📊 Long Term", "🔍 Search Emiten", "🕐 History"]
+tab_scalping, tab_swing, tab_longterm, tab_smart, tab_search, tab_history = st.tabs(
+    ["📈 Scalping", "🔄 Swing Trading", "📊 Long Term", "🎯 Smart Money",
+     "🔍 Search Emiten", "🕐 History"]
 )
 
 
@@ -1924,6 +2065,13 @@ with tab_swing:
 # ===========================================================================
 with tab_longterm:
     render_longterm_tab(df_all, selected_date, active_api_key)
+
+
+# ===========================================================================
+# TAB — SMART MONEY SCREENER
+# ===========================================================================
+with tab_smart:
+    render_smart_money_tab(df_all, selected_date)
 
 
 # ===========================================================================
