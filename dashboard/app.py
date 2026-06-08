@@ -1718,6 +1718,26 @@ if _remote_mode:
 # ---------------------------------------------------------------------------
 # SIDEBAR
 # ---------------------------------------------------------------------------
+def _fmt_date_id(date_str: str) -> str:
+    """YYYY-MM-DD → 'Senin, 08 Jun 2026' (Indonesian). Falls back to raw string."""
+    from datetime import datetime as _dt
+    days = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
+    mons = ["", "Jan", "Feb", "Mar", "Apr", "Mei", "Jun",
+            "Jul", "Ags", "Sep", "Okt", "Nov", "Des"]
+    try:
+        d = _dt.strptime(str(date_str)[:10], "%Y-%m-%d")
+        return f"{days[d.weekday()]}, {d.day} {mons[d.month]} {d.year}"
+    except (ValueError, IndexError):
+        return str(date_str)
+
+
+def _now_wib_label() -> str:
+    """Current report/view time in WIB → 'Senin, 08 Jun 2026 06:00 WIB'."""
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    n = _dt.now(_tz(_td(hours=7)))
+    return f"{_fmt_date_id(n.strftime('%Y-%m-%d'))} {n.strftime('%H:%M')} WIB"
+
+
 with st.sidebar:
     st.markdown("## 📈 IDX Scanner")
 
@@ -1734,7 +1754,9 @@ with st.sidebar:
             scan_date_str = _remote_payload.get("scan_date", "")
             exec_date_str = _remote_payload.get("execution_date", scan_date_str)
             is_live       = _remote_payload.get("is_live_scan", True)
-            st.caption(f"Data: {scan_date_str} · {gen_at[:10] if gen_at != '—' else '—'}")
+            _gen = str(gen_at)[:16].replace("T", " ") if gen_at != "—" else "—"
+            st.caption(f"🕒 Diperbarui: {_gen}")
+            st.caption(f"📅 Data market: {_fmt_date_id(scan_date_str)}")
             if not is_live:
                 st.warning(
                     f"⚠️ **Data bukan sesi live**\n\n"
@@ -1772,7 +1794,10 @@ with st.sidebar:
             )
         st.stop()
 
-    selected_date = st.selectbox("Tanggal Scan", options=all_dates, index=0)
+    selected_date = st.selectbox("Sesi market (tanggal data)", options=all_dates, index=0)
+    # Disambiguate: report/view time (now) vs the market session being analysed.
+    st.caption(f"🕒 Dibuka: {_now_wib_label()}")
+    st.caption(f"📅 Data market: {_fmt_date_id(selected_date)}")
     st.divider()
 
     # Load ALL tickers for date (local or remote)

@@ -176,12 +176,20 @@ def _section_header(ctx: dict) -> str:
     total = ctx.get("total_scanned", 0)
     dist  = ctx.get("signal_dist", {})
 
+    now = datetime.now()
+    try:
+        report_full = f"{_DAYS_ID[now.weekday()]}, {now.day} {_MONTHS_ID[now.month]} {now.year}"
+    except (ValueError, IndexError):
+        report_full = now.strftime("%d %b %Y")
+
     lines = [
-        f"# 📊 IDX Daily Report — {date_full}",
+        f"# 📊 IDX Daily Report — {report_full}",
+        f"> Data market: {date_full}",
         "",
         "## Market Overview",
         "",
-        f"- **Scan date**: `{scan_date}`",
+        f"- **Report date**: `{now.strftime('%Y-%m-%d')}` (WIB)",
+        f"- **Data market (sesi)**: `{scan_date}`",
         f"- **Total tickers scanned**: {total}",
         "",
         "### Signal Distribution",
@@ -541,10 +549,17 @@ def _build_telegram_summary(ctx: dict, ai_short: str, scan_date: str) -> str:
     dist  = ctx.get("signal_dist", {})
     scalp = ctx.get("scalping_high", [])
 
-    now_str = datetime.now().strftime("%H:%M WIB")
+    now = datetime.now()
+    now_str = now.strftime("%H:%M WIB")
+    # Title date = report/send date (today, WIB); market session shown separately.
+    try:
+        report_label = f"{_DAYS_ID[now.weekday()]}, {now.day} {_MONTHS_ID[now.month]} {now.year}"
+    except (ValueError, IndexError):
+        report_label = now.strftime("%d %b %Y")
 
     lines = [
-        f"📋 <b>Daily Report — {date_label}</b>",
+        f"📋 <b>Daily Report — {report_label}</b>",
+        f"<i>Data market: {date_label}</i>",
         "─────────────────────",
         f"🟢 BREAKOUT   : {dist.get('BREAKOUT', 0)}",
         f"🔵 PRE-MARKUP : {dist.get('PRE_MARKUP', 0)}",
