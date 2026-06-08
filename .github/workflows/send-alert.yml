@@ -107,9 +107,9 @@ jobs:
         if: steps.dedup.outputs.already == 'false'
         run: |
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            python -m stock_scanner.alerts.telegram_alert --dry-run --require-fresh
+            python -m stock_scanner.alerts.telegram_alert --dry-run --require-fresh --include-scalping
           else
-            python -m stock_scanner.alerts.telegram_alert --require-fresh
+            python -m stock_scanner.alerts.telegram_alert --require-fresh --include-scalping
           fi
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
