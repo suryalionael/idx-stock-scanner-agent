@@ -214,10 +214,12 @@ def build_telegram_deep_dive_message(
     parts: list[str] = []
 
     # ── Header ────────────────────────────────────────────────────────────────
+    # Title date = report/send date (today, WIB); market session shown separately.
     parts.append(
         f'🔍 <b>DEEP DIVE: <a href="{url}">${ticker}</a></b>'
-        f"  —  {date_label}"
+        f"  —  {_today_label_id()}"
     )
+    parts.append(f"<i>Data market: {date_label}</i>")
     parts.append("─────────────────────")
     parts.append(
         f"📌 <b>Sinyal</b>  : <b>{signal_type}</b> {emoji}  |  Skor <code>{score_str}</code>"
@@ -331,7 +333,8 @@ def build_telegram_top_picks_message(
     date_label = _format_date_id(date)
 
     parts: list[str] = [
-        f"🏆 <b>TOP {top_n} PICK HARI INI</b>  —  {date_label}",
+        f"🏆 <b>TOP {top_n} PICK HARI INI</b>  —  {_today_label_id()}",
+        f"<i>Data market: {date_label}</i>",
         "─────────────────────",
         "",
     ]
@@ -803,8 +806,8 @@ def _format_signal_group(
 ) -> list[str]:
     """Format one signal category (BREAKOUT or PRE_MARKUP) into messages."""
     header = (
-        f"{group_emoji} <b>SWING {group_label}</b>  —  {date_label}\n"
-        f"<i>{total_in_group} saham</i>\n"
+        f"{group_emoji} <b>SWING {group_label}</b>  —  {_today_label_id()}\n"
+        f"<i>{total_in_group} saham · Data market: {date_label}</i>\n"
         "─────────────────────"
     )
     footer = (
@@ -1013,6 +1016,11 @@ def _score_bar(score: float | None, width: int = 8) -> str:
     filled = round((score / 10) * width)
     filled = max(0, min(width, filled))
     return "█" * filled + "░" * (width - filled)
+
+
+def _today_label_id() -> str:
+    """Today's REPORT/send date in Indonesian (WIB-assumed, like the time stamps)."""
+    return _format_date_id(datetime.now().strftime("%Y-%m-%d"))
 
 
 def _format_date_id(date_str: str) -> str:

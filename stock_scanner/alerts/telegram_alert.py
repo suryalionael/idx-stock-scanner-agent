@@ -432,7 +432,8 @@ def build_morning_message(
 
     lines: list[str] = [
         "📊 <b>IDX Morning Alert</b>",
-        f"<i>{run_str} — Data market: {market_str}</i>",
+        f"<b>{run_str}</b>",
+        f"<i>Data market: {market_str}</i>",
         "",
     ]
 

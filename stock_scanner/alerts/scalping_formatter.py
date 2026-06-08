@@ -158,9 +158,11 @@ def format_scalping_alert(
 
     date_label = _format_date_id(scan_date)
     now_str    = datetime.now().strftime("%H:%M WIB")
+    report_label = _format_date_id(datetime.now().strftime("%Y-%m-%d"))
 
     header_lines = [
-        f"⚡ <b>SCALPING HIGH</b>  —  {date_label}",
+        f"⚡ <b>SCALPING HIGH</b>  —  {report_label}",
+        f"<i>Data market: {date_label}</i>",
         "─────────────────────",
         f"<i>{len(high_rows)} kandidat momentum kuat hari ini</i>",
         "",
