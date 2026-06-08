@@ -1,0 +1,94 @@
+name: IDX Scan (data refresh)
+
+# Heavy data refresh ONLY — no Telegram. Runs early so the signals are ready
+# well before the 06:00 WIB send. Timing here is NOT critical (a big buffer
+# absorbs cron-queue delay and a cold-cache scan); send-alert.yml does the
+# precise-timed delivery.
+#
+# Timezone: GitHub cron is UTC. WIB = UTC+7 → 05:00 WIB = 22:00 UTC the previous
+# calendar day. Mon–Fri WIB → Sun–Thu UTC (days 0-4).
+on:
+  schedule:
+    - cron: "0 22 * * 0-4"   # 05:00 WIB, Mon–Fri (22:00 UTC Sun–Thu)
+  workflow_dispatch:
+
+concurrency:
+  group: idx-scan
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: Incremental scan + publish artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 120     # generous: first run downloads full history (cold cache)
+    env:
+      TZ: Asia/Jakarta       # runner wall-clock = WIB so scan dates match the IDX calendar
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      # Scanner extras (yfinance, ta, scikit-learn, xgboost) are required by
+      # run_daily_scan. Dashboard extras are intentionally NOT installed.
+      - name: Install dependencies
+        run: pip install -e ".[scanner]"
+
+      # idx_universe.csv is gitignored (private watchlist) → recreate from secret.
+      - name: Write universe file from secret
+        env:
+          IDX_UNIVERSE_CSV: ${{ secrets.IDX_UNIVERSE_CSV }}
+        run: |
+          mkdir -p stock_scanner/configs
+          printf '%s\n' "$IDX_UNIVERSE_CSV" > stock_scanner/configs/idx_universe.csv
+          rows=$(grep -cve '^[[:space:]]*$' stock_scanner/configs/idx_universe.csv || true)
+          echo "Universe rows written: $rows"
+          if [ "$rows" -lt 2 ]; then
+            echo "::error::IDX_UNIVERSE_CSV secret is empty or unset."
+            exit 1
+          fi
+
+      # Cache is used ONLY to speed up the scan's own incremental warm-start.
+      # The handoff to send-alert.yml uses an ARTIFACT (below), not this cache,
+      # so there is no ambiguous-cache dependency on the critical path.
+      - name: Restore scan data cache
+        uses: actions/cache/restore@v4
+        with:
+          path: data/
+          key: idx-scan-data-${{ runner.os }}-${{ hashFiles('stock_scanner/configs/idx_universe.csv') }}
+          restore-keys: |
+            idx-scan-data-${{ runner.os }}-
+
+      - name: Run daily scan
+        run: python -m stock_scanner.pipeline.run_daily_scan
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Save scan data cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/
+          key: idx-scan-data-${{ runner.os }}-${{ hashFiles('stock_scanner/configs/idx_universe.csv') }}
+
+      # Deterministic handoff: tar only the files the send job needs (ranked +
+      # signals). tar preserves the exact data/ranked and data/signals paths, so
+      # the consumer restores them unambiguously.
+      - name: Package scan output for handoff
+        run: |
+          mkdir -p data/ranked data/signals
+          tar -czf scan-output.tgz data/ranked data/signals
+          echo "Packaged:" && tar -tzf scan-output.tgz | head -n 5
+
+      - name: Upload scan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-latest
+          path: scan-output.tgz
+          retention-days: 3
+          if-no-files-found: error
