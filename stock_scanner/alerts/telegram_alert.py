@@ -339,10 +339,67 @@ def _day_name_id(dt: date) -> str:
     return names[dt.weekday()]
 
 
+_SCALP_HIGH = "SCALPING_HIGH"
+_SCALP_WATCH = "SCALPING_WATCH"
+
+
+def build_scalping_section(signals: pd.DataFrame, top_n: int = 5) -> list[str]:
+    """Compact 'Top Pick Scalping' block — same dataset & ranking as daily_alert.
+
+    Ranks the signals DataFrame by scalping_score (desc) over SCALPING_HIGH +
+    SCALPING_WATCH rows. Because HIGH scores (>=6.5) always exceed WATCH (<6.5),
+    sorting by score naturally lists HIGH first. Returns HTML lines (incl. a
+    trailing blank) ready to append to the morning message.
+    """
+    header = ["<b>⚡ Top Pick Scalping</b>"]
+    if (
+        signals is None or signals.empty
+        or "scalping_label" not in signals.columns
+        or "scalping_score" not in signals.columns
+    ):
+        return header + ["<i>— data scalping tidak tersedia</i>", ""]
+
+    df = signals.copy()
+    df["scalping_score"] = pd.to_numeric(df["scalping_score"], errors="coerce")
+    df = df[df["scalping_label"].astype(str).str.upper().isin([_SCALP_HIGH, _SCALP_WATCH])]
+    df = df.sort_values("scalping_score", ascending=False).head(max(1, min(top_n, 5)))
+
+    if df.empty:
+        return header + ["<i>— tidak ada kandidat scalping hari ini</i>", ""]
+
+    lines = list(header)
+    for i, (_, r) in enumerate(df.iterrows(), 1):
+        tk = str(r.get("ticker", "?")).replace(".JK", "")
+        emoji = "🟢" if str(r.get("scalping_label", "")).upper() == _SCALP_HIGH else "🟡"
+        score = r.get("scalping_score")
+        score_s = f"{float(score):.1f}" if pd.notna(score) else "—"
+        parts = [f"{i}. <b>{tk}</b> {emoji} <code>{score_s}</code>"]
+
+        close = r.get("close")
+        if pd.notna(close):
+            parts.append(f"Rp{int(close):,}")
+        vr = r.get("vol_ratio_20d")
+        if pd.notna(vr):
+            parts.append(f"Vol×{float(vr):.1f}")
+        roc5 = r.get("roc5")
+        if pd.notna(roc5):
+            parts.append(f"ROC5 {float(roc5):+.1f}%")
+        else:
+            rsi = r.get("rsi14")
+            if pd.notna(rsi):
+                parts.append(f"RSI {float(rsi):.0f}")
+        lines.append(" · ".join(parts))
+
+    lines.append("<i>🟢 High  🟡 Watch · ⚠️ bukan rekomendasi beli</i>")
+    lines.append("")
+    return lines
+
+
 def build_morning_message(
     scan_date: str,
     top_n: int = 7,
     run_date: date | None = None,
+    include_scalping: bool = False,
 ) -> str:
     """Build the morning alert HTML message for Telegram.
 
@@ -355,6 +412,7 @@ def build_morning_message(
         scan_date: 'YYYY-MM-DD' — market data date (last completed trading session).
         top_n    : How many top tickers to list.
         run_date : The send date (defaults to today in WIB).
+        include_scalping: append the compact 'Top Pick Scalping' section.
 
     Returns:
         HTML-formatted string ready for Telegram parse_mode=HTML.
@@ -450,6 +508,10 @@ def build_morning_message(
     else:
         lines.append("<i>⚠️ Tidak ada data ranked tersedia untuk tanggal ini.</i>")
         lines.append("")
+
+    # --- Top Pick Scalping (optional, behind --include-scalping) ---
+    if include_scalping:
+        lines += build_scalping_section(signals, top_n=5)
 
     # --- Footer ---
     now_str = now_wib().strftime("%H:%M WIB")
@@ -601,6 +663,9 @@ def main() -> int:
                         help="Number of top picks to include (default: 7).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print message to stdout instead of sending to Telegram.")
+    parser.add_argument("--include-scalping", action="store_true",
+                        help="Append a compact 'Top Pick Scalping' section (top 3-5 by "
+                             "scalping_score, same dataset/ranking as daily_alert).")
     parser.add_argument("--skip-if-empty", action="store_true",
                         help="If no priority signals (BREAKOUT/PRE_MARKUP), skip sending the normal alert.")
     parser.add_argument("--require-fresh", action="store_true",
@@ -655,7 +720,8 @@ def main() -> int:
         logger.info("No priority signals and --skip-if-empty set — skipping send.")
         return 0
 
-    message = build_morning_message(scan_date, top_n=args.top_n, run_date=run_date)
+    message = build_morning_message(scan_date, top_n=args.top_n, run_date=run_date,
+                                    include_scalping=args.include_scalping)
     if args.dry_run:
         _print_dry(message)
         return 0
