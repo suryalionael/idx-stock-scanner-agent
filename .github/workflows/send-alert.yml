@@ -1,0 +1,132 @@
+name: Morning Alert (send only)
+
+# Precise-timed Telegram delivery ONLY — no scan. Triggered at exactly 06:00 WIB
+# by an EXTERNAL scheduler via repository_dispatch (tight timing, unlike GitHub's
+# best-effort cron). A backup schedule at 06:12 WIB catches a missed dispatch.
+#
+# Data comes from the latest successful scan.yml run's ARTIFACT (not cache).
+# Freshness is enforced by telegram_alert --require-fresh: if the latest scan is
+# not the last completed trading session, it sends the "Data Belum Update" notice
+# instead of a normal alert. A per-day "sent" marker artifact prevents duplicate
+# real alerts across the dispatch + backup triggers.
+on:
+  repository_dispatch:
+    types: [morning-alert]
+  schedule:
+    - cron: "12 23 * * 0-4"   # 06:12 WIB backup (23:12 UTC Sun–Thu)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (print message, do NOT send to Telegram)"
+        type: boolean
+        default: false
+
+# Minimal token scope: read Actions (list runs + download cross-run artifact),
+# read Contents (checkout). No write needed — the external PAT (held off-GitHub)
+# is what triggers the dispatch; this job's GITHUB_TOKEN never needs write.
+permissions:
+  actions: read
+  contents: read
+
+# Serialize overlapping triggers; the per-day marker (below) is the real dedup.
+concurrency:
+  group: send-alert
+  cancel-in-progress: false
+
+jobs:
+  send:
+    name: Validate freshness + send Telegram
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TZ: Asia/Jakarta
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      # Base deps only (pandas + pyarrow + loguru + stdlib) — the sender needs no
+      # scanner/dashboard extras, so this is fast.
+      - name: Install dependencies
+        run: pip install -e .
+
+      # ── Dedup: has a REAL alert already been sent today? ────────────────
+      - name: Check daily sent-marker
+        id: dedup
+        run: |
+          DATE=$(date +%F)
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          if gh api "repos/${{ github.repository }}/actions/artifacts" --paginate \
+               -q '.artifacts[].name' | grep -qx "sent-$DATE"; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "A real alert was already sent on $DATE — skipping."
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Pull the latest scan output via artifact handoff ────────────────
+      - name: Resolve latest successful scan run
+        id: scanrun
+        if: steps.dedup.outputs.already == 'false'
+        run: |
+          RID=$(gh run list --workflow=scan.yml --status=success --limit=1 \
+                  --json databaseId -q '.[0].databaseId' || true)
+          echo "run_id=$RID" >> "$GITHUB_OUTPUT"
+          echo "Latest successful scan run id: ${RID:-none}"
+
+      - name: Download scan artifact
+        if: steps.dedup.outputs.already == 'false' && steps.scanrun.outputs.run_id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: scan-latest
+          run-id: ${{ steps.scanrun.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: .
+
+      - name: Unpack scan output
+        if: steps.dedup.outputs.already == 'false'
+        run: |
+          if [ -f scan-output.tgz ]; then
+            tar -xzf scan-output.tgz
+            echo "Restored signals/ranked from artifact."
+          else
+            echo "No scan artifact found — freshness guard will report stale/no-data."
+          fi
+
+      # ── Send (refuses stale → sends 'Data Belum Update' notice instead) ─
+      - name: Send morning alert
+        id: send
+        if: steps.dedup.outputs.already == 'false'
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            python -m stock_scanner.alerts.telegram_alert --dry-run --require-fresh
+          else
+            python -m stock_scanner.alerts.telegram_alert --require-fresh
+          fi
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          # Falls back to the default group (-1003764018733) if the secret is unset.
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      # ── Mark sent ONLY on a real, fresh delivery (exit 0, not dry-run) ──
+      # On stale (exit 2) or no-data (exit 1) the send step fails → no marker →
+      # the 06:12 backup retries (data may have arrived by then).
+      - name: Write sent marker
+        if: steps.send.outcome == 'success' && github.event.inputs.dry_run != 'true'
+        run: echo "${{ steps.dedup.outputs.date }}" > sent.txt
+
+      - name: Upload sent marker
+        if: steps.send.outcome == 'success' && github.event.inputs.dry_run != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sent-${{ steps.dedup.outputs.date }}
+          path: sent.txt
+          retention-days: 2

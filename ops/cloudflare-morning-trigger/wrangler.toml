@@ -1,0 +1,14 @@
+name = "idx-morning-trigger"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# 06:00 WIB = 23:00 UTC the previous day. Mon–Fri WIB → Sun–Thu UTC (0-4).
+[triggers]
+crons = ["0 23 * * 0-4"]
+
+# Non-secret config. The GitHub PAT is a SECRET — set it with:
+#   wrangler secret put GH_PAT
+[vars]
+GH_OWNER = "suryalionael"
+GH_REPO  = "idx-stock-scanner-agent"
+EVENT_TYPE = "morning-alert"
