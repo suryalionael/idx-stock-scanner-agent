@@ -911,7 +911,15 @@ def available_dates_unified(payload: dict | None = None) -> list[str]:
         if payload is None:
             payload = load_published_payload()
         return available_dates_remote(payload)
-    return available_dates()
+    # LOCAL: also surface the committed published scan_date when it is FRESHER than
+    # the newest local signals file, so `git pull` brings the automation's latest
+    # session into a normal `streamlit run` without a local rescan. Additive:
+    # if it is not newer, the local signal dates are returned unchanged.
+    dates = available_dates()
+    pub = str(_load_local_published().get("scan_date") or "")
+    if pub and (not dates or pub > dates[0]):
+        dates = [pub] + [d for d in dates if d != pub]
+    return dates
 
 
 def load_all_tickers_unified(
@@ -927,4 +935,11 @@ def load_all_tickers_unified(
         if payload is None:
             payload = load_published_payload()
         return df_from_published_payload(payload)
-    return load_all_tickers_for_date(scan_date)
+    # LOCAL: prefer local signal files; if this date exists only in the committed
+    # published JSON (fresher, from automation + git pull), load from that.
+    df = load_all_tickers_for_date(scan_date)
+    if df is None or df.empty:
+        pub = _load_local_published()
+        if pub and str(pub.get("scan_date")) == str(scan_date):
+            return df_from_published_payload(pub)
+    return df
