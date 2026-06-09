@@ -1,0 +1,74 @@
+name: Signal Performance (18:00 WIB)
+
+# Dedicated evening run of the performance reporting layer ONLY (the screener is
+# never re-run here). After IDX close it refreshes the OHLC for the tickers that
+# are awaiting evaluation and fills their CSV/Excel for that trading date, so the
+# report reflects same-day closing data as early as possible instead of waiting
+# for the next morning. Pending rows (if the data source hasn't published yet)
+# are backfilled automatically on the next run.
+#
+# Timezone: GitHub cron is UTC. WIB = UTC+7 → 18:00 WIB = 11:00 UTC the SAME day.
+# Mon–Fri WIB → Mon–Fri UTC (no day shift) → cron "0 11 * * 1-5".
+on:
+  schedule:
+    - cron: "0 11 * * 1-5"   # 18:00 WIB, Mon–Fri (11:00 UTC Mon–Fri)
+  workflow_dispatch:
+
+# Commit refreshed data/performance/ back to main (history + dashboard).
+permissions:
+  contents: write
+
+concurrency:
+  group: signal-performance
+  cancel-in-progress: true
+
+jobs:
+  performance:
+    name: Evaluate signals + write CSV/Excel
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TZ: Asia/Jakarta
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      # yfinance (same-day OHLC refresh) + openpyxl (.xlsx export).
+      - name: Install dependencies
+        run: pip install -e ".[scanner]"
+
+      # Restore the signals + raw OHLC produced by scan.yml (gitignored, so they
+      # live in the Actions cache). Prefix restore-keys → latest available cache,
+      # independent of the universe-hash exact key.
+      - name: Restore scan data cache
+        uses: actions/cache/restore@v4
+        with:
+          path: data/
+          key: idx-scan-perf-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            idx-scan-data-${{ runner.os }}-
+
+      # Evening mode: fetch same-day OHLC for tickers awaiting evaluation, then
+      # evaluate. Fills today's eval session if published; else leaves pending.
+      - name: Evaluate signal performance (evening)
+        run: python -m stock_scanner.pipeline.performance --evening
+
+      - name: Publish performance data to main
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/performance/ || true
+          if git diff --cached --quiet; then
+            echo "No performance changes to publish."
+          else
+            git commit -m "data: evening signal performance update ($(date +%F)) [skip ci]"
+            git push origin HEAD:main
+            echo "Published refreshed performance data to main."
+          fi

@@ -343,6 +343,86 @@ def load_results(perf_dir: Path | None = None) -> pd.DataFrame:
     return _read_csv(perf_dir / "signal_results.csv")
 
 
+# ---------------------------------------------------------------------------
+# Evening (18:00 WIB) entrypoint — fetch same-day OHLC, then evaluate
+# ---------------------------------------------------------------------------
+
+def _pending_tickers(perf_dir: Path | None = None) -> set[str]:
+    df = load_results(perf_dir)
+    if df.empty or "status" not in df.columns:
+        return set()
+    return set(df.loc[df["status"] == "pending", "ticker"].astype(str))
+
+
+def _refresh_raw_for(tickers: list[str], raw_dir: Path, lookback_years: int = 1) -> int:
+    """Fetch the latest OHLC for specific tickers, INCLUDING today's just-closed
+    session (end = today+1, since yfinance's end is exclusive and the standard
+    incremental_update uses end=today which omits the current day). Run after
+    market close so today's bar is final. Reuses fetch_yfinance helpers; does not
+    touch the screener. Returns count attempted. Best-effort per ticker.
+    """
+    if not tickers:
+        return 0
+    from datetime import datetime, timedelta
+    from stock_scanner.pipeline.fetch_yfinance import (
+        YFinanceFetcher, load_raw, save_raw, default_start_date,
+    )
+    fetcher = YFinanceFetcher(batch_size=20)
+    end = (datetime.today() + timedelta(days=1)).strftime("%Y-%m-%d")  # inclusive of today
+    n = 0
+    for t in tickers:
+        try:
+            existing = load_raw(t, raw_dir)
+            if existing.empty:
+                start = default_start_date(lookback_years)
+            else:
+                last = pd.to_datetime(existing["date"]).max()
+                start = (last + timedelta(days=1)).strftime("%Y-%m-%d")
+            if start >= end:
+                n += 1
+                continue
+            new = fetcher.fetch_single(t, start, end)
+            if new is None or new.empty:
+                n += 1
+                continue
+            combined = pd.concat([existing, new], ignore_index=True)
+            combined["date"] = pd.to_datetime(combined["date"]).dt.tz_localize(None).dt.normalize()
+            combined = (combined.drop_duplicates(subset=["date", "ticker"])
+                        .sort_values("date").reset_index(drop=True))
+            save_raw(t, combined, raw_dir)
+            n += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("refresh_raw {}: {}", t, exc)
+    return n
+
+
+def run_performance_evening(signals_dir: Path | None = None, raw_dir: Path | None = None,
+                            perf_dir: Path | None = None, lookback_years: int = 1) -> dict:
+    """18:00 WIB entrypoint. Refreshes OHLC for the tickers awaiting evaluation
+    (pending results + the latest signal date's lists), so that if the market
+    data source has already published today's close, pending rows are filled on
+    THIS run instead of waiting for the next morning. Then runs the standard
+    performance pass. Does NOT touch the screener.
+    """
+    signals_dir = signals_dir or _SIGNALS_DIR
+    raw_dir = raw_dir or _RAW_DIR
+    perf_dir = perf_dir or _PERF_DIR
+
+    need = _pending_tickers(perf_dir)
+    files = sorted(signals_dir.glob("*.parquet"))
+    if files:
+        try:
+            df = pd.read_parquet(files[-1])
+            for strat in ("swing", "scalping"):
+                need |= set(_signal_list(df, strat)["ticker"].astype(str))
+        except Exception:  # noqa: BLE001
+            pass
+
+    refreshed = _refresh_raw_for(sorted(need), raw_dir, lookback_years)
+    logger.info("Evening performance: refreshed OHLC for {} ticker(s) awaiting eval.", refreshed)
+    return run_performance(signals_dir, raw_dir, perf_dir)
+
+
 def win_rate_recap(signal_date: str, perf_dir: Path | None = None) -> dict:
     """Per-strategy win-rate summary for one signal date (for Telegram/dashboard)."""
     df = load_results(perf_dir)
@@ -371,5 +451,10 @@ if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser(description="Signal List performance tracker")
     p.add_argument("--date", default=None, help="Only this signal date (YYYY-MM-DD).")
+    p.add_argument("--evening", action="store_true",
+                   help="18:00 WIB mode: fetch same-day OHLC for pending tickers, then evaluate.")
     a = p.parse_args()
-    run_performance(dates=[a.date] if a.date else None)
+    if a.evening:
+        run_performance_evening()
+    else:
+        run_performance(dates=[a.date] if a.date else None)
