@@ -33,11 +33,44 @@ classify_cyclicality(sector) -> str
 """
 from __future__ import annotations
 
+import json
 import math
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from loguru import logger
+
+# Persistent store for multi-period financials so the dashboard never depends on
+# a live yfinance call at view time (unreliable on Streamlit Cloud). Lives under
+# data/published/ so it is committed and served to the remote dashboard.
+_FIN_CACHE_DIR = Path(__file__).parent.parent.parent / "data" / "published" / "financials"
+_FIN_CACHE_TTL_DAYS = 14
+
+
+def _fin_cache_path(clean: str) -> Path:
+    return _FIN_CACHE_DIR / f"{clean}.json"
+
+
+def _read_fin_cache(clean: str) -> dict | None:
+    p = _fin_cache_path(clean)
+    if not p.exists():
+        return None
+    try:
+        data = json.loads(p.read_text())
+        data["_cache_age_days"] = round((datetime.now().timestamp() - p.stat().st_mtime) / 86400, 1)
+        return data
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _write_fin_cache(clean: str, result: dict) -> None:
+    try:
+        _FIN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        _fin_cache_path(clean).write_text(json.dumps(result, ensure_ascii=False))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -457,6 +490,14 @@ def compare_financial_statements(ticker: str) -> dict:
     import yfinance as yf
 
     clean = ticker if ticker.endswith(".JK") else f"{ticker}.JK"
+    code = clean.replace(".JK", "")
+
+    # 1) Serve from the persistent store if reasonably fresh — no live call.
+    cached = _read_fin_cache(code)
+    if (cached and cached.get("status") == "ok"
+            and cached.get("_cache_age_days", 999) < _FIN_CACHE_TTL_DAYS):
+        return cached
+
     result: dict = {
         "status": "failed", "error": None,
         "annual": {}, "yoy": {},
@@ -536,11 +577,24 @@ def compare_financial_statements(ticker: str) -> dict:
             "ocf_chg":        _yoy(annual.get("op_cash_flow", [])),
         }
 
-        result["status"] = "ok" if any(v for v in annual.values()) else "partial"
+        # Honest status: "ok" only when core line items matched; otherwise this
+        # ticker genuinely has no usable statements at the current source.
+        if annual.get("revenue") or annual.get("net_income"):
+            result["status"] = "ok"
+        else:
+            result["status"] = "failed"
+            result["error"] = result.get("error") or "Tidak ada item laporan keuangan yang cocok"
 
     except Exception as exc:
         logger.warning("compare_financial_statements({}) failed: {}", ticker, exc)
         result["error"] = str(exc)
+
+    # 2) Persist good results; 3) on failure, serve any stale cache (better than
+    #    an empty dead-end on Cloud where the live call may be blocked).
+    if result.get("status") == "ok":
+        _write_fin_cache(code, result)
+    elif cached:
+        return cached
 
     return result
 
