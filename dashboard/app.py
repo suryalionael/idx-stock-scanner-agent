@@ -2117,8 +2117,8 @@ tab_scalping, tab_swing, tab_longterm, tab_smart, tab_perf, tab_search, tab_hist
 # ===========================================================================
 with tab_perf:
     st.markdown("### 📋 Signal List Performance")
-    st.caption("Win-rate sinyal Swing & Scalping — dievaluasi pakai OHLC sesi bursa "
-               "BERIKUTNYA setelah sinyal muncul (Entry=Open, W jika Close>Open).")
+    st.caption("Win-rate sinyal Swing & Scalping — referensi = PREV CLOSE (close sesi "
+               "sinyal); High & Close diukur dari sesi bursa BERIKUTNYA (W jika Close > Prev).")
 
     from stock_scanner.pipeline.performance import load_results
     _res = load_results()
@@ -2154,18 +2154,18 @@ with tab_perf:
                        "belum tersedia. Akan terisi pada scan berikutnya.")
 
         # Table (matches the screenshot layout)
-        _show = _day[["ticker", "signal", "open", "close", "high",
+        _show = _day[["ticker", "signal", "prev", "close", "high",
                       "pct_high", "pct_close", "wl", "eval_date", "status"]].copy()
         for c in ("pct_high", "pct_close"):
             _show[c] = _show[c].apply(lambda x: f"{float(x):+.2f}%" if pd.notna(x) else "—")
-        for c in ("open", "close", "high"):
+        for c in ("prev", "close", "high"):
             _show[c] = _show[c].apply(lambda x: f"{float(x):,.0f}" if pd.notna(x) else "—")
         st.dataframe(
             _show, use_container_width=True, hide_index=True,
             column_config={
                 "ticker": st.column_config.TextColumn("Signal", width="small"),
                 "signal": st.column_config.TextColumn("Type", width="small"),
-                "open": st.column_config.TextColumn("Open"),
+                "prev": st.column_config.TextColumn("Prev"),
                 "close": st.column_config.TextColumn("Close"),
                 "high": st.column_config.TextColumn("High"),
                 "pct_high": st.column_config.TextColumn("% High"),

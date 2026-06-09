@@ -1,9 +1,9 @@
-signal_date,eval_date,strategy,ticker,signal,open,close,high,pct_high,pct_close,wl,status
+signal_date,eval_date,strategy,ticker,signal,prev,close,high,pct_high,pct_close,wl,status
 2026-06-03,2026-06-04,swing,DMAS.JK,PRE_MARKUP,156.0,153.0,156.0,0.0,-1.92,L,evaluated
 2026-06-03,2026-06-04,swing,MPMX.JK,PRE_MARKUP,1115.0,1115.0,1120.0,0.45,0.0,L,evaluated
 2026-06-03,2026-06-04,swing,PRDA.JK,PRE_MARKUP,2620.0,2450.0,2620.0,0.0,-6.49,L,evaluated
 2026-06-03,2026-06-04,swing,MGLV.JK,PRE_MARKUP,8100.0,8175.0,8900.0,9.88,0.93,W,evaluated
-2026-06-03,2026-06-04,swing,UVCR.JK,PRE_MARKUP,226.0,193.0,228.0,0.88,-14.6,L,evaluated
-2026-06-03,2026-06-04,swing,DRMA.JK,PRE_MARKUP,975.0,980.0,980.0,0.51,0.51,W,evaluated
+2026-06-03,2026-06-04,swing,UVCR.JK,PRE_MARKUP,225.5,193.0,228.0,1.11,-14.41,L,evaluated
+2026-06-03,2026-06-04,swing,DRMA.JK,PRE_MARKUP,980.0,980.0,980.0,0.0,0.0,L,evaluated
 2026-06-03,2026-06-04,swing,GULA.JK,PRE_MARKUP,510.0,505.0,515.0,0.98,-0.98,L,evaluated
-2026-06-03,2026-06-04,swing,VISI.JK,PRE_MARKUP,1020.0,1000.0,1025.0,0.49,-1.96,L,evaluated
+2026-06-03,2026-06-04,swing,VISI.JK,PRE_MARKUP,1030.0,1000.0,1025.0,-0.49,-2.91,L,evaluated
