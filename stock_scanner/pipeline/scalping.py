@@ -41,6 +41,20 @@ _LABEL_NO    = "NOT_SCALPING"
 _SCORE_HIGH  = 6.5   # threshold for SCALPING_HIGH
 _SCORE_WATCH = 4.0   # threshold for SCALPING_WATCH
 
+# ROC5 (5-day return) above this % → momentum is extended / overheating.
+# Flagged (not auto-excluded) in dashboard + Telegram scalping outputs.
+# Configurable at runtime via env var SCALPING_ROC5_OVERHEATED.
+import os as _os  # noqa: E402
+ROC5_OVERHEATED_PCT = float(_os.getenv("SCALPING_ROC5_OVERHEATED", "30"))
+
+
+def is_roc5_overheated(roc5) -> bool:
+    """True if the 5-day return is above the overheated threshold."""
+    try:
+        return float(roc5) > ROC5_OVERHEATED_PCT
+    except (TypeError, ValueError):
+        return False
+
 
 # ---------------------------------------------------------------------------
 # Public API
