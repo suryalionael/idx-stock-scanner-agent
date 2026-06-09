@@ -426,6 +426,13 @@ def screen_smart_money(
     if df_signals is None or df_signals.empty:
         return pd.DataFrame()
 
+    # Drop suspended / recently-unsuspended names so they never become candidates.
+    try:
+        from stock_scanner.pipeline.suspension import filter_active
+        df_signals = filter_active(df_signals)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("suspension filter skipped in screener: {}", exc)
+
     cfg = cfg or load_smart_money_config()
     broker_dir = broker_dir or _BROKER_DIR
     comb = cfg.get("combined", {})

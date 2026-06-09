@@ -1,0 +1,31 @@
+# Suspension / halt exclusion for screener, dashboard, and Telegram candidates.
+#
+# DATA SOURCE — be honest: there is NO real-time IDX suspension feed wired into
+# this repo (yfinance/Index Alpha do not provide suspension status). The safest
+# available signals are used instead, in priority order:
+#   1) MANUAL lists below — authoritative; maintain from IDX announcements
+#      (https://www.idx.co.id/en/news/suspension-and-unsuspension/).
+#   2) AUTOMATIC staleness — a stock whose latest TRADED bar is older than the
+#      current market session by more than `max_staleness_trading_days` has
+#      effectively stopped trading (suspended/halted). Detected for free from the
+#      per-ticker scan date already in the signals data (no extra feed needed).
+#      This is what catches names like BAPA / BKDP (last real trade weeks ago,
+#      trailing zero-volume bars).
+enabled: true
+
+# Exclude a stock for this many TRADING days after it resumes trading.
+unsuspend_cooldown_days: 5
+
+# Automatic staleness fallback (cheap, universe-wide).
+max_staleness_trading_days: 2      # no trade for > N sessions → treat as suspended
+
+# Manual authoritative overrides (maintain from IDX suspension announcements).
+manual:
+  # Currently suspended → excluded entirely. Use bare codes (no .JK).
+  suspended: []
+  #   - SOME
+
+  # Resumed trading recently → excluded during the cooldown window above.
+  # Format:  TICKER: "YYYY-MM-DD"  (date trading resumed)
+  recently_unsuspended: {}
+  #   SOME: "2026-06-02"

@@ -368,6 +368,7 @@ def build_scalping_section(signals: pd.DataFrame, top_n: int = 5) -> list[str]:
         return header + ["<i>— tidak ada kandidat scalping hari ini</i>", ""]
 
     lines = list(header)
+    any_overheated = False
     for i, (_, r) in enumerate(df.iterrows(), 1):
         tk = str(r.get("ticker", "?")).replace(".JK", "")
         emoji = "🟢" if str(r.get("scalping_label", "")).upper() == _SCALP_HIGH else "🟡"
@@ -382,15 +383,25 @@ def build_scalping_section(signals: pd.DataFrame, top_n: int = 5) -> list[str]:
         if pd.notna(vr):
             parts.append(f"Vol×{float(vr):.1f}")
         roc5 = r.get("roc5")
+        overheated = False
         if pd.notna(roc5):
-            parts.append(f"ROC5 {float(roc5):+.1f}%")
+            from stock_scanner.pipeline.scalping import is_roc5_overheated
+            overheated = is_roc5_overheated(roc5)
+            parts.append(f"ROC5 {float(roc5):+.1f}%" + (" ⚠️" if overheated else ""))
         else:
             rsi = r.get("rsi14")
             if pd.notna(rsi):
                 parts.append(f"RSI {float(rsi):.0f}")
+        if overheated:
+            any_overheated = True
+            parts.append("<b>Extended</b>")
         lines.append(" · ".join(parts))
 
-    lines.append("<i>🟢 High  🟡 Watch · ⚠️ bukan rekomendasi beli</i>")
+    legend = "🟢 High  🟡 Watch · ⚠️ bukan rekomendasi beli"
+    if any_overheated:
+        from stock_scanner.pipeline.scalping import ROC5_OVERHEATED_PCT
+        legend += f" · ⚠️ Extended = ROC5 &gt;{int(ROC5_OVERHEATED_PCT)}% (overheated)"
+    lines.append(f"<i>{legend}</i>")
     lines.append("")
     return lines
 
@@ -418,6 +429,20 @@ def build_morning_message(
         HTML-formatted string ready for Telegram parse_mode=HTML.
     """
     ranked, signals = _load_scan(scan_date)
+
+    # Exclude suspended / recently-unsuspended names from every pick. The signals
+    # frame carries the per-ticker scan date, so we also prune those tickers from
+    # the ranked top-picks list. (No extra feed — see suspension.py.)
+    try:
+        from stock_scanner.pipeline.suspension import annotate_suspension, STATUS_ACTIVE
+        if not signals.empty:
+            signals = annotate_suspension(signals)
+            _susp = set(signals.loc[signals["suspension_status"] != STATUS_ACTIVE, "ticker"].astype(str))
+            signals = signals[signals["suspension_status"] == STATUS_ACTIVE].reset_index(drop=True)
+            if not ranked.empty and "ticker" in ranked.columns and _susp:
+                ranked = ranked[~ranked["ticker"].astype(str).isin(_susp)].reset_index(drop=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("suspension filter skipped: {}", exc)
 
     # Use signals for distribution if available, else ranked
     dist_source = signals if not signals.empty else ranked

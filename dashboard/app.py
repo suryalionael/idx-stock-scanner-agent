@@ -689,7 +689,14 @@ def _render_broker_latest(ticker: str, scan_date: str) -> None:
         df, note, info = _cached_broker_latest(ticker)
 
     if df is None or df.empty:
-        st.error(f"⚠️ {note}" if note else "ℹ️ Belum ada data broker untuk saham ini.")
+        st.info(
+            f"📊 **Broker Summary belum dimuat** untuk {ticker.replace('.JK','')} sesi ini.\n\n"
+            "Harga, volume, tren, dan fundamental saham ini tetap lengkap di tab lain — "
+            "yang belum ada hanya rincian **kepemilikan & serapan broker** (sumber Index Alpha). "
+            "Klik **🔄 Refresh** di atas untuk memuatnya."
+        )
+        if note:
+            st.caption(f"_{note}_")
         return
 
     src = info.get("source")
@@ -742,7 +749,12 @@ def _render_broker_historical(ticker: str, scan_date: str) -> None:
         df, err = _cached_broker_range(ticker, from_date, to_date, "all", "RG")
 
     if df is None or df.empty:
-        st.error(f"⚠️ {err}" if err else "ℹ️ Tidak ada data broker untuk periode ini.")
+        st.info(
+            f"📊 **Belum ada Broker Summary** untuk {ticker.replace('.JK','')} pada periode ini.\n\n"
+            "Klik **🔄 Refresh** untuk mengambil agregat periode dari Index Alpha."
+        )
+        if err:
+            st.caption(f"_{err}_")
         return
     if err:
         st.warning(f"⚠️ {err}")
@@ -761,6 +773,8 @@ def render_broker_section(ticker: str, scan_date: str) -> None:
       • Historical — period aggregate (1W/1M/3M/6M/1Y/Custom) via from/to.
     """
     st.markdown("#### 🏦 Broker Summary")
+    st.caption("Rincian kepemilikan & serapan broker (data real Index Alpha). "
+               "Harga, volume, dan fundamental saham ini ada di tab lain.")
     mode = st.radio(
         "Mode broker", ["Latest", "Historical"], horizontal=True,
         key=f"brk_main_mode_{ticker}_{scan_date}", label_visibility="collapsed",
@@ -1049,6 +1063,15 @@ def render_scalping_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | Non
     disp_cols = [c for c in tbl_cols if c in df_show.columns]
     tbl = df_show[disp_cols].copy()
 
+    # Flag extended / overheating momentum (ROC5 > threshold) — visible, NOT excluded.
+    from stock_scanner.pipeline.scalping import ROC5_OVERHEATED_PCT
+    _n_overheated = 0
+    if "roc5" in df_show.columns:
+        _over = df_show["roc5"].apply(
+            lambda x: "🔥 Extended" if (pd.notna(x) and float(x) > ROC5_OVERHEATED_PCT) else "")
+        _n_overheated = int((_over != "").sum())
+        tbl.insert(1, "Status", _over)
+
     # Format
     for col in ["close", "entry_low", "entry_high", "tp_low", "cutloss"]:
         if col in tbl.columns:
@@ -1064,6 +1087,7 @@ def render_scalping_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | Non
         height=min(38 * len(tbl) + 40, 500),
         column_config={
             "ticker":          st.column_config.TextColumn("Ticker",         width="small"),
+            "Status":          st.column_config.TextColumn("Status",         width="small"),
             "scalping_score":  st.column_config.TextColumn("Scalp Score",    width="small"),
             "scalping_label":  st.column_config.TextColumn("Label",          width="medium"),
             "scalping_reason": st.column_config.TextColumn("Alasan",         width="large"),
@@ -1080,6 +1104,13 @@ def render_scalping_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | Non
             "cutloss":         st.column_config.TextColumn("CL",             width="small"),
         },
     )
+
+    if _n_overheated:
+        st.warning(
+            f"🔥 **{_n_overheated} saham Extended** (ROC5 > {int(ROC5_OVERHEATED_PCT)}%) — "
+            "momentum sudah jauh/overheated. Tetap ditampilkan, tapi risiko entry telat tinggi.",
+            icon="🔥",
+        )
 
     st.caption(
         "⚠️ Level trading dihitung dari ATR daily — bukan untuk scalping tick-by-tick. "
@@ -1815,6 +1846,18 @@ with st.sidebar:
             st.error(f"Tidak ada data untuk {selected_date}.")
         st.stop()
 
+    # Exclude suspended / recently-unsuspended names from every candidate list,
+    # table, and screener tab (cheap, from the per-ticker scan date).
+    try:
+        from stock_scanner.pipeline.suspension import filter_active
+        _n_before = len(df_all)
+        df_all = filter_active(df_all)
+        _n_suspended = _n_before - len(df_all)
+    except Exception:  # noqa: BLE001
+        _n_suspended = 0
+    if _n_suspended:
+        st.caption(f"🚫 {_n_suspended} saham suspend / baru dibuka disembunyikan dari kandidat")
+
     # Mini signal summary
     if "signal" in df_all.columns:
         sig_counts = df_all["signal"].value_counts()
@@ -1931,8 +1974,8 @@ def render_smart_money_tab(df_all: pd.DataFrame, scan_date: str) -> None:
     st.caption(
         "Mendeteksi saham yang mulai diakumulasi sebelum harga naik: volume naik "
         "duluan, kepemilikan/broker akumulasi, harga belum naik, fundamental sehat. "
-        "Ownership & broker absorption pakai data REAL Index Alpha (tersedia untuk "
-        "ticker yang sudah di-fetch)."
+        "Kepemilikan & serapan broker memakai data REAL Index Alpha — detail penuhnya "
+        "ada di halaman detail tiap saham (Search/Swing)."
     )
 
     if df_all is None or df_all.empty:
@@ -2043,9 +2086,9 @@ def render_smart_money_tab(df_all: pd.DataFrame, scan_date: str) -> None:
         st.caption("Buka tab detail saham (Search/Swing) untuk Broker Summary lengkap.")
 
     st.caption(
-        "ℹ️ Ownership & broker absorption hanya untuk ticker dengan data broker "
-        "Index Alpha (kuota 5/hari → fetch dari Broker Summary tiap saham). "
-        "Volume, harga, dan fundamental tersedia untuk seluruh universe."
+        "Skor volume, harga, tren, dan fundamental dihitung untuk **seluruh universe**. "
+        "Detail kepemilikan & serapan broker (Broker Summary) tampil otomatis di "
+        "**halaman detail saham** (tab Search atau Swing) begitu data sesinya tersedia."
     )
 
 
