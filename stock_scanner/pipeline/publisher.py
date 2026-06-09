@@ -180,8 +180,21 @@ def build_published_payload(
         dict yang bisa di-json.dumps().
     """
     df = signals_df.copy()
-    # Simpan referensi ke semua ticker (sebelum filter EXCLUDED_STATUSES)
-    # agar all_tickers payload mencakup SEMUA 957 ticker persis seperti local.
+
+    # Exclude suspended / recently-unsuspended names AT SOURCE so the deployed
+    # (remote) dashboard matches local. The published payload omits the
+    # per-ticker `date` column, so the dashboard's runtime suspension filter
+    # (which detects staleness from that date) is a no-op in remote mode — hence
+    # suspended tickers like BAPA/BKDP would otherwise leak into the deployed
+    # tier lists + all_tickers. Filtering here keeps local == deployed parity.
+    try:
+        from stock_scanner.pipeline.suspension import filter_active
+        df = filter_active(df)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Simpan referensi ke semua ticker (sudah lolos filter suspensi) agar
+    # all_tickers payload sama persis dengan tampilan dashboard lokal.
     signals_df_original = df.copy()
 
     # -- Hitung meta --
