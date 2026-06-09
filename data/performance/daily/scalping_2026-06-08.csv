@@ -1,0 +1,14 @@
+signal_date,eval_date,strategy,ticker,signal,open,close,high,pct_high,pct_close,wl,status
+2026-06-08,,scalping,APLI.JK,SCALPING_HIGH,,,,,,,pending
+2026-06-08,,scalping,CTBN.JK,SCALPING_HIGH,,,,,,,pending
+2026-06-08,,scalping,FORU.JK,SCALPING_HIGH,,,,,,,pending
+2026-06-08,,scalping,ICON.JK,SCALPING_HIGH,,,,,,,pending
+2026-06-08,,scalping,TFCO.JK,SCALPING_HIGH,,,,,,,pending
+2026-06-08,,scalping,DWGL.JK,SCALPING_HIGH,,,,,,,pending
+2026-06-08,,scalping,MSIN.JK,SCALPING_HIGH,,,,,,,pending
+2026-06-08,,scalping,SATU.JK,SCALPING_HIGH,,,,,,,pending
+2026-06-08,,scalping,NZIA.JK,SCALPING_HIGH,,,,,,,pending
+2026-06-08,,scalping,MGLV.JK,SCALPING_HIGH,,,,,,,pending
+2026-06-08,,scalping,MMIX.JK,SCALPING_HIGH,,,,,,,pending
+2026-06-08,,scalping,GRIA.JK,SCALPING_HIGH,,,,,,,pending
+2026-06-08,,scalping,VISI.JK,SCALPING_HIGH,,,,,,,pending

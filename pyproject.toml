@@ -29,6 +29,7 @@ scanner = [
     "scikit-learn>=1.4",
     "xgboost>=2.0",
     "anthropic>=0.30",
+    "openpyxl>=3.1",          # daily Signal List performance .xlsx export
 ]
 # Install lokal dengan dashboard: pip install -e ".[dashboard]"
 dashboard = [
@@ -42,6 +43,7 @@ all = [
     "scikit-learn>=1.4",
     "xgboost>=2.0",
     "anthropic>=0.30",
+    "openpyxl>=3.1",
     "streamlit>=1.35,<2.0",
     "plotly>=5.22",
 ]

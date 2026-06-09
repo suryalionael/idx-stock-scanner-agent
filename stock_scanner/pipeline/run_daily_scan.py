@@ -289,6 +289,15 @@ def main(config_path: Path = _DEFAULT_CONFIG, force_holiday: bool = False) -> No
         is_live_scan=is_live_scan,
     )
 
+    # --- Step 11: Signal List performance tracking (non-fatal) ---
+    # Archives today's Swing/Scalping signals and evaluates any pending prior
+    # signals against this freshly-scanned session's OHLC. Writes CSV + Excel.
+    try:
+        from stock_scanner.pipeline.performance import run_performance
+        run_performance()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Performance tracking skipped: {}", exc)
+
     logger.info(f"=== Scan selesai: {scan_date} ===")
 
 
