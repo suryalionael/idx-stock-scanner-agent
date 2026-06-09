@@ -73,6 +73,7 @@ from stock_scanner.reference.issuers import get_company_name, get_sector, ticker
 # ---------------------------------------------------------------------------
 
 _BROKER_DIR = Path(__file__).parent.parent / "data" / "broker"
+_ROOT_PERF = Path(__file__).parent.parent / "data" / "performance"
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -2105,10 +2106,90 @@ def render_smart_money_tab(df_all: pd.DataFrame, scan_date: str) -> None:
 # ---------------------------------------------------------------------------
 # MAIN TABS
 # ---------------------------------------------------------------------------
-tab_scalping, tab_swing, tab_longterm, tab_smart, tab_search, tab_history = st.tabs(
+tab_scalping, tab_swing, tab_longterm, tab_smart, tab_perf, tab_search, tab_history = st.tabs(
     ["📈 Scalping", "🔄 Swing Trading", "📊 Long Term", "🎯 Smart Money",
-     "🔍 Search Emiten", "🕐 History"]
+     "📋 Signal Performance", "🔍 Search Emiten", "🕐 History"]
 )
+
+
+# ===========================================================================
+# TAB — SIGNAL LIST PERFORMANCE
+# ===========================================================================
+with tab_perf:
+    st.markdown("### 📋 Signal List Performance")
+    st.caption("Win-rate sinyal Swing & Scalping — dievaluasi pakai OHLC sesi bursa "
+               "BERIKUTNYA setelah sinyal muncul (Entry=Open, W jika Close>Open).")
+
+    from stock_scanner.pipeline.performance import load_results
+    _res = load_results()
+    if _res is None or _res.empty:
+        st.info("📭 Belum ada data performa sinyal. Akan terisi otomatis setelah scan "
+                "harian mengevaluasi sesi berikutnya.")
+    else:
+        c1, c2 = st.columns(2)
+        with c1:
+            _strat = st.radio("Strategi", ["Swing", "Scalping"], horizontal=True,
+                              key="perf_strat").lower()
+        _sd = _res[_res["strategy"] == _strat]
+        _dates = sorted(_sd["signal_date"].astype(str).unique(), reverse=True)
+        with c2:
+            _date = st.selectbox("Tanggal sinyal", options=_dates,
+                                 index=0 if _dates else None, key="perf_date")
+
+        _day = _sd[_sd["signal_date"].astype(str) == str(_date)].copy()
+        _ev = _day[_day["status"] == "evaluated"]
+        _n = len(_ev)
+        _w = int((_ev["wl"] == "W").sum()) if _n else 0
+        _pend = int((_day["status"] == "pending").sum())
+        _wr = round(_w / _n * 100, 1) if _n else 0.0
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total sinyal", len(_day))
+        m2.metric("Win / Loss", f"{_w}W / {_n - _w}L")
+        m3.metric("Win Rate", f"{_wr}%" if _n else "—")
+        m4.metric("Pending", _pend)
+        _evd = _day[_day["status"] == "evaluated"]
+        if _pend and _n == 0:
+            st.warning(f"⏳ {_pend} sinyal masih pending — sesi evaluasi (berikutnya) "
+                       "belum tersedia. Akan terisi pada scan berikutnya.")
+
+        # Table (matches the screenshot layout)
+        _show = _day[["ticker", "signal", "open", "close", "high",
+                      "pct_high", "pct_close", "wl", "eval_date", "status"]].copy()
+        for c in ("pct_high", "pct_close"):
+            _show[c] = _show[c].apply(lambda x: f"{float(x):+.2f}%" if pd.notna(x) else "—")
+        for c in ("open", "close", "high"):
+            _show[c] = _show[c].apply(lambda x: f"{float(x):,.0f}" if pd.notna(x) else "—")
+        st.dataframe(
+            _show, use_container_width=True, hide_index=True,
+            column_config={
+                "ticker": st.column_config.TextColumn("Signal", width="small"),
+                "signal": st.column_config.TextColumn("Type", width="small"),
+                "open": st.column_config.TextColumn("Open"),
+                "close": st.column_config.TextColumn("Close"),
+                "high": st.column_config.TextColumn("High"),
+                "pct_high": st.column_config.TextColumn("% High"),
+                "pct_close": st.column_config.TextColumn("% Close"),
+                "wl": st.column_config.TextColumn("W/L", width="small"),
+                "eval_date": st.column_config.TextColumn("Eval Date", width="small"),
+                "status": st.column_config.TextColumn("Status", width="small"),
+            },
+        )
+
+        # Download links (CSV always; Excel if the daily file exists)
+        dl1, dl2 = st.columns(2)
+        with dl1:
+            st.download_button(
+                "⬇️ CSV", data=_day.to_csv(index=False).encode(),
+                file_name=f"{_strat}_{_date}.csv", mime="text/csv", key="perf_dl_csv")
+        with dl2:
+            _xlsx = _ROOT_PERF / "daily" / f"signal_list_{_date}.xlsx"
+            if _xlsx.exists():
+                st.download_button(
+                    "⬇️ Excel (Swing+Scalping)", data=_xlsx.read_bytes(),
+                    file_name=_xlsx.name,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="perf_dl_xlsx")
 
 
 # ===========================================================================

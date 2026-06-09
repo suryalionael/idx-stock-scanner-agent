@@ -1,0 +1,8 @@
+signal_date,eval_date,strategy,ticker,signal,open,close,high,pct_high,pct_close,wl,status
+2026-06-08,,swing,FORU.JK,BREAKOUT,,,,,,,pending
+2026-06-08,,swing,MLBI.JK,PRE_MARKUP,,,,,,,pending
+2026-06-08,,swing,MGLV.JK,PRE_MARKUP,,,,,,,pending
+2026-06-08,,swing,GULA.JK,PRE_MARKUP,,,,,,,pending
+2026-06-08,,swing,GRIA.JK,PRE_MARKUP,,,,,,,pending
+2026-06-08,,swing,MUTU.JK,PRE_MARKUP,,,,,,,pending
+2026-06-08,,swing,VISI.JK,PRE_MARKUP,,,,,,,pending

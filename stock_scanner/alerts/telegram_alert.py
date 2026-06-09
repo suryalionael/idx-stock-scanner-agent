@@ -406,6 +406,36 @@ def build_scalping_section(signals: pd.DataFrame, top_n: int = 5) -> list[str]:
     return lines
 
 
+def build_performance_recap() -> list[str]:
+    """Compact win-rate recap for the most recent evaluated signal date.
+
+    Returns HTML lines (with trailing blank) or [] when no evaluated data exists.
+    """
+    try:
+        from stock_scanner.pipeline.performance import latest_evaluated_date, win_rate_recap
+        d = latest_evaluated_date()
+        if not d:
+            return []
+        rec = win_rate_recap(d)
+        out = [f"<b>📋 Performa Sinyal ({d} → sesi berikutnya)</b>"]
+        for strat, label in (("swing", "Swing"), ("scalping", "Scalping")):
+            s = rec.get(strat) or {}
+            n = int(s.get("signals", 0) or 0)
+            if not n:
+                continue
+            wr = s.get("win_rate")
+            if wr is not None:
+                out.append(f"<code>{label:<9}: {n} sinyal · {s['wins']}W/{s['losses']}L · {wr:.0f}%</code>")
+            else:
+                out.append(f"<code>{label:<9}: {n} sinyal</code>")
+        if len(out) == 1:
+            return []
+        out.append("")
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def build_morning_message(
     scan_date: str,
     top_n: int = 7,
@@ -538,6 +568,7 @@ def build_morning_message(
     # --- Top Pick Scalping (optional, behind --include-scalping) ---
     if include_scalping:
         lines += build_scalping_section(signals, top_n=5)
+        lines += build_performance_recap()
 
     # --- Footer ---
     now_str = now_wib().strftime("%H:%M WIB")
