@@ -1779,8 +1779,92 @@ def _now_wib_label() -> str:
     return f"{_fmt_date_id(n.strftime('%Y-%m-%d'))} {n.strftime('%H:%M')} WIB"
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def _git_commit_info() -> tuple[str, str]:
+    """(branch, short_sha) of the deployed checkout — robust on local & Cloud."""
+    root = str(Path(__file__).parent.parent)
+    try:
+        import subprocess
+        sha = subprocess.run(["git", "-C", root, "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True, timeout=4)
+        br = subprocess.run(["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"],
+                            capture_output=True, text=True, timeout=4)
+        if sha.returncode == 0 and sha.stdout.strip():
+            return (br.stdout.strip() or "?"), sha.stdout.strip()
+    except Exception:  # noqa: BLE001
+        pass
+    # Fallback: parse .git/HEAD directly (no git binary needed).
+    try:
+        gd = Path(__file__).parent.parent / ".git"
+        head = (gd / "HEAD").read_text().strip()
+        if head.startswith("ref:"):
+            ref = head.split(" ", 1)[1].strip()
+            branch = ref.rsplit("/", 1)[-1]
+            rp = gd / ref
+            if rp.exists():
+                return branch, rp.read_text().strip()[:7]
+            pr = gd / "packed-refs"
+            if pr.exists():
+                for ln in pr.read_text().splitlines():
+                    if ln.strip().endswith(ref) and not ln.startswith("#"):
+                        return branch, ln.split()[0][:7]
+        else:
+            return "detached", head[:7]
+    except Exception:  # noqa: BLE001
+        pass
+    import os
+    return os.environ.get("GIT_BRANCH", "?"), (os.environ.get("GIT_COMMIT", "unknown")[:7])
+
+
+def _published_status_payload(remote_mode: bool, remote_payload: dict) -> dict:
+    """The latest COMMITTED published payload (what the widget reports on)."""
+    if remote_mode and remote_payload:
+        return remote_payload
+    import json
+    p = Path(__file__).parent.parent / "data" / "published" / "latest_scan.json"
+    if p.exists():
+        try:
+            return json.load(open(p, encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            return {}
+    return {}
+
+
+def render_deployment_status(remote_mode: bool, remote_payload: dict) -> None:
+    """Header widget: data source, branch@commit, published Market date + Last
+    updated — reflects the latest COMMITTED published data so the morning
+    auto-refresh is verifiable at a glance."""
+    pub = _published_status_payload(remote_mode, remote_payload)
+    scan_date = str(pub.get("scan_date") or "—")
+    gen = str(pub.get("generated_at") or "—")
+    branch, sha = _git_commit_info()
+    source = "☁️ Remote (GitHub)" if remote_mode else "💻 Local"
+    market = _fmt_date_id(scan_date) if scan_date != "—" else "—"
+    updated = gen[:16].replace("T", " ") + " WIB" if gen and gen != "—" else "—"
+    # Stale guard: flag if the published session looks old vs now (WIB).
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    today = _dt.now(_tz(_td(hours=7))).date()
+    try:
+        age_days = (today - _dt.strptime(scan_date, "%Y-%m-%d").date()).days
+    except Exception:  # noqa: BLE001
+        age_days = None
+    dot = "🟢" if (age_days is not None and age_days <= 4) else "🟠"
+    st.markdown(
+        f'<div style="background:#0b2440;border:1px solid #1e3a5f;border-radius:8px;'
+        f'padding:8px 12px;font-size:12px;line-height:1.7;margin-bottom:10px;">'
+        f'<b>📡 Status Deploy</b> {dot}<br>'
+        f'<span style="color:#94a3b8">Sumber data:</span> {source}<br>'
+        f'<span style="color:#94a3b8">Branch/commit:</span> <code>{branch}@{sha}</code><br>'
+        f'<span style="color:#94a3b8">Market date:</span> <b>{market}</b><br>'
+        f'<span style="color:#94a3b8">Last updated:</span> {updated}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
 with st.sidebar:
     st.markdown("## 📈 IDX Scanner")
+    render_deployment_status(_remote_mode, _remote_payload)
 
     # Mode badge
     if _remote_mode:
@@ -1791,13 +1875,10 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
         if _remote_payload:
-            gen_at        = _remote_payload.get("generated_at", "—")
             scan_date_str = _remote_payload.get("scan_date", "")
             exec_date_str = _remote_payload.get("execution_date", scan_date_str)
             is_live       = _remote_payload.get("is_live_scan", True)
-            _gen = str(gen_at)[:16].replace("T", " ") if gen_at != "—" else "—"
-            st.caption(f"🕒 Diperbarui: {_gen}")
-            st.caption(f"📅 Data market: {_fmt_date_id(scan_date_str)}")
+            # (Last updated / Market date now shown in the 📡 Status Deploy widget.)
             if not is_live:
                 st.warning(
                     f"⚠️ **Data bukan sesi live**\n\n"
