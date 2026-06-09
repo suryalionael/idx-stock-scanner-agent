@@ -24,3 +24,10 @@ loguru>=0.7
 
 # HTTP (remote payload fetch dari GitHub raw URL)
 requests>=2.31
+
+# Multi-period financial statements (long-term detail view does a lazy
+# `import yfinance`). Required at runtime by the deployed dashboard.
+yfinance>=0.2.40
+
+# Reading/serving the daily Signal Performance .xlsx export.
+openpyxl>=3.1

@@ -487,12 +487,12 @@ def compare_financial_statements(ticker: str) -> dict:
     ⚠️ This function makes network calls to yfinance (~1–3 seconds).
     Cache the result in the calling layer (e.g. @st.cache_data in Streamlit).
     """
-    import yfinance as yf
-
     clean = ticker if ticker.endswith(".JK") else f"{ticker}.JK"
     code = clean.replace(".JK", "")
 
-    # 1) Serve from the persistent store if reasonably fresh — no live call.
+    # 1) Serve from the persistent store if reasonably fresh — no live call and
+    #    no yfinance import (so the deployed dashboard works from committed data
+    #    even if yfinance is unavailable/blocked).
     cached = _read_fin_cache(code)
     if (cached and cached.get("status") == "ok"
             and cached.get("_cache_age_days", 999) < _FIN_CACHE_TTL_DAYS):
@@ -504,6 +504,7 @@ def compare_financial_statements(ticker: str) -> dict:
     }
 
     try:
+        import yfinance as yf  # imported lazily — only when a live fetch is needed
         yt = yf.Ticker(clean)
         fin = yt.financials          # Annual income statement
         bs  = yt.balance_sheet       # Annual balance sheet
