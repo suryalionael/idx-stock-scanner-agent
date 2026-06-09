@@ -54,10 +54,11 @@ _RESULTS_CSV = _PERF_DIR / "signal_results.csv"
 SWING_SIGNALS = {"BREAKOUT", "PRE_MARKUP"}
 SCALPING_LABELS = {"SCALPING_HIGH"}
 
-# Column order for the daily table (matches the requested screenshot layout).
+# Column order for the daily table. Reference price = PREVIOUS CLOSE (the close
+# of the signal session); High/Close are the next session's, measured vs Prev.
 _RESULT_COLS = [
     "signal_date", "eval_date", "strategy", "ticker", "signal",
-    "open", "close", "high", "pct_high", "pct_close", "wl", "status",
+    "prev", "close", "high", "pct_high", "pct_close", "wl", "status",
 ]
 
 
@@ -88,10 +89,12 @@ def _signal_list(df: pd.DataFrame, strategy: str) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def _next_session_ohlc(ticker: str, signal_date: str, raw_dir: Path) -> Optional[dict]:
-    """First valid trading session strictly AFTER signal_date for `ticker`.
+    """Previous-close reference + next valid session's high/close for `ticker`.
 
-    Returns {eval_date, open, high, close} or None when not available yet
-    (so the caller marks the record pending). Skips zero-volume / NaN bars.
+    Returns {prev_close, eval_date, high, close} or None when not available yet
+    (caller marks the record pending). `prev_close` is the close of the session
+    immediately BEFORE the evaluation session (i.e. the signal-session close).
+    Skips zero-volume / NaN bars.
     """
     path = raw_dir / f"{ticker}.parquet"
     if not path.exists():
@@ -107,37 +110,44 @@ def _next_session_ohlc(ticker: str, signal_date: str, raw_dir: Path) -> Optional
         return None
     df = df.copy()
     df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None).dt.normalize()
+    df = df.sort_values("date").reset_index(drop=True)
+    if "volume" in df.columns:
+        df = df[pd.to_numeric(df["volume"], errors="coerce").fillna(0) > 0].reset_index(drop=True)
     sig_ts = pd.Timestamp(signal_date)
-    fwd = df[df["date"] > sig_ts].sort_values("date")
-    if "volume" in fwd.columns:
-        fwd = fwd[pd.to_numeric(fwd["volume"], errors="coerce").fillna(0) > 0]
-    for _, r in fwd.iterrows():
-        o, h, c = r.get("open"), r.get("high"), r.get("close")
-        if pd.notna(o) and pd.notna(h) and pd.notna(c) and float(o) > 0:
+    fwd_idx = df.index[df["date"] > sig_ts]
+    for i in fwd_idx:
+        if i == 0:  # no prior session → no previous close
+            continue
+        ev = df.loc[i]
+        prev_close = df.loc[i - 1, "close"]
+        h, c = ev.get("high"), ev.get("close")
+        if (pd.notna(prev_close) and float(prev_close) > 0
+                and pd.notna(h) and pd.notna(c)):
             return {
-                "eval_date": r["date"].strftime("%Y-%m-%d"),
-                "open": float(o), "high": float(h), "close": float(c),
+                "prev_close": float(prev_close),
+                "eval_date": ev["date"].strftime("%Y-%m-%d"),
+                "high": float(h), "close": float(c),
             }
     return None
 
 
 def _evaluate_row(signal_date: str, strategy: str, ticker: str, signal: str,
                   raw_dir: Path) -> dict:
-    """Build one result row — evaluated or pending."""
+    """Build one result row — evaluated or pending. Reference = previous close."""
     base = {"signal_date": signal_date, "strategy": strategy, "ticker": ticker,
-            "signal": signal, "eval_date": None, "open": None, "close": None,
+            "signal": signal, "eval_date": None, "prev": None, "close": None,
             "high": None, "pct_high": None, "pct_close": None, "wl": None,
             "status": "pending"}
     ohlc = _next_session_ohlc(ticker, signal_date, raw_dir)
     if ohlc is None:
         return base
-    o, h, c = ohlc["open"], ohlc["high"], ohlc["close"]
+    p, h, c = ohlc["prev_close"], ohlc["high"], ohlc["close"]
     base.update({
         "eval_date": ohlc["eval_date"],
-        "open": round(o, 2), "high": round(h, 2), "close": round(c, 2),
-        "pct_high": round((h - o) / o * 100, 2),
-        "pct_close": round((c - o) / o * 100, 2),
-        "wl": "W" if c > o else "L",
+        "prev": round(p, 2), "high": round(h, 2), "close": round(c, 2),
+        "pct_high": round((h - p) / p * 100, 2),
+        "pct_close": round((c - p) / p * 100, 2),
+        "wl": "W" if c > p else "L",
         "status": "evaluated",
     })
     return base
@@ -182,9 +192,9 @@ def _write_excel(path: Path, swing: pd.DataFrame, scalping: pd.DataFrame, signal
         logger.warning("openpyxl not available — skipping Excel ({}).", exc)
         return
 
-    disp_cols = ["ticker", "signal", "open", "close", "high",
+    disp_cols = ["ticker", "signal", "prev", "close", "high",
                  "pct_high", "pct_close", "wl", "eval_date", "status"]
-    headers = ["Signal", "Type", "Open", "Close", "High",
+    headers = ["Signal", "Type", "Prev", "Close", "High",
                "Percentage High", "Percentage Close", "W/L", "Eval Date", "Status"]
 
     win_fill = PatternFill("solid", fgColor="C6EFCE")

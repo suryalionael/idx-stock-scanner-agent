@@ -1,1 +1,1 @@
-signal_date,eval_date,strategy,ticker,signal,open,close,high,pct_high,pct_close,wl,status
+signal_date,eval_date,strategy,ticker,signal,prev,close,high,pct_high,pct_close,wl,status

@@ -1,8 +1,8 @@
-signal_date,eval_date,strategy,ticker,signal,open,close,high,pct_high,pct_close,wl,status
-2026-06-08,2026-06-09,swing,FORU.JK,BREAKOUT,2490.0,2460.0,2520.0,1.2,-1.2,L,evaluated
+signal_date,eval_date,strategy,ticker,signal,prev,close,high,pct_high,pct_close,wl,status
+2026-06-08,2026-06-09,swing,FORU.JK,BREAKOUT,2020.0,2460.0,2520.0,24.75,21.78,W,evaluated
 2026-06-08,2026-06-09,swing,MLBI.JK,PRE_MARKUP,5925.0,5950.0,6000.0,1.27,0.42,W,evaluated
-2026-06-08,2026-06-09,swing,MGLV.JK,PRE_MARKUP,7850.0,8325.0,8400.0,7.01,6.05,W,evaluated
-2026-06-08,2026-06-09,swing,GULA.JK,PRE_MARKUP,496.0,560.0,570.0,14.92,12.9,W,evaluated
-2026-06-08,2026-06-09,swing,GRIA.JK,PRE_MARKUP,165.0,143.0,210.0,27.27,-13.33,L,evaluated
-2026-06-08,2026-06-09,swing,MUTU.JK,PRE_MARKUP,113.0,106.0,113.0,0.0,-6.19,L,evaluated
-2026-06-08,2026-06-09,swing,VISI.JK,PRE_MARKUP,1040.0,1095.0,1095.0,5.29,5.29,W,evaluated
+2026-06-08,2026-06-09,swing,MGLV.JK,PRE_MARKUP,8050.0,8325.0,8400.0,4.35,3.42,W,evaluated
+2026-06-08,2026-06-09,swing,GULA.JK,PRE_MARKUP,498.0,560.0,570.0,14.46,12.45,W,evaluated
+2026-06-08,2026-06-09,swing,GRIA.JK,PRE_MARKUP,168.0,143.0,210.0,25.0,-14.88,L,evaluated
+2026-06-08,2026-06-09,swing,MUTU.JK,PRE_MARKUP,107.0,106.0,113.0,5.61,-0.93,L,evaluated
+2026-06-08,2026-06-09,swing,VISI.JK,PRE_MARKUP,1000.0,1095.0,1095.0,9.5,9.5,W,evaluated
