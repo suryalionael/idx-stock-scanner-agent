@@ -1,0 +1,7 @@
+signal_date,eval_date,strategy,ticker,signal,prev,close,high,pct_high,pct_close,wl,status
+2026-06-09,,swing,CTTH.JK,PRE_MARKUP,,,,,,,pending
+2026-06-09,,swing,MARK.JK,PRE_MARKUP,,,,,,,pending
+2026-06-09,,swing,MGLV.JK,PRE_MARKUP,,,,,,,pending
+2026-06-09,,swing,GULA.JK,BREAKOUT,,,,,,,pending
+2026-06-09,,swing,MUTU.JK,PRE_MARKUP,,,,,,,pending
+2026-06-09,,swing,VISI.JK,PRE_MARKUP,,,,,,,pending
