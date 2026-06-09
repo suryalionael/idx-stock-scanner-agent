@@ -1497,47 +1497,56 @@ def _render_longterm_detail(row: pd.Series, scan_date: str, api_key: str | None)
         with st.spinner("Mengambil data laporan keuangan..."):
             fin_data = _fetch_financial_comparison(ticker)
 
-        if fin_data["status"] == "failed":
-            st.warning(f"Gagal mengambil data: {fin_data.get('error', '—')}")
-        else:
-            if fin_data["status"] == "partial":
-                st.caption("⚠️ Data parsial — beberapa periode tidak tersedia.")
+        annual = fin_data.get("annual", {}) or {}
+        _core = ("revenue", "net_income", "total_assets", "total_equity", "op_cash_flow")
+        has_any = any(annual.get(k) for k in _core)
 
-            # YoY summary
+        if fin_data.get("status") != "ok" or not has_any:
+            # Honest, useful empty state — not a wall of dashes.
+            st.info(
+                "📄 **Laporan keuangan belum tersedia** untuk saham ini pada sumber data saat ini.\n\n"
+                "Data harga, volume, dan broker tetap tersedia."
+            )
+        else:
+            periods = [r["year"] for r in annual.get("revenue", [])] or \
+                      [r["year"] for r in annual.get("net_income", [])]
+            src = "tersimpan dari scan" if fin_data.get("_cache_age_days") is not None else "yfinance (live)"
+            if periods:
+                st.caption(f"Periode tersedia: {' · '.join(periods)}  ·  Sumber: {src}")
+
+            # YoY — explain WHY a value is missing instead of a bare dash.
             yoy = fin_data.get("yoy", {})
-            if yoy:
-                st.markdown("**YoY Changes (terbaru vs tahun sebelumnya):**")
-                yoy_items = [
-                    ("Revenue",     yoy.get("revenue_chg")),
-                    ("Net Income",  yoy.get("net_income_chg")),
-                    ("Total Asset", yoy.get("asset_chg")),
-                    ("Equity",      yoy.get("equity_chg")),
-                    ("Op. Cash Flow", yoy.get("ocf_chg")),
-                ]
-                yoy_cols = st.columns(len(yoy_items))
-                for col, (label, val) in zip(yoy_cols, yoy_items):
-                    with col:
-                        if val is not None:
-                            color = "#4ade80" if val >= 0 else "#f87171"
-                            st.markdown(
-                                f'<div style="text-align:center">'
-                                f'<div style="font-size:11px;color:#94a3b8">{label}</div>'
-                                f'<div style="font-size:16px;font-weight:700;color:{color}">'
-                                f'{val:+.1f}%</div></div>',
-                                unsafe_allow_html=True,
-                            )
-                        else:
-                            st.caption(f"{label}: —")
+            _field = {"revenue_chg": "revenue", "net_income_chg": "net_income",
+                      "asset_chg": "total_assets", "equity_chg": "total_equity",
+                      "ocf_chg": "op_cash_flow"}
+            st.markdown("**YoY (terbaru vs tahun sebelumnya):**")
+            yoy_items = [("Revenue", "revenue_chg"), ("Net Income", "net_income_chg"),
+                         ("Total Asset", "asset_chg"), ("Equity", "equity_chg"),
+                         ("Op. Cash Flow", "ocf_chg")]
+            yoy_cols = st.columns(len(yoy_items))
+            for col, (label, key) in zip(yoy_cols, yoy_items):
+                with col:
+                    val = yoy.get(key)
+                    series = annual.get(_field[key], [])
+                    if val is not None:
+                        color = "#4ade80" if val >= 0 else "#f87171"
+                        sub = f'<div style="font-size:16px;font-weight:700;color:{color}">{val:+.1f}%</div>'
+                    elif not series:
+                        sub = '<div style="font-size:11px;color:#64748b">tidak ada data</div>'
+                    else:
+                        sub = '<div style="font-size:11px;color:#64748b">hanya 1 periode</div>'
+                    st.markdown(
+                        f'<div style="text-align:center"><div style="font-size:11px;color:#94a3b8">'
+                        f'{label}</div>{sub}</div>', unsafe_allow_html=True,
+                    )
 
             st.markdown("")
 
-            # Charts for key metrics
-            chart_metrics = [
-                ("revenue",      "Revenue"),
-                ("net_income",   "Net Income"),
-                ("total_equity", "Total Equity"),
-                ("op_cash_flow", "Operating Cash Flow"),
-            ]
+            # Charts only for metrics that actually have data.
+            chart_metrics = [m for m in [
+                ("revenue", "Revenue"), ("net_income", "Net Income"),
+                ("total_equity", "Total Equity"), ("op_cash_flow", "Operating Cash Flow"),
+            ] if annual.get(m[0])]
             ch_cols = st.columns(2)
             for i, (metric, label) in enumerate(chart_metrics):
                 with ch_cols[i % 2]:

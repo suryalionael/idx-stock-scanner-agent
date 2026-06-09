@@ -21,6 +21,9 @@ jobs:
     name: Incremental scan + publish artifact
     runs-on: ubuntu-latest
     timeout-minutes: 120     # generous: first run downloads full history (cold cache)
+    # Needed to push the refreshed dashboard data (data/published/) back to main.
+    permissions:
+      contents: write
     env:
       TZ: Asia/Jakarta       # runner wall-clock = WIB so scan dates match the IDX calendar
 
@@ -92,3 +95,21 @@ jobs:
           path: scan-output.tgz
           retention-days: 3
           if-no-files-found: error
+
+      # Publish the dashboard-readable data (data/published/latest_scan.json +
+      # financials/) back to main so the REMOTE dashboard (which reads the
+      # committed JSON via raw.githubusercontent) is refreshed by this same run.
+      # This is what makes the dashboard ready in the morning — one scan powers
+      # both Telegram (artifact above) and the dashboard (commit below).
+      - name: Publish dashboard data to main
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/published/ || true
+          if git diff --cached --quiet; then
+            echo "No dashboard data changes to publish."
+          else
+            git commit -m "data: refresh dashboard latest_scan.json ($(date +%F)) [skip ci]"
+            git push origin HEAD:main
+            echo "Published refreshed dashboard data to main."
+          fi

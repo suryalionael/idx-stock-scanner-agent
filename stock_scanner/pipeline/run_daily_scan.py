@@ -277,6 +277,11 @@ def main(config_path: Path = _DEFAULT_CONFIG, force_holiday: bool = False) -> No
     _save_ranked(signals_df, ranked_dir, scan_date, config=config)
     _print_summary(signals_df, scan_date)
 
+    # --- Step 9b: Pre-warm multi-period financials store for ranked candidates ---
+    # so the dashboard reads committed data instead of a live yfinance call at
+    # view time (unreliable on Streamlit Cloud). Non-fatal.
+    _prewarm_financials(signals_df)
+
     # --- Step 10: Publish payload untuk dashboard online (non-fatal) ---
     _publish_dashboard_data(
         signals_df, scan_date, base_dir,
@@ -285,6 +290,32 @@ def main(config_path: Path = _DEFAULT_CONFIG, force_holiday: bool = False) -> No
     )
 
     logger.info(f"=== Scan selesai: {scan_date} ===")
+
+
+def _prewarm_financials(signals_df: pd.DataFrame, max_tickers: int = 60) -> None:
+    """Fetch + persist multi-period financials for ranked candidates.
+
+    Populates data/published/financials/{ticker}.json so the dashboard (incl.
+    Streamlit Cloud) serves committed data instead of a live yfinance call at
+    view time. Best-effort: failures are logged, never fatal.
+    """
+    try:
+        if signals_df is None or signals_df.empty or "signal" not in signals_df.columns:
+            return
+        from stock_scanner.pipeline.long_term import compare_financial_statements
+        cand = signals_df[signals_df["signal"].isin(["BREAKOUT", "PRE_MARKUP", "WATCH"])]
+        tickers = cand["ticker"].astype(str).head(max_tickers).tolist()
+        ok = 0
+        for t in tickers:
+            try:
+                r = compare_financial_statements(t)  # writes the cache on success
+                if r.get("status") == "ok":
+                    ok += 1
+            except Exception:  # noqa: BLE001
+                continue
+        logger.info("Financials pre-warm: {}/{} ranked candidates cached.", ok, len(tickers))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Financials pre-warm skipped: {}", exc)
 
 
 # ---------------------------------------------------------------------------
