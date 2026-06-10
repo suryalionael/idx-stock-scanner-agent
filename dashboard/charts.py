@@ -694,3 +694,157 @@ def price_chart_longterm(
         legend=dict(orientation="h", y=1.08, x=0, font=dict(size=10)),
     )
     return fig
+
+
+# ---------------------------------------------------------------------------
+# BROKER ANALYTICS CHARTS (STEP 3)
+# ---------------------------------------------------------------------------
+
+def broker_concentration_pie(
+    df_broker: pd.DataFrame,
+    broker_config: dict | None = None,
+) -> go.Figure:
+    """Pie chart: broker concentration by broker type.
+
+    Tujuan: Visualisasi kontribusi setiap broker group (foreign, institution, retail, local, big_local)
+    terhadap total net lot positif atau aktivitas keseluruhan.
+
+    Args:
+        df_broker       : DataFrame dengan kolom broker_code, broker_type, net_lot
+        broker_config   : Optional dict untuk mengambil warna dari config
+                         (format: config['display']['chart_colors'])
+
+    Returns:
+        Plotly Figure pie chart.
+    """
+    if df_broker.empty or "broker_type" not in df_broker.columns:
+        return _empty_figure("Tidak ada data broker untuk chart.")
+
+    # Aggregate by broker_type
+    df = df_broker.copy()
+    df["net_lot"] = pd.to_numeric(df["net_lot"], errors="coerce").fillna(0)
+
+    agg = df.groupby("broker_type")["net_lot"].sum().reset_index()
+    agg = agg[agg["net_lot"] != 0]  # Filter zeros
+    agg = agg.sort_values("net_lot", key=abs, ascending=False)
+
+    if agg.empty:
+        return _empty_figure("Semua broker memiliki net_lot = 0.")
+
+    # Color mapping
+    colors = {
+        "foreign": "#3b82f6",
+        "institution": "#8b5cf6",
+        "retail": "#f97316",
+        "big_local": "#64748b",
+        "local": "#94a3b8",
+    }
+
+    # Override dari config jika tersedia
+    if broker_config and "display" in broker_config and "chart_colors" in broker_config["display"]:
+        chart_colors = broker_config["display"]["chart_colors"]
+        colors.update(chart_colors)
+
+    # Build chart
+    labels = agg["broker_type"].tolist()
+    values = agg["net_lot"].tolist()
+    plot_colors = [colors.get(btype, "#64748b") for btype in labels]
+
+    fig = go.Figure(data=[go.Pie(
+        labels=labels,
+        values=values,
+        marker=dict(colors=plot_colors, line=dict(color="#0f172a", width=2)),
+        hovertemplate="<b>%{label}</b><br>Net Lot: %{value:,.0f}<br>%{percent}<extra></extra>",
+        textposition="auto",
+        textinfo="label+percent",
+        textfont=dict(size=11, color="#e2e8f0"),
+    )])
+
+    fig.update_layout(
+        template=_DARK_TEMPLATE,
+        paper_bgcolor="#0f172a",
+        plot_bgcolor="#0f172a",
+        height=320,
+        margin=dict(l=10, r=10, t=30, b=10),
+        title=dict(text="Konsentrasi Broker (Net Lot)", font=dict(size=12, color="#94a3b8")),
+        showlegend=True,
+        legend=dict(font=dict(size=10), x=1.02, y=1),
+    )
+    return fig
+
+
+def broker_history_trend_line(
+    df_history: pd.DataFrame,
+) -> go.Figure:
+    """Line chart: broker history dengan 3 series (daily, rolling 5d, rolling 20d).
+
+    Tujuan: Visualisasi trend aktivitas broker sepanjang periode dengan rolling averages.
+
+    Args:
+        df_history  : DataFrame hasil aggregate_broker_history() dengan kolom:
+                     date, net_lot, rolling_5d, rolling_20d, cumulative_net_lot
+
+    Returns:
+        Plotly Figure line chart 3 series.
+    """
+    if df_history.empty or "date" not in df_history.columns:
+        return _empty_figure("Tidak ada history data untuk chart.")
+
+    df = df_history.copy()
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date")
+
+    # Ensure numeric columns
+    for col in ["net_lot", "rolling_5d", "rolling_20d"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    fig = go.Figure()
+
+    # Daily net_lot
+    if "net_lot" in df.columns:
+        fig.add_trace(go.Scatter(
+            x=df["date"],
+            y=df["net_lot"],
+            mode="lines+markers",
+            name="Daily Net",
+            line=dict(color="#38bdf8", width=2),
+            marker=dict(size=6),
+            hovertemplate="<b>%{x|%d %b %Y}</b><br>Daily: %{y:,.0f}<extra></extra>",
+        ))
+
+    # Rolling 5d
+    if "rolling_5d" in df.columns:
+        fig.add_trace(go.Scatter(
+            x=df["date"],
+            y=df["rolling_5d"],
+            mode="lines",
+            name="5D Rolling",
+            line=dict(color="#fb923c", width=2, dash="dash"),
+            hovertemplate="<b>%{x|%d %b %Y}</b><br>5D Avg: %{y:,.0f}<extra></extra>",
+        ))
+
+    # Rolling 20d
+    if "rolling_20d" in df.columns:
+        fig.add_trace(go.Scatter(
+            x=df["date"],
+            y=df["rolling_20d"],
+            mode="lines",
+            name="20D Rolling",
+            line=dict(color="#a78bfa", width=2, dash="dot"),
+            hovertemplate="<b>%{x|%d %b %Y}</b><br>20D Avg: %{y:,.0f}<extra></extra>",
+        ))
+
+    fig.update_layout(
+        template=_DARK_TEMPLATE,
+        paper_bgcolor="#0f172a",
+        plot_bgcolor="#1e293b",
+        height=350,
+        margin=dict(l=10, r=10, t=50, b=10),
+        title=dict(text="Trend Aktivitas Broker", font=dict(size=12, color="#94a3b8")),
+        xaxis=dict(title="Tanggal", showgrid=True, gridcolor="#334155"),
+        yaxis=dict(title="Net Lot", showgrid=True, gridcolor="#1e293b", zeroline=True, zerolinecolor="#475569"),
+        legend=dict(orientation="h", y=1.08, x=0, font=dict(size=10)),
+        hovermode="x unified",
+    )
+    return fig

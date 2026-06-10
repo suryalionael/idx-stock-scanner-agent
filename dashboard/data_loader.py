@@ -218,14 +218,48 @@ def load_all_tickers_for_date(scan_date: str) -> pd.DataFrame:
 # Load raw OHLCV
 # ---------------------------------------------------------------------------
 
+# Process-level cache for live-fetched OHLCV (deployed env has no data/raw/).
+_RAW_LIVE_CACHE: dict[str, pd.DataFrame] = {}
+
+
 def load_raw(ticker: str) -> pd.DataFrame:
-    """Load OHLCV parquet untuk satu ticker."""
+    """Load OHLCV for one ticker.
+
+    1) Local parquet `data/raw/{ticker}.parquet` (fast path — present locally).
+    2) Fallback: live yfinance fetch — `data/raw/` is gitignored and therefore
+       NOT deployed to Streamlit Cloud, so the parquet is absent there. Without
+       this fallback every chart on the deployed app shows "Tidak ada data raw".
+       Cached per-process to avoid refetching on each rerun.
+    Returns an empty DataFrame only when the ticker is truly unavailable.
+    """
     path = _RAW_DIR / f"{ticker}.parquet"
-    if not path.exists():
-        return pd.DataFrame()
-    df = pd.read_parquet(path)
-    df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None).dt.normalize()
-    return df.sort_values("date").reset_index(drop=True)
+    if path.exists():
+        df = pd.read_parquet(path)
+        df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None).dt.normalize()
+        return df.sort_values("date").reset_index(drop=True)
+    return _load_raw_live(ticker)
+
+
+def _load_raw_live(ticker: str) -> pd.DataFrame:
+    """Live OHLCV fetch fallback (deployed env). ~430 days so MA200 renders."""
+    if ticker in _RAW_LIVE_CACHE:
+        return _RAW_LIVE_CACHE[ticker]
+    df = pd.DataFrame()
+    try:
+        from datetime import datetime, timedelta
+        from stock_scanner.pipeline.fetch_yfinance import YFinanceFetcher
+        start = (datetime.today() - timedelta(days=430)).strftime("%Y-%m-%d")
+        end = (datetime.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+        raw = YFinanceFetcher(batch_size=1).fetch_single(ticker, start, end)
+        if raw is not None and not raw.empty and "date" in raw.columns:
+            raw = raw.copy()
+            raw["date"] = pd.to_datetime(raw["date"]).dt.tz_localize(None).dt.normalize()
+            df = raw.sort_values("date").reset_index(drop=True)
+    except Exception as exc:  # noqa: BLE001
+        import sys
+        print(f"[data_loader] load_raw live fallback failed for {ticker}: {exc}", file=sys.stderr)
+    _RAW_LIVE_CACHE[ticker] = df
+    return df
 
 
 # ---------------------------------------------------------------------------
