@@ -38,6 +38,7 @@ from dashboard.data_loader import (
     load_broker_history,
     load_published_payload,
     load_raw,
+    last_raw_diag,
     latest_ranked_date,
     load_fundamentals_for_date,
     get_fundamental_row,
@@ -74,6 +75,27 @@ from stock_scanner.reference.issuers import get_company_name, get_sector, ticker
 
 _BROKER_DIR = Path(__file__).parent.parent / "data" / "broker"
 _ROOT_PERF = Path(__file__).parent.parent / "data" / "performance"
+
+
+def _chart_debug(ticker: str) -> None:
+    """TEMP deployed diagnostic — shows which OHLCV source served the chart and,
+    if empty, exactly why. Auto-expands on failure. Remove once charts verified."""
+    d = last_raw_diag(ticker)
+    if not d:
+        return
+    rows = d.get("rows", 0) or 0
+    badge = "🟢" if rows else "🔴"
+    with st.expander(f"🐞 Chart data debug — {badge} {d.get('source') or 'none'} "
+                     f"({rows} rows)", expanded=(rows == 0)):
+        st.write({
+            "ui_ticker": ticker,
+            "source_used": d.get("source"),
+            "rows": rows,
+            "last_date": d.get("last_date"),
+            "columns": d.get("cols"),
+            "error": d.get("error"),
+            "empty_reason": d.get("reason"),
+        })
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -909,6 +931,7 @@ def render_ticker_detail(
             use_container_width=True,
             key=f"{key_prefix}chart_{ticker}_{scan_date}",
         )
+        _chart_debug(ticker)
 
         # ---- Status badges (news & fundamental) ----
         _render_data_status_badges(row)
@@ -1200,6 +1223,7 @@ def _render_scalping_detail(row: pd.Series, scan_date: str, api_key: str | None)
             use_container_width=True,
             key=f"scalp_chart_{ticker}_{scan_date}",
         )
+        _chart_debug(ticker)
 
     # News (catalyst) — compact
     news_status = str(row.get("news_data_status", "")).lower()
@@ -1491,6 +1515,7 @@ def _render_longterm_detail(row: pd.Series, scan_date: str, api_key: str | None)
             use_container_width=True,
             key=f"lt_chart_{ticker}_{scan_date}",
         )
+        _chart_debug(ticker)
 
     # Multi-period financial statement comparison (lazy, on demand)
     st.markdown("")
@@ -2395,6 +2420,7 @@ with tab_search:
                         use_container_width=True,
                         key=f"srch_chart_{final_ticker}",
                     )
+                _chart_debug(final_ticker)
 
             with srch_tabs[1]:
                 render_shareholders_section(final_ticker, selected_date)

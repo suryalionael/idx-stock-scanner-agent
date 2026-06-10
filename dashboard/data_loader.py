@@ -218,32 +218,91 @@ def load_all_tickers_for_date(scan_date: str) -> pd.DataFrame:
 # Load raw OHLCV
 # ---------------------------------------------------------------------------
 
-# Process-level cache for live-fetched OHLCV (deployed env has no data/raw/).
+# Process-level caches + runtime diagnostics for the chart's OHLCV source.
 _RAW_LIVE_CACHE: dict[str, pd.DataFrame] = {}
+_OHLC_BUNDLE: pd.DataFrame | None = None          # lazy-loaded committed bundle
+_LAST_RAW_DIAG: dict[str, dict] = {}              # per-ticker runtime trace
+_OHLC_BUNDLE_PATH = _ROOT / "data" / "published" / "ohlc_recent.parquet"
+
+
+def last_raw_diag(ticker: str) -> dict:
+    """Runtime diagnostics for the most recent load_raw(ticker) — for the
+    deployed debug panel (source used, rows, last date, error/reason)."""
+    return _LAST_RAW_DIAG.get(ticker, {})
+
+
+def _get_ohlc_bundle() -> pd.DataFrame:
+    """Lazy-load the committed recent-OHLC bundle (data/published/ohlc_recent.parquet).
+    This is present on Streamlit Cloud (committed) where data/raw/ is not."""
+    global _OHLC_BUNDLE
+    if _OHLC_BUNDLE is None:
+        try:
+            _OHLC_BUNDLE = pd.read_parquet(_OHLC_BUNDLE_PATH) if _OHLC_BUNDLE_PATH.exists() else pd.DataFrame()
+        except Exception:  # noqa: BLE001
+            _OHLC_BUNDLE = pd.DataFrame()
+    return _OHLC_BUNDLE
+
+
+def _finalize_raw(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None).dt.normalize()
+    return df.sort_values("date").reset_index(drop=True)
 
 
 def load_raw(ticker: str) -> pd.DataFrame:
-    """Load OHLCV for one ticker.
-
-    1) Local parquet `data/raw/{ticker}.parquet` (fast path — present locally).
-    2) Fallback: live yfinance fetch — `data/raw/` is gitignored and therefore
-       NOT deployed to Streamlit Cloud, so the parquet is absent there. Without
-       this fallback every chart on the deployed app shows "Tidak ada data raw".
-       Cached per-process to avoid refetching on each rerun.
-    Returns an empty DataFrame only when the ticker is truly unavailable.
+    """Load OHLCV for one ticker, in priority order:
+      1) local parquet data/raw/{ticker}.parquet  (fast path; present locally)
+      2) committed bundle data/published/ohlc_recent.parquet  (present on Cloud,
+         where data/raw/ is gitignored — this is the reliable Cloud source)
+      3) live yfinance fetch  (last resort; rate-limited on Cloud)
+    Returns empty only when the ticker is truly unavailable in every source.
+    Records a runtime diagnostic in _LAST_RAW_DIAG[ticker].
     """
+    diag = {"ticker": ticker, "source": None, "rows": 0,
+            "last_date": None, "cols": [], "error": None, "reason": None}
+
+    # 1) local parquet
     path = _RAW_DIR / f"{ticker}.parquet"
     if path.exists():
-        df = pd.read_parquet(path)
-        df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None).dt.normalize()
-        return df.sort_values("date").reset_index(drop=True)
-    return _load_raw_live(ticker)
+        try:
+            df = _finalize_raw(pd.read_parquet(path))
+            diag.update(source="local_parquet", rows=len(df), cols=list(df.columns),
+                        last_date=str(df["date"].max().date()) if len(df) else None)
+            _LAST_RAW_DIAG[ticker] = diag
+            return df
+        except Exception as exc:  # noqa: BLE001
+            diag["error"] = f"local read: {exc}"
+
+    # 2) committed bundle (Cloud)
+    bundle = _get_ohlc_bundle()
+    if not bundle.empty and "ticker" in bundle.columns:
+        sub = bundle[bundle["ticker"].astype(str) == str(ticker)]
+        if not sub.empty:
+            df = _finalize_raw(sub)
+            diag.update(source="published_bundle", rows=len(df), cols=list(df.columns),
+                        last_date=str(df["date"].max().date()) if len(df) else None)
+            _LAST_RAW_DIAG[ticker] = diag
+            return df
+        diag["reason"] = "ticker tidak ada di bundle"
+    else:
+        diag["reason"] = "bundle kosong/tidak ada"
+
+    # 3) live yfinance (last resort)
+    df = _load_raw_live(ticker, diag)
+    if df.empty and not diag.get("error"):
+        diag["reason"] = diag.get("reason") or "semua sumber kosong (yfinance tidak mengembalikan data)"
+    _LAST_RAW_DIAG[ticker] = diag
+    return df
 
 
-def _load_raw_live(ticker: str) -> pd.DataFrame:
-    """Live OHLCV fetch fallback (deployed env). ~430 days so MA200 renders."""
+def _load_raw_live(ticker: str, diag: dict | None = None) -> pd.DataFrame:
+    """Live OHLCV fetch (deployed last resort). ~430 days so MA200 renders."""
     if ticker in _RAW_LIVE_CACHE:
-        return _RAW_LIVE_CACHE[ticker]
+        df = _RAW_LIVE_CACHE[ticker]
+        if diag is not None and df is not None and not df.empty:
+            diag.update(source="live_yfinance(cache)", rows=len(df), cols=list(df.columns),
+                        last_date=str(df["date"].max().date()))
+        return df
     df = pd.DataFrame()
     try:
         from datetime import datetime, timedelta
@@ -252,12 +311,13 @@ def _load_raw_live(ticker: str) -> pd.DataFrame:
         end = (datetime.today() + timedelta(days=1)).strftime("%Y-%m-%d")
         raw = YFinanceFetcher(batch_size=1).fetch_single(ticker, start, end)
         if raw is not None and not raw.empty and "date" in raw.columns:
-            raw = raw.copy()
-            raw["date"] = pd.to_datetime(raw["date"]).dt.tz_localize(None).dt.normalize()
-            df = raw.sort_values("date").reset_index(drop=True)
+            df = _finalize_raw(raw)
+            if diag is not None:
+                diag.update(source="live_yfinance", rows=len(df), cols=list(df.columns),
+                            last_date=str(df["date"].max().date()))
     except Exception as exc:  # noqa: BLE001
-        import sys
-        print(f"[data_loader] load_raw live fallback failed for {ticker}: {exc}", file=sys.stderr)
+        if diag is not None:
+            diag["error"] = f"yfinance: {exc}"
     _RAW_LIVE_CACHE[ticker] = df
     return df
 
