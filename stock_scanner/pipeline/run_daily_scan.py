@@ -289,6 +289,17 @@ def main(config_path: Path = _DEFAULT_CONFIG, force_holiday: bool = False) -> No
         is_live_scan=is_live_scan,
     )
 
+    # --- Step 10b: Recent-OHLC bundle for dashboard charts (non-fatal) ---
+    # data/raw/ is gitignored (not deployed), so commit a compact recent-OHLC
+    # bundle the deployed dashboard can read for charts without live yfinance.
+    try:
+        from stock_scanner.pipeline.publisher import export_recent_ohlc
+        from stock_scanner.pipeline.suspension import filter_active
+        _pub_tickers = filter_active(signals_df)["ticker"].astype(str).tolist()
+        export_recent_ohlc(_pub_tickers, raw_dir, sessions=250)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("OHLC bundle export skipped: {}", exc)
+
     # --- Step 11: Signal List performance tracking (non-fatal) ---
     # Archives today's Swing/Scalping signals and evaluates any pending prior
     # signals against this freshly-scanned session's OHLC. Writes CSV + Excel.

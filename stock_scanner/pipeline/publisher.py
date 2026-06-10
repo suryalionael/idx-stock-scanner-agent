@@ -310,3 +310,50 @@ def export_latest_dashboard_data(
         len(payload.get("all_tickers", [])),
     )
     return out_path
+
+
+# ---------------------------------------------------------------------------
+# Recent OHLCV bundle — committed so the deployed dashboard renders charts
+# without live yfinance (rate-limited on Streamlit Cloud's shared IPs).
+# ---------------------------------------------------------------------------
+
+_OHLC_BUNDLE_PATH = _PUBLISHED_DIR / "ohlc_recent.parquet"
+_OHLC_BUNDLE_COLS = ["date", "open", "high", "low", "close", "volume"]
+
+
+def export_recent_ohlc(tickers, raw_dir, out_path=None, sessions: int = 250):
+    """Bundle the last `sessions` OHLCV rows per ticker into ONE parquet
+    (long format: ticker,date,open,high,low,close,volume) at
+    data/published/ohlc_recent.parquet. The dashboard reads this on Cloud where
+    data/raw/ is gitignored/absent — so charts no longer depend on live yfinance.
+    """
+    from pathlib import Path as _P
+    raw_dir = _P(raw_dir)
+    out_path = out_path or _OHLC_BUNDLE_PATH
+    frames = []
+    for t in {str(x) for x in tickers}:
+        p = raw_dir / f"{t}.parquet"
+        if not p.exists():
+            continue
+        try:
+            df = pd.read_parquet(p)
+            keep = [c for c in _OHLC_BUNDLE_COLS if c in df.columns]
+            if "date" not in keep or "close" not in keep:
+                continue
+            df = df[keep].copy()
+            df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None).dt.normalize()
+            df = df.sort_values("date").tail(sessions)
+            df.insert(0, "ticker", t)
+            frames.append(df)
+        except Exception:  # noqa: BLE001
+            continue
+    if not frames:
+        logger.warning("export_recent_ohlc: no raw data found for %d tickers", len(tickers))
+        return None
+    bundle = pd.concat(frames, ignore_index=True)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    bundle.to_parquet(out_path, index=False)
+    logger.info("OHLC bundle written: %s (%d tickers, %d rows, %.1f KB)",
+                out_path.name, bundle["ticker"].nunique(), len(bundle),
+                out_path.stat().st_size / 1024)
+    return out_path
