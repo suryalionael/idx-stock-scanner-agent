@@ -2212,27 +2212,30 @@ with tab_perf:
             _strat = st.radio("Strategi", ["Swing", "Scalping"], horizontal=True,
                               key="perf_strat").lower()
         _sd = _res[_res["strategy"] == _strat]
-        _dates = sorted(_sd["signal_date"].astype(str).unique(), reverse=True)
+        # Review date = EVAL DATE (the market session reviewed), newest first.
+        _dates = sorted(
+            _sd.loc[_sd["status"] == "evaluated", "eval_date"].dropna().astype(str).unique(),
+            reverse=True)
         with c2:
-            _date = st.selectbox("Tanggal sinyal", options=_dates,
+            _date = st.selectbox("Tanggal review (sesi market)", options=_dates,
                                  index=0 if _dates else None, key="perf_date")
 
-        _day = _sd[_sd["signal_date"].astype(str) == str(_date)].copy()
-        _ev = _day[_day["status"] == "evaluated"]
-        _n = len(_ev)
-        _w = int((_ev["wl"] == "W").sum()) if _n else 0
-        _pend = int((_day["status"] == "pending").sum())
+        _day = _sd[(_sd["eval_date"].astype(str) == str(_date))
+                   & (_sd["status"] == "evaluated")].copy()
+        _n = len(_day)
+        _w = int((_day["wl"] == "W").sum()) if _n else 0
         _wr = round(_w / _n * 100, 1) if _n else 0.0
+        # Pending = signals still awaiting their next session (no eval_date yet).
+        _pend = int((_sd["status"] == "pending").sum())
 
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total sinyal", len(_day))
+        m1.metric("Sinyal direview", _n)
         m2.metric("Win / Loss", f"{_w}W / {_n - _w}L")
         m3.metric("Win Rate", f"{_wr}%" if _n else "—")
-        m4.metric("Pending", _pend)
-        _evd = _day[_day["status"] == "evaluated"]
-        if _pend and _n == 0:
-            st.warning(f"⏳ {_pend} sinyal masih pending — sesi evaluasi (berikutnya) "
-                       "belum tersedia. Akan terisi pada scan berikutnya.")
+        m4.metric("Pending (menunggu sesi)", _pend)
+        if _pend:
+            st.caption(f"⏳ {_pend} sinyal {_strat} menunggu sesi bursa berikutnya; "
+                       "akan otomatis masuk review begitu OHLC-nya tersedia.")
 
         # Table (matches the screenshot layout)
         _show = _day[["ticker", "signal", "prev", "close", "high",

@@ -212,7 +212,7 @@ def _write_excel(path: Path, swing: pd.DataFrame, scalping: pd.DataFrame, signal
             pend = int((df["status"] == "pending").sum()) if not df.empty else 0
 
             ws = xw.book.create_sheet(sheet)
-            ws["A1"] = f"{sheet} Signal List — {signal_date}"
+            ws["A1"] = f"{sheet} — Review sesi market {signal_date}"
             ws["A1"].font = Font(bold=True, size=13)
             ws["A2"] = (f"Win Rate: {wr}%  ({wins}W / {n - wins}L of {n} evaluated"
                         + (f", {pend} pending)" if pend else ")"))
@@ -287,8 +287,10 @@ def process_date(signal_date: str, signals_dir: Path | None = None,
         ]
         sdf = pd.DataFrame(rows, columns=_RESULT_COLS) if rows else pd.DataFrame(columns=_RESULT_COLS)
 
-        # daily per-strategy CSV (signal-date keyed)
-        sdf.to_csv(daily_dir / f"{strategy}_{signal_date}.csv", index=False)
+        # NOTE: daily review files are written keyed by EVAL DATE (the market
+        # session reviewed) in _rebuild_daily_reviews(), not by signal_date —
+        # see run_performance(). This is what makes the review dated by today's
+        # market session instead of lagging one day behind on the signal date.
 
         for _, r in lst.iterrows():
             archive_rows.append({"signal_date": signal_date, "strategy": strategy,
@@ -311,11 +313,37 @@ def process_date(signal_date: str, signals_dir: Path | None = None,
     _upsert(_read_csv(_RESULTS_CSV), pd.DataFrame(result_rows, columns=_RESULT_COLS),
             ["signal_date", "strategy", "ticker"]).to_csv(_RESULTS_CSV, index=False)
 
-    # Daily Excel (both sheets)
-    _write_excel(daily_dir / f"signal_list_{signal_date}.xlsx",
-                 per_strategy["swing"]["df"], per_strategy["scalping"]["df"], signal_date)
-
     return per_strategy
+
+
+def _rebuild_daily_reviews(perf_dir: Path | None = None) -> list[str]:
+    """(Re)write daily review files keyed by EVAL DATE — the market session being
+    reviewed — from the evaluated rows in signal_results.csv. This is the date the
+    user sees: a session that closed today (06-10) produces *_2026-06-10 files,
+    not a file dated by the prior signal session (06-09).
+
+    Returns the list of eval dates written.
+    """
+    perf_dir = perf_dir or _PERF_DIR
+    daily_dir = perf_dir / "daily"
+    daily_dir.mkdir(parents=True, exist_ok=True)
+
+    res = _read_csv(perf_dir / "signal_results.csv")
+    if res.empty or "eval_date" not in res.columns:
+        return []
+    ev = res[(res["status"] == "evaluated") & res["eval_date"].notna()].copy()
+    if ev.empty:
+        return []
+
+    written: list[str] = []
+    for eval_date, grp in ev.groupby(ev["eval_date"].astype(str)):
+        sw = grp[grp["strategy"] == "swing"].reset_index(drop=True)
+        sc = grp[grp["strategy"] == "scalping"].reset_index(drop=True)
+        sw[_RESULT_COLS].to_csv(daily_dir / f"swing_{eval_date}.csv", index=False)
+        sc[_RESULT_COLS].to_csv(daily_dir / f"scalping_{eval_date}.csv", index=False)
+        _write_excel(daily_dir / f"signal_list_{eval_date}.xlsx", sw, sc, eval_date)
+        written.append(eval_date)
+    return sorted(written)
 
 
 def run_performance(signals_dir: Path | None = None, raw_dir: Path | None = None,
@@ -335,12 +363,12 @@ def run_performance(signals_dir: Path | None = None, raw_dir: Path | None = None
                 out[d] = res
         except Exception as exc:  # noqa: BLE001
             logger.warning("performance: failed on {}: {}", d, exc)
-    if out:
-        last = sorted(out)[-1]
-        sw, sc = out[last].get("swing", {}), out[last].get("scalping", {})
-        logger.info("Performance updated thru {} | swing {}sig/{}eval, scalping {}sig/{}eval",
-                    last, sw.get("signals"), sw.get("evaluated"),
-                    sc.get("signals"), sc.get("evaluated"))
+
+    # Daily review files keyed by eval (market) date — the date the user reviews.
+    review_dates = _rebuild_daily_reviews(perf_dir)
+    if review_dates:
+        logger.info("Performance reviews written thru market date {} ({} sessions).",
+                    review_dates[-1], len(review_dates))
     return out
 
 
@@ -433,14 +461,15 @@ def run_performance_evening(signals_dir: Path | None = None, raw_dir: Path | Non
     return run_performance(signals_dir, raw_dir, perf_dir)
 
 
-def win_rate_recap(signal_date: str, perf_dir: Path | None = None) -> dict:
-    """Per-strategy win-rate summary for one signal date (for Telegram/dashboard)."""
+def win_rate_recap(eval_date: str, perf_dir: Path | None = None) -> dict:
+    """Per-strategy win-rate summary for one EVAL (market) date — the reviewed
+    session — for Telegram/dashboard."""
     df = load_results(perf_dir)
     out = {}
     if df.empty:
         return out
     for strat in ("swing", "scalping"):
-        sub = df[(df["signal_date"] == signal_date) & (df["strategy"] == strat)
+        sub = df[(df["eval_date"].astype(str) == str(eval_date)) & (df["strategy"] == strat)
                  & (df["status"] == "evaluated")]
         n = len(sub)
         wins = int((sub["wl"] == "W").sum()) if n else 0
@@ -450,11 +479,12 @@ def win_rate_recap(signal_date: str, perf_dir: Path | None = None) -> dict:
 
 
 def latest_evaluated_date(perf_dir: Path | None = None) -> Optional[str]:
+    """Most recent reviewed market session (max eval_date among evaluated rows)."""
     df = load_results(perf_dir)
-    if df.empty:
+    if df.empty or "eval_date" not in df.columns:
         return None
-    ev = df[df["status"] == "evaluated"]
-    return None if ev.empty else str(ev["signal_date"].max())
+    ev = df[(df["status"] == "evaluated") & df["eval_date"].notna()]
+    return None if ev.empty else str(ev["eval_date"].max())
 
 
 if __name__ == "__main__":
