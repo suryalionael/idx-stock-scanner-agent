@@ -279,13 +279,23 @@ hr {{ border-color: var(--c-border); margin: var(--s4) 0; }}
 }}
 .metric-card .value {{ font-size: var(--fs-2xl); font-weight: 700; line-height: 1.1; color: var(--c-text); }}
 
-/* native st.metric polish */
+/* native st.metric — force readable colours in BOTH modes. The native theme is
+   pinned dark, so without these the big value renders near-white and vanishes
+   on a light card (Scalping/Long Term/Smart Money/Signal Performance cards). */
 [data-testid="stMetric"] {{
   background: var(--c-surface); border: 1px solid var(--c-border);
   border-radius: var(--r-md); padding: 12px 16px;
 }}
-[data-testid="stMetricLabel"] p {{ font-size: var(--fs-xs) !important;
-  text-transform: uppercase; letter-spacing:.06em; color: var(--c-muted) !important; }}
+[data-testid="stMetricValue"], [data-testid="stMetricValue"] * {{
+  color: var(--c-text) !important; font-weight: 700;
+}}
+[data-testid="stMetricLabel"], [data-testid="stMetricLabel"] * {{
+  color: var(--c-muted) !important; font-size: var(--fs-xs) !important;
+  text-transform: uppercase; letter-spacing: .06em; font-weight: 600;
+}}
+[data-testid="stMetricDelta"], [data-testid="stMetricDelta"] * {{
+  color: var(--c-muted) !important;
+}}
 
 /* ---------- signal badges (flat, tinted, ONE shape) ---------- */
 .badge {{
@@ -451,9 +461,18 @@ div[data-baseweb="popover"] [aria-selected="true"] * {{
 }}
 [data-testid="stPlotlyChart"] > div {{ border-radius: var(--r-lg); overflow: hidden; }}
 
-/* ---------- alerts: flat, tinted, accent rail ---------- */
+/* ---------- alerts (st.warning/info/error/success) ----------
+   Native alert backgrounds are semi-transparent tints over the page, but the
+   text keeps the pinned-dark theme colour (near-white) → pale/unreadable on a
+   light page (e.g. "Data bukan sesi live…"). Force text to the active mode's
+   colour so it is high-contrast on the tint in both modes. */
 [data-testid="stAlert"] {{ border-radius: var(--r-md); border: 1px solid var(--c-border);
   box-shadow: none; }}
+[data-testid="stAlert"], [data-testid="stAlert"] p, [data-testid="stAlert"] li,
+[data-testid="stAlert"] span, [data-testid="stAlert"] [data-testid="stMarkdownContainer"],
+[data-testid="stAlert"] [data-testid="stMarkdownContainer"] * {{
+  color: var(--c-text) !important;
+}}
 
 /* ---------- accessibility: visible focus everywhere ---------- */
 :focus-visible {{ outline: 2px solid var(--c-accent); outline-offset: 2px; border-radius: 3px; }}
