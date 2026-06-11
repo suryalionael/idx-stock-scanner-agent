@@ -1,0 +1,21 @@
+# Dashboard theme — first-paint default (DARK).
+# Runtime Light/Dark switching is handled in dashboard/theme.py via
+# st.config.set_option("theme.*", ...) + the in-app toggle.
+#
+# IMPORTANT: these first-paint values are intentionally a hair different from
+# the runtime DARK palette in theme.py (#0F1115 / #161A20). Streamlit only
+# re-sends the theme to the browser when the runtime config DIFFERS from this
+# file; if they were identical, switching *back* to dark would be a no-diff and
+# the canvas widgets (st.dataframe) would stay stuck on the previous theme.
+# Keeping them slightly different guarantees every toggle re-pushes cleanly,
+# while staying visually identical on first paint.
+[theme]
+base = "dark"
+primaryColor = "#3B82F6"
+backgroundColor = "#0E1014"
+secondaryBackgroundColor = "#15191F"
+textColor = "#E6E8EC"
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"
