@@ -1,14 +1,50 @@
-"""Plotly chart builders untuk dashboard."""
+"""Plotly chart builders untuk dashboard.
+
+Charts read their colours from module-level theme globals so they match the
+active dashboard theme (light/dark). Call ``set_chart_theme(palette)`` once per
+run (the app does this) before building figures. Defaults are the dark palette
+so importing the module standalone still produces sensible charts.
+"""
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-_DARK_TEMPLATE = "plotly_dark"
+# --- Theme globals (overridden by set_chart_theme) ---
+_TEMPLATE = "plotly_dark"
+_PAPER    = "#0F1115"   # figure background
+_PLOT     = "#0F1115"   # plotting area background
+_SURFACE  = "#161A20"   # raised plot area (bars / fundamentals)
+_GRID     = "#222831"   # gridlines
+_TEXT     = "#E6E8EC"   # primary text
+_MUTED    = "#9BA4B0"   # secondary text / titles
+_UP       = "#22C55E"   # bullish candle
+_DOWN     = "#EF4444"   # bearish candle
+
+# Moving-average accents read well on both light and dark surfaces.
 _MA_COLORS = {
     "ma20": "#38bdf8",   # sky blue
-    "ma50": "#fb923c",   # orange
-    "ma200": "#a78bfa",  # purple
+    "ma50": "#f59e0b",   # amber
+    "ma200": "#8b5cf6",  # violet
 }
+
+
+def set_chart_theme(palette: dict) -> None:
+    """Point all chart builders at the active theme palette.
+
+    Args:
+        palette: dict from dashboard.theme.chart_palette(mode) with keys
+            template, paper, plot, surface, grid, text, muted, up, down.
+    """
+    global _TEMPLATE, _PAPER, _PLOT, _SURFACE, _GRID, _TEXT, _MUTED, _UP, _DOWN
+    _TEMPLATE = palette.get("template", _TEMPLATE)
+    _PAPER    = palette.get("paper",    _PAPER)
+    _PLOT     = palette.get("plot",     _PLOT)
+    _SURFACE  = palette.get("surface",  _SURFACE)
+    _GRID     = palette.get("grid",     _GRID)
+    _TEXT     = palette.get("text",     _TEXT)
+    _MUTED    = palette.get("muted",    _MUTED)
+    _UP       = palette.get("up",       _UP)
+    _DOWN     = palette.get("down",     _DOWN)
 
 
 def price_chart(
@@ -51,10 +87,10 @@ def price_chart(
             low=df["low"],
             close=df["close"],
             name="OHLC",
-            increasing_line_color="#22c55e",
-            decreasing_line_color="#ef4444",
-            increasing_fillcolor="#22c55e",
-            decreasing_fillcolor="#ef4444",
+            increasing_line_color=_UP,
+            decreasing_line_color=_DOWN,
+            increasing_fillcolor=_UP,
+            decreasing_fillcolor=_DOWN,
         ),
         row=1, col=1,
     )
@@ -99,7 +135,7 @@ def price_chart(
 
     # --- Volume bar ---
     vol_colors = [
-        "#22c55e" if c >= o else "#ef4444"
+        _UP if c >= o else _DOWN
         for c, o in zip(df["close"], df["open"])
     ]
     fig.add_trace(
@@ -140,21 +176,21 @@ def price_chart(
             )
 
     fig.update_layout(
-        template=_DARK_TEMPLATE,
+        template=_TEMPLATE,
         title=dict(text=ticker, font_size=16),
         height=540,
         margin=dict(l=10, r=10, t=40, b=10),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
         xaxis_rangeslider_visible=False,
-        paper_bgcolor="#0f172a",
-        plot_bgcolor="#0f172a",
+        paper_bgcolor=_PAPER,
+        plot_bgcolor=_PLOT,
     )
-    fig.update_yaxes(title_text="Harga", row=1, col=1, gridcolor="#1e293b")
-    fig.update_yaxes(title_text="Volume", row=2, col=1, gridcolor="#1e293b")
+    fig.update_yaxes(title_text="Harga", row=1, col=1, gridcolor=_GRID)
+    fig.update_yaxes(title_text="Volume", row=2, col=1, gridcolor=_GRID)
 
     # Range selector buttons on the price axis (row 1)
     fig.update_xaxes(
-        gridcolor="#1e293b",
+        gridcolor=_GRID,
         showgrid=True,
         rangeselector=dict(
             buttons=[
@@ -166,16 +202,16 @@ def price_chart(
                 dict(count=1,  label="YTD",step="year",  stepmode="todate"),
                 dict(step="all", label="ALL"),
             ],
-            bgcolor="#1e293b",
+            bgcolor=_SURFACE,
             activecolor="#38bdf8",
-            bordercolor="#334155",
-            font=dict(color="#94a3b8", size=11),
+            bordercolor=_GRID,
+            font=dict(color=_MUTED, size=11),
             x=0.0,
             y=1.0,
         ),
         row=1, col=1,
     )
-    fig.update_xaxes(gridcolor="#1e293b", showgrid=True, row=2, col=1)
+    fig.update_xaxes(gridcolor=_GRID, showgrid=True, row=2, col=1)
 
     return fig
 
@@ -202,13 +238,13 @@ def score_radar(row: pd.Series, ticker: str) -> go.Figure:
         name=ticker,
     ))
     fig.update_layout(
-        template=_DARK_TEMPLATE,
+        template=_TEMPLATE,
         polar=dict(
-            radialaxis=dict(visible=True, range=[0, 10], gridcolor="#1e293b", tickfont_size=9),
-            angularaxis=dict(gridcolor="#334155"),
-            bgcolor="#0f172a",
+            radialaxis=dict(visible=True, range=[0, 10], gridcolor=_GRID, tickfont_size=9),
+            angularaxis=dict(gridcolor=_GRID),
+            bgcolor=_PLOT,
         ),
-        paper_bgcolor="#0f172a",
+        paper_bgcolor=_PAPER,
         height=260,
         margin=dict(l=20, r=20, t=30, b=20),
         showlegend=False,
@@ -222,10 +258,10 @@ def history_timeline(df_history: pd.DataFrame) -> go.Figure:
         return _empty_figure("Belum ada history")
 
     signal_colors = {
-        "BREAKOUT": "#22c55e",
+        "BREAKOUT": _UP,
         "PRE_MARKUP": "#38bdf8",
         "WATCH": "#fb923c",
-        "AVOID": "#ef4444",
+        "AVOID": _DOWN,
         "NONE": "#64748b",
     }
 
@@ -248,13 +284,13 @@ def history_timeline(df_history: pd.DataFrame) -> go.Figure:
         ))
 
     fig.update_layout(
-        template=_DARK_TEMPLATE,
+        template=_TEMPLATE,
         height=300,
         margin=dict(l=10, r=10, t=30, b=10),
-        paper_bgcolor="#0f172a",
-        plot_bgcolor="#0f172a",
-        xaxis=dict(gridcolor="#1e293b"),
-        yaxis=dict(title="Total Score", range=[0, 10.5], gridcolor="#1e293b"),
+        paper_bgcolor=_PAPER,
+        plot_bgcolor=_PLOT,
+        xaxis=dict(gridcolor=_GRID),
+        yaxis=dict(title="Total Score", range=[0, 10.5], gridcolor=_GRID),
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
     )
     return fig
@@ -280,18 +316,18 @@ def shareholder_pie(df_composition: pd.DataFrame, ticker: str) -> go.Figure:
         labels=df[lbl_col],
         values=df[pct_col],
         hole=0.40,
-        marker=dict(colors=_COLORS[:len(df)], line=dict(color="#0f172a", width=2)),
+        marker=dict(colors=_COLORS[:len(df)], line=dict(color=_PAPER, width=2)),
         textinfo="label+percent",
         textfont_size=11,
         hovertemplate="<b>%{label}</b><br>%{value:.2f}%<extra></extra>",
     ))
 
     fig.update_layout(
-        template=_DARK_TEMPLATE,
+        template=_TEMPLATE,
         title=dict(text=f"Komposisi Pemegang Saham — {ticker}", font_size=13),
         height=280,
         margin=dict(l=10, r=10, t=40, b=10),
-        paper_bgcolor="#0f172a",
+        paper_bgcolor=_PAPER,
         legend=dict(orientation="v", yanchor="middle", y=0.5, font_size=11),
         showlegend=True,
     )
@@ -323,7 +359,7 @@ def monthly_holders_chart(df_monthly: pd.DataFrame, ticker: str) -> go.Figure:
 
     # Marker colors: green if growth ≥ 0, red otherwise
     colors = [
-        "#22c55e" if pd.isna(g) or g >= 0 else "#ef4444"
+        _UP if pd.isna(g) or g >= 0 else _DOWN
         for g in df.get("growth_pct", pd.Series(dtype=float))
     ]
 
@@ -340,14 +376,14 @@ def monthly_holders_chart(df_monthly: pd.DataFrame, ticker: str) -> go.Figure:
     ))
 
     fig.update_layout(
-        template=_DARK_TEMPLATE,
+        template=_TEMPLATE,
         title=dict(text=f"Jumlah Pemegang Saham — {ticker}", font_size=13),
         height=260,
         margin=dict(l=10, r=10, t=40, b=30),
-        paper_bgcolor="#0f172a",
-        plot_bgcolor="#0f172a",
-        xaxis=dict(title="Bulan", gridcolor="#1e293b", tickangle=-30),
-        yaxis=dict(title="Jumlah Holder", gridcolor="#1e293b"),
+        paper_bgcolor=_PAPER,
+        plot_bgcolor=_PLOT,
+        xaxis=dict(title="Bulan", gridcolor=_GRID, tickangle=-30),
+        yaxis=dict(title="Jumlah Holder", gridcolor=_GRID),
         showlegend=False,
     )
     return fig
@@ -381,7 +417,7 @@ def broker_chart(df_broker: pd.DataFrame, ticker: str) -> go.Figure:
         y=labels,
         x=buy_vals,
         orientation="h",
-        marker_color="#22c55e",
+        marker_color=_UP,
         opacity=0.85,
         hovertemplate="%{y}: %{x:,.0f} lot<extra>Buy</extra>",
     ))
@@ -390,7 +426,7 @@ def broker_chart(df_broker: pd.DataFrame, ticker: str) -> go.Figure:
         y=labels,
         x=[-v for v in sell_vals],   # negatif → ke kiri untuk mirror chart
         orientation="h",
-        marker_color="#ef4444",
+        marker_color=_DOWN,
         opacity=0.85,
         hovertemplate="%{y}: %{customdata:,.0f} lot<extra>Sell</extra>",
         customdata=sell_vals,
@@ -400,19 +436,19 @@ def broker_chart(df_broker: pd.DataFrame, ticker: str) -> go.Figure:
     fig.add_vline(x=0, line_width=1, line_color="#475569")
 
     fig.update_layout(
-        template=_DARK_TEMPLATE,
+        template=_TEMPLATE,
         title=dict(text=f"Broker Activity — {ticker}", font_size=13),
         barmode="overlay",
         height=max(200, len(labels) * 32 + 80),
         margin=dict(l=10, r=10, t=40, b=10),
-        paper_bgcolor="#0f172a",
-        plot_bgcolor="#0f172a",
+        paper_bgcolor=_PAPER,
+        plot_bgcolor=_PLOT,
         xaxis=dict(
             title="Lot (Buy →  | ← Sell)",
-            gridcolor="#1e293b",
+            gridcolor=_GRID,
             zeroline=True, zerolinecolor="#475569",
         ),
-        yaxis=dict(gridcolor="#1e293b", autorange="reversed"),
+        yaxis=dict(gridcolor=_GRID, autorange="reversed"),
         legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="left", x=0),
     )
     return fig
@@ -489,15 +525,15 @@ def broker_net_flow_chart(
     fig.add_hline(y=0, line_width=1, line_color="#475569")
 
     fig.update_layout(
-        template=_DARK_TEMPLATE,
-        title=dict(text=f"Daily Net Broker Flow — {ticker}", font=dict(size=12, color="#94a3b8")),
+        template=_TEMPLATE,
+        title=dict(text=f"Daily Net Broker Flow — {ticker}", font=dict(size=12, color=_MUTED)),
         barmode="group",
         height=260,
         margin=dict(l=10, r=10, t=40, b=10),
-        paper_bgcolor="#0f172a",
-        plot_bgcolor="#1e293b",
-        xaxis=dict(title="Tanggal", gridcolor="#1e293b", tickangle=-30),
-        yaxis=dict(title="Net Lot", gridcolor="#1e293b", zeroline=True, zerolinecolor="#475569"),
+        paper_bgcolor=_PAPER,
+        plot_bgcolor=_SURFACE,
+        xaxis=dict(title="Tanggal", gridcolor=_GRID, tickangle=-30),
+        yaxis=dict(title="Net Lot", gridcolor=_GRID, zeroline=True, zerolinecolor="#475569"),
         legend=dict(orientation="h", y=1.1, x=0, font=dict(size=10)),
     )
     return fig
@@ -510,12 +546,12 @@ def _empty_figure(message: str) -> go.Figure:
         xref="paper", yref="paper",
         x=0.5, y=0.5,
         showarrow=False,
-        font=dict(size=14, color="#94a3b8"),
+        font=dict(size=14, color=_MUTED),
     )
     fig.update_layout(
-        template=_DARK_TEMPLATE,
-        paper_bgcolor="#0f172a",
-        plot_bgcolor="#0f172a",
+        template=_TEMPLATE,
+        paper_bgcolor=_PAPER,
+        plot_bgcolor=_PLOT,
         height=300,
         margin=dict(l=10, r=10, t=10, b=10),
     )
@@ -548,15 +584,15 @@ def fundamental_trend_chart(
         fig.add_annotation(
             text="Data tidak tersedia",
             xref="paper", yref="paper", x=0.5, y=0.5,
-            showarrow=False, font=dict(size=13, color="#94a3b8"),
+            showarrow=False, font=dict(size=13, color=_MUTED),
         )
         fig.update_layout(
-            template=_DARK_TEMPLATE,
-            paper_bgcolor="#0f172a",
-            plot_bgcolor="#0f172a",
+            template=_TEMPLATE,
+            paper_bgcolor=_PAPER,
+            plot_bgcolor=_PLOT,
             height=220,
             margin=dict(l=10, r=10, t=30, b=10),
-            title=dict(text=f"{label} ({ticker})", font=dict(size=13, color="#e2e8f0")),
+            title=dict(text=f"{label} ({ticker})", font=dict(size=13, color=_TEXT)),
         )
         return fig
 
@@ -573,17 +609,17 @@ def fundamental_trend_chart(
         marker_color=colors,
         text=[f"{v:.2f}" for v in values],
         textposition="outside",
-        textfont=dict(size=11, color="#e2e8f0"),
+        textfont=dict(size=11, color=_TEXT),
     ))
 
     fig.update_layout(
-        template=_DARK_TEMPLATE,
-        paper_bgcolor="#0f172a",
-        plot_bgcolor="#1e293b",
+        template=_TEMPLATE,
+        paper_bgcolor=_PAPER,
+        plot_bgcolor=_SURFACE,
         height=220,
         margin=dict(l=10, r=10, t=30, b=10),
-        title=dict(text=f"{label} ({unit})", font=dict(size=12, color="#94a3b8")),
-        yaxis=dict(showgrid=True, gridcolor="#1e293b", tickfont=dict(size=10)),
+        title=dict(text=f"{label} ({unit})", font=dict(size=12, color=_MUTED)),
+        yaxis=dict(showgrid=True, gridcolor=_GRID, tickfont=dict(size=10)),
         xaxis=dict(tickfont=dict(size=10)),
         showlegend=False,
     )
@@ -610,11 +646,11 @@ def price_chart_longterm(
         fig.add_annotation(
             text="Data OHLCV tidak tersedia",
             xref="paper", yref="paper", x=0.5, y=0.5,
-            showarrow=False, font=dict(size=13, color="#94a3b8"),
+            showarrow=False, font=dict(size=13, color=_MUTED),
         )
         fig.update_layout(
-            template=_DARK_TEMPLATE,
-            paper_bgcolor="#0f172a", plot_bgcolor="#0f172a",
+            template=_TEMPLATE,
+            paper_bgcolor=_PAPER, plot_bgcolor=_PLOT,
             height=280, margin=dict(l=10, r=10, t=30, b=10),
         )
         return fig
@@ -660,13 +696,13 @@ def price_chart_longterm(
         ))
 
     fig.update_layout(
-        template=_DARK_TEMPLATE,
-        paper_bgcolor="#0f172a",
-        plot_bgcolor="#1e293b",
+        template=_TEMPLATE,
+        paper_bgcolor=_PAPER,
+        plot_bgcolor=_SURFACE,
         height=310,
         margin=dict(l=10, r=10, t=50, b=10),
-        title=dict(text=f"{ticker} — Harga Jangka Panjang", font=dict(size=12, color="#94a3b8")),
-        yaxis=dict(showgrid=True, gridcolor="#1e293b", tickformat=","),
+        title=dict(text=f"{ticker} — Harga Jangka Panjang", font=dict(size=12, color=_MUTED)),
+        yaxis=dict(showgrid=True, gridcolor=_GRID, tickformat=","),
         xaxis=dict(
             showgrid=False,
             rangeselector=dict(
@@ -679,14 +715,14 @@ def price_chart_longterm(
                     dict(count=1,  label="YTD", step="year",  stepmode="todate"),
                     dict(step="all", label="ALL"),
                 ],
-                bgcolor="#1e293b",
+                bgcolor=_SURFACE,
                 activecolor="#38bdf8",
-                bordercolor="#334155",
-                font=dict(color="#94a3b8", size=11),
+                bordercolor=_GRID,
+                font=dict(color=_MUTED, size=11),
             ),
             rangeslider=dict(
                 visible=True,
-                bgcolor="#0f172a",
+                bgcolor=_PLOT,
                 thickness=0.06,
             ),
             type="date",
@@ -753,20 +789,20 @@ def broker_concentration_pie(
     fig = go.Figure(data=[go.Pie(
         labels=labels,
         values=values,
-        marker=dict(colors=plot_colors, line=dict(color="#0f172a", width=2)),
+        marker=dict(colors=plot_colors, line=dict(color=_PAPER, width=2)),
         hovertemplate="<b>%{label}</b><br>Net Lot: %{value:,.0f}<br>%{percent}<extra></extra>",
         textposition="auto",
         textinfo="label+percent",
-        textfont=dict(size=11, color="#e2e8f0"),
+        textfont=dict(size=11, color=_TEXT),
     )])
 
     fig.update_layout(
-        template=_DARK_TEMPLATE,
-        paper_bgcolor="#0f172a",
-        plot_bgcolor="#0f172a",
+        template=_TEMPLATE,
+        paper_bgcolor=_PAPER,
+        plot_bgcolor=_PLOT,
         height=320,
         margin=dict(l=10, r=10, t=30, b=10),
-        title=dict(text="Konsentrasi Broker (Net Lot)", font=dict(size=12, color="#94a3b8")),
+        title=dict(text="Konsentrasi Broker (Net Lot)", font=dict(size=12, color=_MUTED)),
         showlegend=True,
         legend=dict(font=dict(size=10), x=1.02, y=1),
     )
@@ -836,14 +872,14 @@ def broker_history_trend_line(
         ))
 
     fig.update_layout(
-        template=_DARK_TEMPLATE,
-        paper_bgcolor="#0f172a",
-        plot_bgcolor="#1e293b",
+        template=_TEMPLATE,
+        paper_bgcolor=_PAPER,
+        plot_bgcolor=_SURFACE,
         height=350,
         margin=dict(l=10, r=10, t=50, b=10),
-        title=dict(text="Trend Aktivitas Broker", font=dict(size=12, color="#94a3b8")),
-        xaxis=dict(title="Tanggal", showgrid=True, gridcolor="#334155"),
-        yaxis=dict(title="Net Lot", showgrid=True, gridcolor="#1e293b", zeroline=True, zerolinecolor="#475569"),
+        title=dict(text="Trend Aktivitas Broker", font=dict(size=12, color=_MUTED)),
+        xaxis=dict(title="Tanggal", showgrid=True, gridcolor=_GRID),
+        yaxis=dict(title="Net Lot", showgrid=True, gridcolor=_GRID, zeroline=True, zerolinecolor="#475569"),
         legend=dict(orientation="h", y=1.08, x=0, font=dict(size=10)),
         hovermode="x unified",
     )

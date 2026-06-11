@@ -22,7 +22,16 @@ from dashboard.charts import (
     price_chart,
     price_chart_longterm,
     score_radar,
+    set_chart_theme,
     shareholder_pie,
+)
+from dashboard.theme import (
+    apply_theme,
+    chart_palette,
+    get_mode,
+    palette,
+    pos_neg_colors,
+    render_theme_toggle,
 )
 from dashboard.data_loader import (
     available_dates,
@@ -108,31 +117,20 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------------------------
-# Global CSS
+# Theme / design system
 # ---------------------------------------------------------------------------
-st.markdown("""
-<style>
-  [data-testid="stAppViewContainer"] { background-color: #0f172a; }
-  [data-testid="stSidebar"]          { background-color: #1e293b; }
-  [data-testid="stHeader"]           { background-color: #0f172a; }
-  .metric-card {
-    background: #1e293b; border-radius: 10px;
-    padding: 14px 18px; text-align: center;
-  }
-  .metric-card .label { font-size: 12px; color: #94a3b8; margin-bottom: 4px; }
-  .metric-card .value { font-size: 28px; font-weight: 700; }
-  .badge {
-    display: inline-block; padding: 2px 10px; border-radius: 12px;
-    font-size: 12px; font-weight: 600; letter-spacing: 0.5px;
-  }
-  .badge-BREAKOUT   { background:#166534; color:#4ade80; }
-  .badge-PRE_MARKUP { background:#1e3a5f; color:#38bdf8; }
-  .badge-WATCH      { background:#7c2d12; color:#fb923c; }
-  .badge-AVOID      { background:#450a0a; color:#f87171; }
-  .badge-NONE       { background:#1e293b; color:#64748b; }
-  .company-subtitle { font-size: 13px; color: #64748b; margin-top: -6px; margin-bottom: 10px; }
-</style>
-""", unsafe_allow_html=True)
+# Resolve the active mode (session-state driven), apply Streamlit's native
+# theme for the canvas widgets + inject the baked CSS design layer, then point
+# the Plotly charts at the matching palette. The in-app Light/Dark toggle lives
+# in the sidebar (render_theme_toggle).
+_THEME_MODE = apply_theme(get_mode())
+set_chart_theme(chart_palette(_THEME_MODE))
+
+st.markdown(
+    "<style>.company-subtitle{font-size:13px;color:var(--c-faint);"
+    "margin-top:-6px;margin-bottom:10px;}</style>",
+    unsafe_allow_html=True,
+)
 
 _SIG_EMOJI = {
     "BREAKOUT":   "🟢",
@@ -160,16 +158,20 @@ def _fmt_score(val) -> str:
 
 
 def _color_net_lot(val) -> str:
-    """Per-cell CSS for net_lot: green (+), red (-), grey (0/NaN)."""
+    """Per-cell CSS for net_lot: green (+), red (-), grey (0/NaN).
+
+    Colours follow the active theme so cells stay legible in light mode too.
+    """
+    pos, neg, zero = pos_neg_colors()
     try:
         v = float(val)
     except (TypeError, ValueError):
         return ""
     if v > 0:
-        return "color: #4ade80; font-weight: 600"
+        return f"color: {pos}; font-weight: 600"
     if v < 0:
-        return "color: #ef4444; font-weight: 600"
-    return "color: #94a3b8"
+        return f"color: {neg}; font-weight: 600"
+    return f"color: {zero}"
 
 
 def _render_data_status_badges(row: pd.Series) -> None:
@@ -188,18 +190,15 @@ def _render_data_status_badges(row: pd.Series) -> None:
         except (TypeError, ValueError):
             score_str = "?"
         badges.append(
-            f'<span style="background:#14532d;color:#4ade80;padding:2px 8px;'
-            f'border-radius:8px;font-size:12px">📰 News: {n} artikel · skor {score_str}</span>'
+            f'<span class="chip chip-ok">📰 News: {n} artikel · skor {score_str}</span>'
         )
     elif news_status == "none":
         badges.append(
-            '<span style="background:#1e293b;color:#94a3b8;padding:2px 8px;'
-            'border-radius:8px;font-size:12px">📰 News: tidak ada berita 3 hari ini</span>'
+            '<span class="chip chip-muted">📰 News: tidak ada berita 3 hari ini</span>'
         )
     elif news_status == "failed":
         badges.append(
-            '<span style="background:#450a0a;color:#f87171;padding:2px 8px;'
-            'border-radius:8px;font-size:12px">⚠️ News: data unavailable today</span>'
+            '<span class="chip chip-warn">⚠️ News: data unavailable today</span>'
         )
 
     # Fundamental badge
@@ -219,18 +218,15 @@ def _render_data_status_badges(row: pd.Series) -> None:
                 pass
         summary = " · ".join(parts) if parts else "data ok"
         badges.append(
-            f'<span style="background:#1e3a5f;color:#38bdf8;padding:2px 8px;'
-            f'border-radius:8px;font-size:12px">📊 Fundamental: {summary}</span>'
+            f'<span class="chip chip-info">📊 Fundamental: {summary}</span>'
         )
     elif fund_status == "partial":
         badges.append(
-            '<span style="background:#292524;color:#fb923c;padding:2px 8px;'
-            'border-radius:8px;font-size:12px">📊 Fundamental: data parsial</span>'
+            '<span class="chip chip-warn">📊 Fundamental: data parsial</span>'
         )
     elif fund_status == "missing":
         badges.append(
-            '<span style="background:#1e293b;color:#64748b;padding:2px 8px;'
-            'border-radius:8px;font-size:12px">📊 Fundamental: belum tersedia</span>'
+            '<span class="chip chip-muted">📊 Fundamental: belum tersedia</span>'
         )
 
     if badges:
@@ -1555,14 +1551,15 @@ def _render_longterm_detail(row: pd.Series, scan_date: str, api_key: str | None)
                     val = yoy.get(key)
                     series = annual.get(_field[key], [])
                     if val is not None:
-                        color = "#4ade80" if val >= 0 else "#f87171"
+                        _pos, _neg, _ = pos_neg_colors()
+                        color = _pos if val >= 0 else _neg
                         sub = f'<div style="font-size:16px;font-weight:700;color:{color}">{val:+.1f}%</div>'
                     elif not series:
-                        sub = '<div style="font-size:11px;color:#64748b">tidak ada data</div>'
+                        sub = '<div style="font-size:11px;color:var(--c-faint)">tidak ada data</div>'
                     else:
-                        sub = '<div style="font-size:11px;color:#64748b">hanya 1 periode</div>'
+                        sub = '<div style="font-size:11px;color:var(--c-faint)">hanya 1 periode</div>'
                     st.markdown(
-                        f'<div style="text-align:center"><div style="font-size:11px;color:#94a3b8">'
+                        f'<div style="text-align:center"><div style="font-size:11px;color:var(--c-muted)">'
                         f'{label}</div>{sub}</div>', unsafe_allow_html=True,
                     )
 
@@ -1875,28 +1872,34 @@ def render_deployment_status(remote_mode: bool, remote_payload: dict) -> None:
         age_days = None
     dot = "🟢" if (age_days is not None and age_days <= 4) else "🟠"
     st.markdown(
-        f'<div style="background:#0b2440;border:1px solid #1e3a5f;border-radius:8px;'
-        f'padding:8px 12px;font-size:12px;line-height:1.7;margin-bottom:10px;">'
+        f'<div class="status-panel">'
         f'<b>📡 Status Deploy</b> {dot}<br>'
-        f'<span style="color:#94a3b8">Sumber data:</span> {source}<br>'
-        f'<span style="color:#94a3b8">Branch/commit:</span> <code>{branch}@{sha}</code><br>'
-        f'<span style="color:#94a3b8">Market date:</span> <b>{market}</b><br>'
-        f'<span style="color:#94a3b8">Last updated:</span> {updated}'
+        f'<span class="k">Sumber data:</span> {source}<br>'
+        f'<span class="k">Branch/commit:</span> <code>{branch}@{sha}</code><br>'
+        f'<span class="k">Market date:</span> <b>{market}</b><br>'
+        f'<span class="k">Last updated:</span> {updated}'
         f'</div>',
         unsafe_allow_html=True,
     )
 
 
 with st.sidebar:
-    st.markdown("## 📈 IDX Scanner")
+    st.markdown(
+        '<div class="app-brand">'
+        '<div class="mark">📈</div>'
+        '<div><div class="name">IDX Scanner</div>'
+        '<div class="sub">Signal & market intelligence</div></div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    # Explicit in-app Light/Dark switch.
+    render_theme_toggle()
     render_deployment_status(_remote_mode, _remote_payload)
 
     # Mode badge
     if _remote_mode:
         st.markdown(
-            '<div style="background:#1e3a5f;border-radius:6px;padding:4px 10px;'
-            'font-size:11px;color:#38bdf8;margin-bottom:6px;">'
-            '☁️ Mode: <b>Online</b> — data dari GitHub</div>',
+            '<div class="mode-pill mode-online">☁️ Mode: <b>Online</b> — data dari GitHub</div>',
             unsafe_allow_html=True,
         )
         if _remote_payload:
@@ -1919,9 +1922,7 @@ with st.sidebar:
             )
     else:
         st.markdown(
-            '<div style="background:#14532d;border-radius:6px;padding:4px 10px;'
-            'font-size:11px;color:#4ade80;margin-bottom:6px;">'
-            '💻 Mode: <b>Lokal</b></div>',
+            '<div class="mode-pill mode-local">💻 Mode: <b>Lokal</b></div>',
             unsafe_allow_html=True,
         )
 
@@ -1977,18 +1978,19 @@ with st.sidebar:
     # Mini signal summary
     if "signal" in df_all.columns:
         sig_counts = df_all["signal"].value_counts()
+        _pal = palette()
         sc1, sc2, sc3 = st.columns(3)
         for col, sig, color in [
-            (sc1, "BREAKOUT",   "#4ade80"),
-            (sc2, "PRE_MARKUP", "#38bdf8"),
-            (sc3, "WATCH",      "#fb923c"),
+            (sc1, "BREAKOUT",   _pal["success"]),
+            (sc2, "PRE_MARKUP", _pal["info"]),
+            (sc3, "WATCH",      _pal["warning"]),
         ]:
             cnt = int(sig_counts.get(sig, 0))
             with col:
                 st.markdown(
-                    f'<div style="text-align:center;background:#0f172a;border-radius:6px;padding:4px 0">'
-                    f'<div style="font-size:10px;color:#94a3b8">{sig[:3]}</div>'
-                    f'<div style="font-size:18px;font-weight:700;color:{color}">{cnt}</div>'
+                    f'<div class="mini-stat">'
+                    f'<div class="k">{sig[:3]}</div>'
+                    f'<div class="v" style="color:{color}">{cnt}</div>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
@@ -2208,6 +2210,25 @@ def render_smart_money_tab(df_all: pd.DataFrame, scan_date: str) -> None:
     )
 
 
+
+# ---------------------------------------------------------------------------
+# MAIN PAGE HEADER (left-aligned, restrained — no centred hero)
+# ---------------------------------------------------------------------------
+_hc_left, _hc_right = st.columns([3, 1], gap="small")
+with _hc_left:
+    st.markdown(
+        '<div class="page-head">'
+        '<div class="title">Market Dashboard</div>'
+        '<div class="desc">Sinyal teknikal, level trading & analitik emiten IDX</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+with _hc_right:
+    st.markdown(
+        f'<div style="text-align:right;padding-top:8px">'
+        f'<span class="chip chip-info">📅 Sesi {_fmt_date_id(selected_date)}</span></div>',
+        unsafe_allow_html=True,
+    )
 
 # ---------------------------------------------------------------------------
 # MAIN TABS
