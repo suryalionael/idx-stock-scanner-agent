@@ -4,21 +4,24 @@ Single source of truth for the dashboard's visual language. Centralises the
 colour tokens, spacing/typography scale and component styling so the UI reads
 as one intentional product instead of a default Streamlit prototype.
 
-Theme approach (stable, built-in first):
-  1. ``.streamlit/config.toml`` ships a polished DARK theme as the first-paint
-     default (so native widgets — dataframes, inputs, tabs — are correct before
-     any Python runs).
-  2. ``apply_theme(mode)`` switches Streamlit's *native* theme at runtime via
-     ``st.config.set_option("theme.*", ...)``. On Streamlit 1.37 this re-themes
-     the canvas-based ``st.dataframe`` correctly (verified in-browser), which a
-     CSS-only override cannot do.
-  3. A baked-per-mode CSS layer refines typography, spacing, cards, badges,
-     tabs and chart containers on top of the native theme.
-  4. ``render_theme_toggle()`` gives users an explicit in-app Light/Dark switch
-     (session-state driven) in addition to Streamlit's ⋮ → Settings → Theme.
+Theme approach (deterministic — the visible surfaces never depend on a racy
+native-theme push):
+  1. ``.streamlit/config.toml`` ships a polished DARK theme for a correct first
+     paint before any Python runs.
+  2. ``apply_theme(mode)`` (a) best-effort switches Streamlit's native theme via
+     ``st.config.set_option`` so native widgets match, and (b) injects a
+     baked-per-mode CSS layer that OWNS every chrome surface + widget colour, so
+     contrast is correct in both modes even if the native push lags.
+  3. ``style_table(df, mode)`` returns a pandas Styler that paints the canvas
+     ``st.dataframe`` cells with explicit per-mode colours. This is the fix for
+     the "table looks inverted" bug: the table is light in Light mode and dark
+     in Dark mode regardless of whatever the native theme happens to be.
+  4. ``render_theme_toggle()`` is an explicit Light/Dark switch (``?theme=`` +
+     reload) in addition to Streamlit's ⋮ → Settings → Theme.
 """
 from __future__ import annotations
 
+import pandas as pd
 import streamlit as st
 
 # ---------------------------------------------------------------------------
@@ -32,9 +35,9 @@ TOKENS: dict[str, dict[str, str]] = {
         "surface_2":     "#1E232B",  # raised / hover
         "border":        "#272D36",
         "border_strong": "#39424E",
-        "text":          "#E6E8EC",
-        "muted":         "#9BA4B0",
-        "faint":         "#6B7480",
+        "text":          "#ECEEF2",
+        "muted":         "#AEB6C2",
+        "faint":         "#8A93A1",
         "accent":        "#3B82F6",
         "accent_text":   "#93C5FD",
         "accent_weak":   "rgba(59,130,246,0.16)",
@@ -62,9 +65,9 @@ TOKENS: dict[str, dict[str, str]] = {
         "surface_2":     "#EEF1F4",
         "border":        "#E4E7EC",
         "border_strong": "#CDD3DC",
-        "text":          "#1A1D23",
-        "muted":         "#586170",
-        "faint":         "#8A93A0",
+        "text":          "#15181E",
+        "muted":         "#44505F",
+        "faint":         "#64748B",
         "accent":        "#2563EB",
         "accent_text":   "#1D4ED8",
         "accent_weak":   "rgba(37,99,235,0.10)",
@@ -87,34 +90,9 @@ TOKENS: dict[str, dict[str, str]] = {
     },
 }
 
-# Native Streamlit theme options per mode (drives canvas widgets + base chrome).
-_NATIVE = {
-    "dark": {
-        "base": "dark",
-        "primaryColor": TOKENS["dark"]["accent"],
-        "backgroundColor": TOKENS["dark"]["bg"],
-        "secondaryBackgroundColor": TOKENS["dark"]["surface"],
-        "textColor": TOKENS["dark"]["text"],
-        "font": "sans serif",
-    },
-    "light": {
-        "base": "light",
-        "primaryColor": TOKENS["light"]["accent"],
-        "backgroundColor": TOKENS["light"]["bg"],
-        "secondaryBackgroundColor": TOKENS["light"]["surface"],
-        "textColor": TOKENS["light"]["text"],
-        "font": "sans serif",
-    },
-}
-
-
-# The chosen mode is persisted in the URL query param ?theme=dark|light and the
-# toggle does a full page reload on change. Why a reload instead of a plain
-# rerun: Streamlit only re-pushes the *native* theme to the browser when the
-# runtime config differs from config.toml, and rerun-driven set_option pushes
-# are racy (the canvas st.dataframe can lag a rerun). A fresh session applies
-# set_option deterministically, so reloading guarantees both modes — chrome AND
-# canvas widgets — always match the toggle.
+# The chosen mode is persisted in the URL query param ?theme=dark|light. The
+# toggle navigates (full reload) so get_mode() reads the new param on a fresh
+# render; the CSS layer + style_table then deterministically paint that mode.
 _THEME_LABELS = ["🌙 Gelap", "☀️ Terang"]
 
 
@@ -155,6 +133,48 @@ def pos_neg_colors(mode: str | None = None) -> tuple[str, str, str]:
     """(+, -, 0) colours for numeric table cells, contrast-tuned per mode."""
     p = palette(mode)
     return p["success"], p["danger"], p["faint"]
+
+
+# ---------------------------------------------------------------------------
+# Dataframe theming — explicit cell colours so the canvas st.dataframe is never
+# inverted relative to the active theme (the table-colour bug fix).
+# ---------------------------------------------------------------------------
+def table_cell_colors(mode: str | None = None) -> tuple[str, str]:
+    """(background, text) for table cells — high contrast, per mode."""
+    if (mode or get_mode()) == "light":
+        return "#FFFFFF", "#15181E"   # light table: white bg, near-black text
+    return "#15191F", "#ECEEF2"        # dark table: dark bg, near-white text
+
+
+def _fmt_cell(v):
+    """Readable default formatting (Styler bypasses column_config number fmt)."""
+    if isinstance(v, bool):
+        return "✓" if v else ""
+    if isinstance(v, int):
+        return f"{v:,}"
+    if isinstance(v, float):
+        if pd.isna(v):
+            return ""
+        return f"{v:,.0f}" if float(v).is_integer() else f"{v:,.2f}"
+    return v
+
+
+def style_table(df, mode: str | None = None):
+    """Return a Styler that paints every cell with the active theme's colours.
+
+    Works on a raw DataFrame (wrapped in ``.style``) or an existing Styler.
+    Guarantees Light mode => light table, Dark mode => dark table, independent
+    of Streamlit's native theme state. Falls back to the input on any error.
+    """
+    mode = mode or get_mode()
+    bg, fg = table_cell_colors(mode)
+    try:
+        styler = df if hasattr(df, "set_properties") else df.style
+        return (styler
+                .format(_fmt_cell)
+                .set_properties(**{"background-color": bg, "color": fg}))
+    except Exception:  # noqa: BLE001  (never let table styling break a render)
+        return df
 
 
 # ---------------------------------------------------------------------------
@@ -342,21 +362,61 @@ hr {{ border-color: var(--c-border); margin: var(--s4) 0; }}
 }}
 [data-testid="stTabs"] [data-baseweb="tab-highlight"] {{ background: var(--c-accent); height: 2px; }}
 
-/* ---------- inputs / selects: subtle borders + clear focus ring ---------- */
+/* ---------- inputs / selects: own bg + TEXT colour in both modes ----------
+   We set explicit text colour so widgets stay readable even if the native
+   theme push lags (the dark-text-on-light-bg / light-text-on-dark-bg bug). */
 [data-baseweb="input"], [data-baseweb="select"] > div, .stTextInput input,
 .stNumberInput input, textarea, [data-baseweb="base-input"] {{
   border-radius: var(--r-md) !important;
 }}
-[data-baseweb="select"] > div, .stTextInput > div > div, .stNumberInput > div > div {{
+[data-baseweb="select"] > div, .stTextInput > div > div, .stNumberInput > div > div,
+[data-baseweb="base-input"], [data-baseweb="input"] {{
   border-color: var(--c-border) !important; background: var(--c-surface) !important;
 }}
+/* selected value + typed text + the dropdown caret */
+[data-baseweb="select"] *, .stTextInput input, .stNumberInput input, textarea,
+.stDateInput input, [data-testid="stWidgetLabel"] p, label, .stRadio label,
+.stCheckbox label, .stMultiSelect label, .stSelectbox label {{
+  color: var(--c-text) !important;
+}}
+.stTextInput input::placeholder, textarea::placeholder {{ color: var(--c-faint) !important; }}
 .stTextInput > div > div:focus-within, [data-baseweb="select"] > div:focus-within {{
   border-color: var(--c-accent) !important;
   box-shadow: 0 0 0 2px var(--c-accent-weak) !important;
 }}
+/* dropdown / listbox popovers are portaled to <body> and otherwise follow the
+   (possibly stale) native theme — force the full surface so they are always
+   readable in the active mode. Aggressive selectors: the bg can live on any of
+   the wrapper divs, so paint them all. */
+div[data-baseweb="popover"],
+div[data-baseweb="popover"] > div,
+div[data-baseweb="popover"] > div > div,
+div[data-baseweb="popover"] [data-baseweb="menu"],
+div[data-baseweb="popover"] ul[role="listbox"],
+div[data-baseweb="popover"] [role="listbox"] {{
+  background-color: var(--c-surface) !important;
+  border-color: var(--c-border) !important;
+}}
+div[data-baseweb="popover"] li,
+div[data-baseweb="popover"] [role="option"],
+div[data-baseweb="popover"] li * {{
+  background-color: var(--c-surface) !important;
+  color: var(--c-text) !important;
+}}
+div[data-baseweb="popover"] li:hover,
+div[data-baseweb="popover"] li:hover *,
+div[data-baseweb="popover"] [role="option"]:hover,
+div[data-baseweb="popover"] [aria-selected="true"],
+div[data-baseweb="popover"] [aria-selected="true"] * {{
+  background-color: var(--c-accent-weak) !important; color: var(--c-accent) !important;
+}}
 /* multiselect tags */
 [data-baseweb="tag"] {{ background: var(--c-accent-weak) !important; color: var(--c-accent) !important;
   border-radius: var(--r-sm) !important; }}
+/* slider value labels + dataframe toolbar icons */
+[data-testid="stSliderThumbValue"], [data-testid="stSliderTickBarMin"],
+[data-testid="stSliderTickBarMax"], [data-testid="stTickBar"] {{ color: var(--c-muted) !important; }}
+[data-testid="stDataFrameToolbar"] button {{ color: var(--c-muted) !important; }}
 
 /* ---------- buttons ---------- */
 .stButton > button, .stDownloadButton > button {{
@@ -412,17 +472,16 @@ footer {{ visibility: hidden; }}
 
 
 def apply_theme(mode: str | None = None) -> str:
-    """Apply the native Streamlit theme + inject the CSS layer for ``mode``.
+    """Inject the CSS design layer for ``mode`` and return the resolved mode.
 
-    Call once near the top of the app (after ``st.set_page_config``). Returns
-    the resolved mode so callers can pass it on to charts.
+    The native Streamlit theme is PINNED to dark (``.streamlit/config.toml``);
+    we deliberately do NOT switch it at runtime. Runtime ``st.config.set_option``
+    theme pushes are process-global and racy in a long-running server (they lag
+    or stick, which is what made tables/popovers invert). Instead the CSS here
+    skins every chrome surface + native widget for the active mode, and
+    ``style_table`` paints the dataframe cells — both deterministic per session.
     """
     mode = mode or get_mode()
-    for key, val in _NATIVE[mode].items():
-        try:
-            st.config.set_option(f"theme.{key}", val)
-        except Exception:  # noqa: BLE001  (never let theming break the app)
-            pass
     st.markdown(_css(mode), unsafe_allow_html=True)
     return mode
 
@@ -431,9 +490,9 @@ def render_theme_toggle(label: str = "Tampilan") -> str:
     """Explicit in-app Light/Dark switch, rendered as a segmented control.
 
     Each option is a real ``<a href="?theme=...">`` link in the main document,
-    so clicking it is an ordinary top-level navigation → a fresh Streamlit
-    session reads the query param and applies the native theme deterministically
-    (no rerun race, no sandboxed-iframe navigation). Returns the active mode.
+    so clicking it is an ordinary top-level navigation → a fresh render reads
+    the query param and the CSS layer repaints that mode. Returns the active
+    mode.
     """
     current = get_mode()
 
