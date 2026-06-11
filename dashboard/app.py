@@ -32,6 +32,7 @@ from dashboard.theme import (
     palette,
     pos_neg_colors,
     render_theme_toggle,
+    style_table,
 )
 from dashboard.data_loader import (
     available_dates,
@@ -84,6 +85,21 @@ from stock_scanner.reference.issuers import get_company_name, get_sector, ticker
 
 _BROKER_DIR = Path(__file__).parent.parent / "data" / "broker"
 _ROOT_PERF = Path(__file__).parent.parent / "data" / "performance"
+
+
+def show_df(data, **kwargs):
+    """Theme-correct st.dataframe wrapper.
+
+    Paints the canvas dataframe's cells with the active theme's colours via a
+    pandas Styler so the table is light in Light mode and dark in Dark mode,
+    regardless of Streamlit's native theme state (fixes the inverted-table bug).
+    Falls back to a plain dataframe if styling is not applicable.
+    """
+    try:
+        styled = style_table(data)
+    except Exception:  # noqa: BLE001
+        styled = data
+    st.dataframe(styled, **kwargs)
 
 
 def _chart_debug(ticker: str) -> None:
@@ -372,7 +388,7 @@ def render_trading_levels_section(df_all: pd.DataFrame, selected_date: str) -> N
     st.caption("  ·  ".join(cnt_parts) + f"  ·  Total active: **{active_n}**")
 
     # Render table
-    st.dataframe(
+    show_df(
         df_disp,
         use_container_width=True,
         hide_index=True,
@@ -441,7 +457,7 @@ def render_shareholders_section(ticker: str, scan_date: str) -> None:
                 disp["percentage"] = disp["percentage"].apply(
                     lambda x: f"{float(x):.2f}%" if pd.notna(x) else "N/A"
                 )
-                st.dataframe(
+                show_df(
                     disp,
                     use_container_width=True,
                     hide_index=True,
@@ -484,7 +500,7 @@ def render_shareholders_section(ticker: str, scan_date: str) -> None:
                 lambda x: (f"{'+'  if float(x) >= 0 else ''}{float(x):.2f}%")
                 if pd.notna(x) else "—"
             )
-            st.dataframe(
+            show_df(
                 disp_m,
                 use_container_width=True,
                 hide_index=True,
@@ -641,14 +657,14 @@ def _render_broker_summary_body(df: pd.DataFrame, key_suffix: str, period_label:
         if tb.empty:
             st.caption("—")
         else:
-            st.dataframe(tb, use_container_width=True, hide_index=True)
+            show_df(tb, use_container_width=True, hide_index=True)
     with col_sell:
         st.markdown("**🔴 Top Seller**")
         ts = _broker_side_table(df, "sell", view_mode, has_value)
         if ts.empty:
             st.caption("—")
         else:
-            st.dataframe(ts, use_container_width=True, hide_index=True)
+            show_df(ts, use_container_width=True, hide_index=True)
 
     with st.expander("📋 Semua broker (detail)"):
         cols = [c for c in [
@@ -673,7 +689,7 @@ def _render_broker_summary_body(df: pd.DataFrame, key_suffix: str, period_label:
         for c in ["buy_freq", "sell_freq"]:
             if c in d.columns:
                 d[c] = d[c].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "—")
-        st.dataframe(
+        show_df(
             d, use_container_width=True, hide_index=True,
             column_config={
                 "broker_code": st.column_config.TextColumn("Kode", width="small"),
@@ -905,7 +921,7 @@ def render_ticker_detail(
                         _fmt_price(levels["cutloss"]),
                     ],
                 }
-                st.dataframe(
+                show_df(
                     pd.DataFrame(lvl_data),
                     use_container_width=True,
                     hide_index=True,
@@ -1100,7 +1116,7 @@ def render_scalping_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | Non
         if col in tbl.columns:
             tbl[col] = tbl[col].apply(lambda x: f"{float(x):.1f}" if pd.notna(x) else "-")
 
-    st.dataframe(
+    show_df(
         tbl,
         use_container_width=True,
         hide_index=True,
@@ -1208,7 +1224,7 @@ def _render_scalping_detail(row: pd.Series, scan_date: str, api_key: str | None)
                     _fmt_price(levels["cutloss"]),
                 ],
             }
-            st.dataframe(pd.DataFrame(level_rows), use_container_width=True,
+            show_df(pd.DataFrame(level_rows), use_container_width=True,
                          hide_index=True, height=145)
 
     with col_right:
@@ -1285,7 +1301,7 @@ def render_swing_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | None,
             if col in display.columns:
                 display[col] = display[col].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
 
-        st.dataframe(
+        show_df(
             display,
             use_container_width=True, hide_index=True, height=320,
             column_config={
@@ -1399,7 +1415,7 @@ def render_longterm_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | Non
         tbl_lt["margin_of_safety"] = tbl_lt["margin_of_safety"].apply(
             lambda x: f"{float(x):+.0f}%" if pd.notna(x) else "-")
 
-    st.dataframe(
+    show_df(
         tbl_lt,
         use_container_width=True, hide_index=True,
         height=min(38 * len(tbl_lt) + 40, 520),
@@ -1679,7 +1695,7 @@ def _render_longterm_detail(row: pd.Series, scan_date: str, api_key: str | None)
                 if buyers:
                     buyer_df = pd.DataFrame(buyers)
                     buyer_df["net_lot"] = buyer_df["net_lot"].apply(lambda x: f"+{x:,.0f}")
-                    st.dataframe(
+                    show_df(
                         buyer_df[["broker_code", "type_label", "net_lot"]].rename(
                             columns={"broker_code": "Broker", "type_label": "Tipe", "net_lot": "Net Lot"}
                         ),
@@ -1693,7 +1709,7 @@ def _render_longterm_detail(row: pd.Series, scan_date: str, api_key: str | None)
                 if sellers:
                     seller_df = pd.DataFrame(sellers)
                     seller_df["net_lot"] = seller_df["net_lot"].apply(lambda x: f"{x:,.0f}")
-                    st.dataframe(
+                    show_df(
                         seller_df[["broker_code", "type_label", "net_lot"]].rename(
                             columns={"broker_code": "Broker", "type_label": "Tipe", "net_lot": "Net Lot"}
                         ),
@@ -2163,7 +2179,7 @@ def render_smart_money_tab(df_all: pd.DataFrame, scan_date: str) -> None:
             "volume_accum", "vol_ratio_20d", "roc20", "ownership",
             "broker_absorption", "absorb_broker", "absorb_share",
             "hidden_accum", "fundamental_grade", "fundamental_score"]
-    st.dataframe(
+    show_df(
         disp[cols], use_container_width=True, hide_index=True,
         height=min(40 * len(disp) + 44, 560),
         column_config={
@@ -2290,7 +2306,7 @@ with tab_perf:
             _show[c] = _show[c].apply(lambda x: f"{float(x):+.2f}%" if pd.notna(x) else "—")
         for c in ("prev", "close", "high"):
             _show[c] = _show[c].apply(lambda x: f"{float(x):,.0f}" if pd.notna(x) else "—")
-        st.dataframe(
+        show_df(
             _show, use_container_width=True, hide_index=True,
             column_config={
                 "ticker": st.column_config.TextColumn("Signal", width="small"),
@@ -2490,7 +2506,7 @@ with tab_history:
         if "ticker" in top10.columns:
             top10.insert(2, "company", top10["ticker"].apply(get_company_name))
 
-        st.dataframe(
+        show_df(
             top10,
             use_container_width=True,
             hide_index=True,
