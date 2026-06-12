@@ -15,6 +15,14 @@
 # overrides can miss, and (b) breaks this app's selectbox session_state usage
 # (KeyError on widget keys). 1.37.1 is the version the dashboard is built and
 # contrast-verified against, so pin it for a deterministic, working deploy.
+#
+# DEPLOY PYTHON VERSION — IMPORTANT: use Python 3.12 (or 3.11/3.13) on Streamlit
+# Community Cloud. streamlit 1.37.1 requires `pillow<11`, and the newest such
+# Pillow (10.4.0) ships wheels only up to cp313 — it has NO cp314 wheel. If the
+# deploy runs on Python 3.14 (Cloud's current forced default), pip can't find a
+# Pillow wheel and tries to build it from source -> "Failed building wheel for
+# pillow". On Python 3.12 every dependency installs from a wheel. Set the Python
+# version in the app's deploy "Advanced settings" (see runtime.txt / .python-version).
 streamlit==1.37.1
 plotly>=5.22
 
