@@ -346,11 +346,45 @@ def _rebuild_daily_reviews(perf_dir: Path | None = None) -> list[str]:
     return sorted(written)
 
 
+def _reevaluate_pending(raw_dir: Path | None = None, perf_dir: Path | None = None) -> int:
+    """Fill still-pending results directly from signal_results.csv + raw OHLC.
+
+    Every pending row already carries (signal_date, strategy, ticker, signal), so
+    a signal dated X is evaluated the moment X+1's bar lands in raw_dir — WITHOUT
+    needing the original per-date signal file. That matters because data/signals/
+    is gitignored and absent on a fresh CI checkout, which previously left old
+    pending rows orphaned (eval_date froze at the last fully-evaluated session and
+    review dates like 2026-06-11 / 06-12 were skipped). Running this every pass
+    guarantees eval_date advances as soon as the next session's data exists.
+
+    Returns the number of rows newly evaluated this pass.
+    """
+    raw_dir = raw_dir or _RAW_DIR
+    perf_dir = perf_dir or _PERF_DIR
+    res = _read_csv(perf_dir / "signal_results.csv")
+    if res.empty or "status" not in res.columns:
+        return 0
+    pend = res[res["status"].astype(str) == "pending"].copy()
+    if pend.empty:
+        return 0
+    rows = [
+        _evaluate_row(str(r["signal_date"]), str(r["strategy"]),
+                      str(r["ticker"]), str(r["signal"]), raw_dir)
+        for _, r in pend.iterrows()
+    ]
+    upd = pd.DataFrame(rows, columns=_RESULT_COLS)
+    merged = _upsert(res, upd, ["signal_date", "strategy", "ticker"])
+    merged.to_csv(perf_dir / "signal_results.csv", index=False)
+    return int((upd["status"] == "evaluated").sum())
+
+
 def run_performance(signals_dir: Path | None = None, raw_dir: Path | None = None,
                     perf_dir: Path | None = None, dates: list[str] | None = None) -> dict:
     """Archive + (re)evaluate. Default: every available signal date (so pending
     rows get filled once their next session exists). Returns {date: summary}."""
     signals_dir = signals_dir or _SIGNALS_DIR
+    raw_dir = raw_dir or _RAW_DIR
+    perf_dir = perf_dir or _PERF_DIR
     if dates is None:
         dates = sorted(p.stem for p in signals_dir.glob("*.parquet"))
         dates += [p.stem for p in signals_dir.glob("*.csv") if p.stem not in dates]
@@ -363,6 +397,13 @@ def run_performance(signals_dir: Path | None = None, raw_dir: Path | None = None
                 out[d] = res
         except Exception as exc:  # noqa: BLE001
             logger.warning("performance: failed on {}: {}", d, exc)
+
+    # Fill any still-pending rows straight from the committed results.csv, so a
+    # missing/ephemeral signal file can never freeze eval_date (the 06-11/06-12
+    # gap). This is the authoritative step that advances the review date.
+    filled = _reevaluate_pending(raw_dir, perf_dir)
+    if filled:
+        logger.info("Performance: filled {} pending signal(s) from refreshed OHLC.", filled)
 
     # Daily review files keyed by eval (market) date — the date the user reviews.
     review_dates = _rebuild_daily_reviews(perf_dir)
@@ -487,14 +528,56 @@ def latest_evaluated_date(perf_dir: Path | None = None) -> Optional[str]:
     return None if ev.empty else str(ev["eval_date"].max())
 
 
+def send_daily_excel_telegram(eval_date: str | None = None,
+                              perf_dir: Path | None = None) -> bool:
+    """Best-effort: upload the daily Signal List performance .xlsx to Telegram with
+    a short win-rate caption. Fail-safe — never raises and never blocks file
+    generation. Token/chat come from TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID (repo
+    secrets). Defaults to the latest evaluated session. Returns True on success.
+    """
+    perf_dir = perf_dir or _PERF_DIR
+    try:
+        eval_date = eval_date or latest_evaluated_date(perf_dir)
+        if not eval_date:
+            logger.info("Telegram: no evaluated session yet — nothing to send.")
+            return False
+        xlsx = perf_dir / "daily" / f"signal_list_{eval_date}.xlsx"
+        if not xlsx.exists():
+            logger.warning("Telegram: {} not found — skip.", xlsx.name)
+            return False
+
+        recap = win_rate_recap(eval_date, perf_dir)
+
+        def _line(strat: str) -> str:
+            d = recap.get(strat, {})
+            wr = d.get("win_rate")
+            tail = f" · WR {wr}%" if wr is not None else ""
+            return f"{strat.title()}: {d.get('wins', 0)}W / {d.get('signals', 0)}{tail}"
+
+        caption = ("📋 Signal List Performance — sesi market "
+                   f"{eval_date}\n{_line('swing')}\n{_line('scalping')}")
+        from stock_scanner.alerts.telegram_alert import TelegramAlert
+        res = TelegramAlert().send_document(xlsx, caption=caption)
+        ok = bool(getattr(res, "success", False))
+        logger.info("Telegram: daily Excel for {} {}.", eval_date, "sent" if ok else "send failed")
+        return ok
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Telegram: daily Excel send skipped ({}).", exc)
+        return False
+
+
 if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser(description="Signal List performance tracker")
     p.add_argument("--date", default=None, help="Only this signal date (YYYY-MM-DD).")
     p.add_argument("--evening", action="store_true",
-                   help="18:00 WIB mode: fetch same-day OHLC for pending tickers, then evaluate.")
+                   help="Evening mode: fetch same-day OHLC for pending tickers, then evaluate.")
+    p.add_argument("--telegram", action="store_true",
+                   help="After evaluating, send the latest daily Excel to Telegram (fail-safe).")
     a = p.parse_args()
     if a.evening:
         run_performance_evening()
     else:
         run_performance(dates=[a.date] if a.date else None)
+    if a.telegram:
+        send_daily_excel_telegram()
