@@ -10,7 +10,12 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Dashboard
-streamlit>=1.35,<2.0
+# PIN streamlit: the unpinned ">=1.35,<2.0" let Streamlit Cloud install the
+# latest 1.x (e.g. 1.58), which (a) changes native-widget DOM/CSS so theme
+# overrides can miss, and (b) breaks this app's selectbox session_state usage
+# (KeyError on widget keys). 1.37.1 is the version the dashboard is built and
+# contrast-verified against, so pin it for a deterministic, working deploy.
+streamlit==1.37.1
 plotly>=5.22
 
 # Data

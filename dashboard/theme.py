@@ -67,13 +67,13 @@ TOKENS: dict[str, dict[str, str]] = {
         "border_strong": "#CDD3DC",
         "text":          "#15181E",
         "muted":         "#44505F",
-        "faint":         "#64748B",
+        "faint":         "#586472",
         "accent":        "#2563EB",
         "accent_text":   "#1D4ED8",
         "accent_weak":   "rgba(37,99,235,0.10)",
-        "success":       "#16A34A",
-        "danger":        "#DC2626",
-        "warning":       "#B45309",
+        "success":       "#0F7A37",
+        "danger":        "#C01C1C",
+        "warning":       "#9A4A05",
         "info":          "#0369A1",
         "success_bg":    "rgba(22,163,74,0.12)",
         "danger_bg":     "rgba(220,38,38,0.10)",
@@ -286,14 +286,21 @@ hr {{ border-color: var(--c-border); margin: var(--s4) 0; }}
   background: var(--c-surface); border: 1px solid var(--c-border);
   border-radius: var(--r-md); padding: 12px 16px;
 }}
-[data-testid="stMetricValue"], [data-testid="stMetricValue"] * {{
+/* High-specificity (descendant combinator) so these always win over Streamlit's
+   own theme rule regardless of stylesheet load order across Streamlit versions. */
+[data-testid="stMetric"] [data-testid="stMetricValue"],
+[data-testid="stMetric"] [data-testid="stMetricValue"] *,
+div[data-testid="stMetricValue"], div[data-testid="stMetricValue"] * {{
   color: var(--c-text) !important; font-weight: 700;
 }}
-[data-testid="stMetricLabel"], [data-testid="stMetricLabel"] * {{
+[data-testid="stMetric"] [data-testid="stMetricLabel"],
+[data-testid="stMetric"] [data-testid="stMetricLabel"] *,
+div[data-testid="stMetricLabel"], div[data-testid="stMetricLabel"] * {{
   color: var(--c-muted) !important; font-size: var(--fs-xs) !important;
   text-transform: uppercase; letter-spacing: .06em; font-weight: 600;
 }}
-[data-testid="stMetricDelta"], [data-testid="stMetricDelta"] * {{
+[data-testid="stMetric"] [data-testid="stMetricDelta"],
+[data-testid="stMetric"] [data-testid="stMetricDelta"] * {{
   color: var(--c-muted) !important;
 }}
 
@@ -345,7 +352,10 @@ hr {{ border-color: var(--c-border); margin: var(--s4) 0; }}
   transition: background .12s ease, color .12s ease;
 }}
 .theme-seg:hover {{ color: var(--c-text) !important; background: var(--c-surface-2); }}
-.theme-seg.active {{ background: var(--c-accent-weak); color: var(--c-accent) !important; }}
+/* active segment: neutral raised surface + full-strength text + accent underline.
+   Avoids low-contrast accent-on-tint (4.2:1); text-on-surface is ~13:1 both modes. */
+.theme-seg.active {{ background: var(--c-surface-2); color: var(--c-text) !important;
+  font-weight: 700; box-shadow: inset 0 -2px 0 var(--c-accent); }}
 
 /* ---------- status panel (deploy widget) ---------- */
 .status-panel {{
@@ -428,18 +438,34 @@ div[data-baseweb="popover"] [aria-selected="true"] * {{
 [data-testid="stSliderTickBarMax"], [data-testid="stTickBar"] {{ color: var(--c-muted) !important; }}
 [data-testid="stDataFrameToolbar"] button {{ color: var(--c-muted) !important; }}
 
-/* ---------- buttons ---------- */
-.stButton > button, .stDownloadButton > button {{
-  border-radius: var(--r-md); border: 1px solid var(--c-border);
-  font-weight: 600; font-size: var(--fs-sm); transition: all .15s ease;
+/* ---------- buttons: own bg + text (native pinned-dark would otherwise give a
+   dark button with dark text on a light page — invisible download buttons). */
+.stButton > button, .stDownloadButton > button, .stFormSubmitButton > button,
+[data-testid="stBaseButton-secondary"], [data-testid="baseButton-secondary"],
+[data-testid="stBaseButton-primary"] {{
+  background: var(--c-surface) !important; color: var(--c-text) !important;
+  border: 1px solid var(--c-border) !important;
+  border-radius: var(--r-md); font-weight: 600; font-size: var(--fs-sm);
+  transition: all .15s ease;
 }}
-.stButton > button:hover, .stDownloadButton > button:hover {{
-  border-color: var(--c-accent); color: var(--c-accent); background: var(--c-accent-weak);
+.stButton > button *, .stDownloadButton > button *, .stFormSubmitButton > button * {{
+  color: var(--c-text) !important;
 }}
-.stButton > button[kind="primary"] {{ border-color: var(--c-accent); }}
+.stButton > button:hover, .stDownloadButton > button:hover,
+.stFormSubmitButton > button:hover {{
+  border-color: var(--c-accent) !important; color: var(--c-accent) !important;
+  background: var(--c-accent-weak) !important;
+}}
+.stButton > button:hover *, .stDownloadButton > button:hover * {{ color: var(--c-accent) !important; }}
+[data-testid="stBaseButton-primary"] {{ border-color: var(--c-accent) !important; }}
 
-/* radio group as a segmented control feel (used by theme toggle + view modes) */
+/* radio / checkbox option labels (native dark text -> invisible on light) */
 [role="radiogroup"] {{ gap: 4px; }}
+[data-testid="stRadio"] label, [data-testid="stRadio"] label *,
+[data-testid="stCheckbox"] label, [data-testid="stCheckbox"] label *,
+[role="radiogroup"] label, [role="radiogroup"] label * {{
+  color: var(--c-text) !important;
+}}
 
 /* ---------- dataframe / table container ---------- */
 [data-testid="stDataFrame"], [data-testid="stTable"] {{

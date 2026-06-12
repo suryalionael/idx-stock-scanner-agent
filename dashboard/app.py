@@ -1264,13 +1264,14 @@ def render_swing_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | None,
     sig_counts_all = df_all["signal"].value_counts() if "signal" in df_all.columns else pd.Series(dtype=int)
     total_tickers  = len(df_all)
 
+    _pal = palette()
     c1, c2, c3, c4, c5 = st.columns(5)
     for col, label, key, color in [
-        (c1, "Total",      None,         "#94a3b8"),
-        (c2, "BREAKOUT",   "BREAKOUT",   "#4ade80"),
-        (c3, "PRE_MARKUP", "PRE_MARKUP", "#38bdf8"),
-        (c4, "WATCH",      "WATCH",      "#fb923c"),
-        (c5, "AVOID",      "AVOID",      "#f87171"),
+        (c1, "Total",      None,         _pal["muted"]),
+        (c2, "BREAKOUT",   "BREAKOUT",   _pal["success"]),
+        (c3, "PRE_MARKUP", "PRE_MARKUP", _pal["info"]),
+        (c4, "WATCH",      "WATCH",      _pal["warning"]),
+        (c5, "AVOID",      "AVOID",      _pal["danger"]),
     ]:
         count = total_tickers if key is None else int(sig_counts_all.get(key, 0))
         with col:
@@ -1646,12 +1647,13 @@ def _render_longterm_detail(row: pd.Series, scan_date: str, api_key: str | None)
             )
 
         # Key metrics
+        _pos, _neg, _ = pos_neg_colors()  # theme-aware (readable on light + dark)
         bi_c1, bi_c2, bi_c3 = st.columns(3)
         with bi_c1:
             fn_1d = bi.get("foreign_net_buy_1d", 0)
             fn_5d = bi.get("foreign_net_buy_5d", 0)
-            color_1d = "#4ade80" if fn_1d >= 0 else "#ef4444"
-            color_5d = "#4ade80" if fn_5d >= 0 else "#ef4444"
+            color_1d = _pos if fn_1d >= 0 else _neg
+            color_5d = _pos if fn_5d >= 0 else _neg
             st.markdown(
                 f'<div class="metric-card">'
                 f'<div class="label">🌍 Foreign Net (1d)</div>'
@@ -1661,7 +1663,7 @@ def _render_longterm_detail(row: pd.Series, scan_date: str, api_key: str | None)
                 unsafe_allow_html=True,
             )
         with bi_c2:
-            color_fn5 = "#4ade80" if fn_5d >= 0 else "#ef4444"
+            color_fn5 = _pos if fn_5d >= 0 else _neg
             st.markdown(
                 f'<div class="metric-card">'
                 f'<div class="label">🌍 Foreign Net (5d)</div>'
@@ -1672,7 +1674,7 @@ def _render_longterm_detail(row: pd.Series, scan_date: str, api_key: str | None)
             )
         with bi_c3:
             big_5d = bi.get("big_broker_net_buy_5d", 0)
-            color_big = "#4ade80" if big_5d >= 0 else "#ef4444"
+            color_big = _pos if big_5d >= 0 else _neg
             st.markdown(
                 f'<div class="metric-card">'
                 f'<div class="label">🏦 Big Local Net (5d)</div>'
