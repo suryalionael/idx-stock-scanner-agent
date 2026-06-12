@@ -19,6 +19,7 @@ _TEXT     = "#E6E8EC"   # primary text
 _MUTED    = "#9BA4B0"   # secondary text / titles
 _UP       = "#22C55E"   # bullish candle
 _DOWN     = "#EF4444"   # bearish candle
+_ACCENT   = "#3B82F6"   # markers / highlights
 
 # Moving-average accents read well on both light and dark surfaces.
 _MA_COLORS = {
@@ -35,7 +36,7 @@ def set_chart_theme(palette: dict) -> None:
         palette: dict from dashboard.theme.chart_palette(mode) with keys
             template, paper, plot, surface, grid, text, muted, up, down.
     """
-    global _TEMPLATE, _PAPER, _PLOT, _SURFACE, _GRID, _TEXT, _MUTED, _UP, _DOWN
+    global _TEMPLATE, _PAPER, _PLOT, _SURFACE, _GRID, _TEXT, _MUTED, _UP, _DOWN, _ACCENT
     _TEMPLATE = palette.get("template", _TEMPLATE)
     _PAPER    = palette.get("paper",    _PAPER)
     _PLOT     = palette.get("plot",     _PLOT)
@@ -45,6 +46,28 @@ def set_chart_theme(palette: dict) -> None:
     _MUTED    = palette.get("muted",    _MUTED)
     _UP       = palette.get("up",       _UP)
     _DOWN     = palette.get("down",     _DOWN)
+    _ACCENT   = palette.get("accent",   _ACCENT)
+
+
+def _apply_text_theme(_f: go.Figure) -> go.Figure:
+    """Force readable, theme-matched colours on EVERY text layer of a figure:
+    global font, axis ticks + titles, legend, and hover tooltips. Called on every
+    figure before it is returned so light/dark mode text always meets contrast.
+    """
+    _f.update_layout(
+        font=dict(color=_TEXT, size=12),
+        title_font=dict(color=_TEXT),  # title isn't covered by layout.font; Streamlit's
+                                       # pinned-dark theme would otherwise tint it.
+        legend=dict(font=dict(color=_TEXT)),
+        hoverlabel=dict(bgcolor=_SURFACE, bordercolor=_GRID, font=dict(color=_TEXT, size=12)),
+    )
+    # Cartesian axes (no-op on polar/pie figures).
+    try:
+        _f.update_xaxes(tickfont=dict(color=_MUTED), title_font=dict(color=_MUTED))
+        _f.update_yaxes(tickfont=dict(color=_MUTED), title_font=dict(color=_MUTED))
+    except Exception:  # noqa: BLE001
+        pass
+    return _f
 
 
 def price_chart(
@@ -163,7 +186,7 @@ def price_chart(
                 x=sig_str,
                 line_width=1.5,
                 line_dash="dash",
-                line_color="#facc15",
+                line_color=_ACCENT,
             )
             fig.add_annotation(
                 x=sig_str,
@@ -172,7 +195,11 @@ def price_chart(
                 text="Signal",
                 showarrow=False,
                 xanchor="left",
-                font=dict(color="#facc15", size=11),
+                bgcolor=_SURFACE,
+                bordercolor=_ACCENT,
+                borderwidth=1,
+                borderpad=2,
+                font=dict(color=_TEXT, size=11),
             )
 
     fig.update_layout(
@@ -213,7 +240,7 @@ def price_chart(
     )
     fig.update_xaxes(gridcolor=_GRID, showgrid=True, row=2, col=1)
 
-    return fig
+    return _apply_text_theme(fig)
 
 
 def score_radar(row: pd.Series, ticker: str) -> go.Figure:
@@ -249,7 +276,7 @@ def score_radar(row: pd.Series, ticker: str) -> go.Figure:
         margin=dict(l=20, r=20, t=30, b=20),
         showlegend=False,
     )
-    return fig
+    return _apply_text_theme(fig)
 
 
 def history_timeline(df_history: pd.DataFrame) -> go.Figure:
@@ -293,7 +320,7 @@ def history_timeline(df_history: pd.DataFrame) -> go.Figure:
         yaxis=dict(title="Total Score", range=[0, 10.5], gridcolor=_GRID),
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
     )
-    return fig
+    return _apply_text_theme(fig)
 
 
 def shareholder_pie(df_composition: pd.DataFrame, ticker: str) -> go.Figure:
@@ -331,7 +358,7 @@ def shareholder_pie(df_composition: pd.DataFrame, ticker: str) -> go.Figure:
         legend=dict(orientation="v", yanchor="middle", y=0.5, font_size=11),
         showlegend=True,
     )
-    return fig
+    return _apply_text_theme(fig)
 
 
 def monthly_holders_chart(df_monthly: pd.DataFrame, ticker: str) -> go.Figure:
@@ -386,7 +413,7 @@ def monthly_holders_chart(df_monthly: pd.DataFrame, ticker: str) -> go.Figure:
         yaxis=dict(title="Jumlah Holder", gridcolor=_GRID),
         showlegend=False,
     )
-    return fig
+    return _apply_text_theme(fig)
 
 
 def broker_chart(df_broker: pd.DataFrame, ticker: str) -> go.Figure:
@@ -451,7 +478,7 @@ def broker_chart(df_broker: pd.DataFrame, ticker: str) -> go.Figure:
         yaxis=dict(gridcolor=_GRID, autorange="reversed"),
         legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="left", x=0),
     )
-    return fig
+    return _apply_text_theme(fig)
 
 
 def broker_net_flow_chart(
@@ -536,7 +563,7 @@ def broker_net_flow_chart(
         yaxis=dict(title="Net Lot", gridcolor=_GRID, zeroline=True, zerolinecolor="#475569"),
         legend=dict(orientation="h", y=1.1, x=0, font=dict(size=10)),
     )
-    return fig
+    return _apply_text_theme(fig)
 
 
 def _empty_figure(message: str) -> go.Figure:
@@ -555,7 +582,7 @@ def _empty_figure(message: str) -> go.Figure:
         height=300,
         margin=dict(l=10, r=10, t=10, b=10),
     )
-    return fig
+    return _apply_text_theme(fig)
 
 
 def fundamental_trend_chart(
@@ -594,7 +621,7 @@ def fundamental_trend_chart(
             margin=dict(l=10, r=10, t=30, b=10),
             title=dict(text=f"{label} ({ticker})", font=dict(size=13, color=_TEXT)),
         )
-        return fig
+        return _apply_text_theme(fig)
 
     years  = [item["year"] for item in series]
     values = [item["value"] for item in series]
@@ -623,7 +650,7 @@ def fundamental_trend_chart(
         xaxis=dict(tickfont=dict(size=10)),
         showlegend=False,
     )
-    return fig
+    return _apply_text_theme(fig)
 
 
 def price_chart_longterm(
@@ -653,7 +680,7 @@ def price_chart_longterm(
             paper_bgcolor=_PAPER, plot_bgcolor=_PLOT,
             height=280, margin=dict(l=10, r=10, t=30, b=10),
         )
-        return fig
+        return _apply_text_theme(fig)
 
     df = df_raw.copy()
     if "date" in df.columns:
@@ -729,7 +756,7 @@ def price_chart_longterm(
         ),
         legend=dict(orientation="h", y=1.08, x=0, font=dict(size=10)),
     )
-    return fig
+    return _apply_text_theme(fig)
 
 
 # ---------------------------------------------------------------------------
@@ -806,7 +833,7 @@ def broker_concentration_pie(
         showlegend=True,
         legend=dict(font=dict(size=10), x=1.02, y=1),
     )
-    return fig
+    return _apply_text_theme(fig)
 
 
 def broker_history_trend_line(
@@ -883,4 +910,4 @@ def broker_history_trend_line(
         legend=dict(orientation="h", y=1.08, x=0, font=dict(size=10)),
         hovermode="x unified",
     )
-    return fig
+    return _apply_text_theme(fig)
