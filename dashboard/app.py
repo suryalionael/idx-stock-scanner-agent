@@ -666,7 +666,10 @@ def _render_broker_summary_body(df: pd.DataFrame, key_suffix: str, period_label:
         else:
             show_df(ts, use_container_width=True, hide_index=True)
 
-    with st.expander("📋 Semua broker (detail)"):
+    # Checkbox gate (not st.expander) so this component can be embedded inside an
+    # outer expander — e.g. the Broker Summary panels on the Scalping / Smart
+    # Money tabs — without triggering Streamlit's nested-expander exception.
+    if st.checkbox("📋 Tampilkan semua broker (detail)", key=f"brk_all_{key_suffix}"):
         cols = [c for c in [
             "broker_code", "broker_name", "buy_lot", "sell_lot", "net_lot",
             "buy_value", "sell_value", "net_value", "buy_avg_price", "sell_avg_price",
