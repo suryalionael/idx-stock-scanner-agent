@@ -1,17 +1,19 @@
-name: Signal Performance (18:00 WIB)
+name: Signal Performance (20:00 WIB)
 
 # Dedicated evening run of the performance reporting layer ONLY (the screener is
 # never re-run here). After IDX close it refreshes the OHLC for the tickers that
 # are awaiting evaluation and fills their CSV/Excel for that trading date, so the
-# report reflects same-day closing data as early as possible instead of waiting
-# for the next morning. Pending rows (if the data source hasn't published yet)
-# are backfilled automatically on the next run.
+# report reflects same-day closing data the SAME night instead of waiting for the
+# next morning. Pending rows are re-evaluated every run directly from the
+# committed signal_results.csv (not the gitignored per-date signal files), so
+# eval_date advances every trading day and no review date is skipped.
 #
-# Timezone: GitHub cron is UTC. WIB = UTC+7 → 18:00 WIB = 11:00 UTC the SAME day.
-# Mon–Fri WIB → Mon–Fri UTC (no day shift) → cron "0 11 * * 1-5".
+# Timezone: GitHub cron is UTC. WIB = UTC+7 → 20:00 WIB = 13:00 UTC the SAME day.
+# Mon–Fri WIB → Mon–Fri UTC (no day shift) → cron "0 13 * * 1-5". 20:00 WIB (4h
+# after the 16:00 close) gives the OHLC source ample time to publish today's bar.
 on:
   schedule:
-    - cron: "0 11 * * 1-5"   # 18:00 WIB, Mon–Fri (11:00 UTC Mon–Fri)
+    - cron: "0 13 * * 1-5"   # 20:00 WIB, Mon–Fri (13:00 UTC Mon–Fri)
   workflow_dispatch:
 
 # Commit refreshed data/performance/ back to main (history + dashboard).
@@ -57,8 +59,13 @@ jobs:
 
       # Evening mode: fetch same-day OHLC for tickers awaiting evaluation, then
       # evaluate. Fills today's eval session if published; else leaves pending.
-      - name: Evaluate signal performance (evening)
-        run: python -m stock_scanner.pipeline.performance --evening
+      # --telegram: send the freshly-written daily Excel to Telegram (fail-safe;
+      # a Telegram error never blocks file generation or the commit below).
+      - name: Evaluate signal performance (evening) + Telegram delivery
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python -m stock_scanner.pipeline.performance --evening --telegram
 
       - name: Publish performance data to main
         run: |
