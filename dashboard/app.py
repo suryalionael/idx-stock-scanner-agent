@@ -712,11 +712,11 @@ def _render_broker_summary_body(df: pd.DataFrame, key_suffix: str, period_label:
                    "tidak tersedia di cache ini. Klik **🔄 Refresh** untuk mengambil versi lengkap.")
 
 
-def _render_broker_latest(ticker: str, scan_date: str) -> None:
+def _render_broker_latest(ticker: str, scan_date: str, key_prefix: str = "") -> None:
     """Latest mode: last completed trading session, fresh-first (cache-safe)."""
     top = st.columns([3, 1])
     with top[1]:
-        if st.button("🔄 Refresh", key=f"brk_lat_refresh_{ticker}_{scan_date}",
+        if st.button("🔄 Refresh", key=f"brk_lat_refresh_{key_prefix}_{ticker}_{scan_date}",
                      help="Ambil ulang sesi terbaru dari Index Alpha (memakai 1 kuota)."):
             _cached_broker_latest.clear()
 
@@ -744,16 +744,16 @@ def _render_broker_latest(ticker: str, scan_date: str) -> None:
     if note:
         st.warning(f"⚠️ {note}")
 
-    _render_broker_summary_body(df, key_suffix=f"latest_{ticker}_{scan_date}")
+    _render_broker_summary_body(df, key_suffix=f"latest_{key_prefix}_{ticker}_{scan_date}")
 
 
-def _render_broker_historical(ticker: str, scan_date: str) -> None:
+def _render_broker_historical(ticker: str, scan_date: str, key_prefix: str = "") -> None:
     """Historical mode: period-aggregated broker summary (1W…1Y / custom)."""
     from datetime import date as _date
 
     sel = st.radio(
         "Range", ["1W", "1M", "3M", "6M", "1Y", "Custom"], index=1, horizontal=True,
-        key=f"brk_hist_range_{ticker}_{scan_date}",
+        key=f"brk_hist_range_{key_prefix}_{ticker}_{scan_date}",
     )
 
     if sel == "Custom":
@@ -761,10 +761,10 @@ def _render_broker_historical(ticker: str, scan_date: str) -> None:
         cc1, cc2 = st.columns(2)
         with cc1:
             d_from = st.date_input("Dari", value=_date.fromisoformat(def_from),
-                                   key=f"brk_hist_from_{ticker}_{scan_date}")
+                                   key=f"brk_hist_from_{key_prefix}_{ticker}_{scan_date}")
         with cc2:
             d_to = st.date_input("Sampai", value=_date.fromisoformat(def_to),
-                                 key=f"brk_hist_to_{ticker}_{scan_date}")
+                                 key=f"brk_hist_to_{key_prefix}_{ticker}_{scan_date}")
         from_date, to_date = d_from.strftime("%Y-%m-%d"), d_to.strftime("%Y-%m-%d")
         if from_date > to_date:
             st.error("❌ Tanggal 'Dari' harus lebih awal atau sama dengan 'Sampai'.")
@@ -776,7 +776,7 @@ def _render_broker_historical(ticker: str, scan_date: str) -> None:
     with cap:
         st.caption(f"Periode: **{from_date} → {to_date}** · agregat Index Alpha (RG sejak Jun 2025)")
     with ref:
-        if st.button("🔄 Refresh", key=f"brk_hist_refresh_{ticker}_{scan_date}",
+        if st.button("🔄 Refresh", key=f"brk_hist_refresh_{key_prefix}_{ticker}_{scan_date}",
                      help="Ambil ulang periode ini dari Index Alpha (memakai 1 kuota)."):
             _cached_broker_range.clear()
 
@@ -795,29 +795,36 @@ def _render_broker_historical(ticker: str, scan_date: str) -> None:
         st.warning(f"⚠️ {err}")
 
     _render_broker_summary_body(
-        df, key_suffix=f"hist_{ticker}_{scan_date}",
+        df, key_suffix=f"hist_{key_prefix}_{ticker}_{scan_date}",
         period_label=(sel if sel != "Custom" else "periode"),
     )
 
 
-def render_broker_section(ticker: str, scan_date: str) -> None:
+def render_broker_section(ticker: str, scan_date: str, key_prefix: str = "",
+                          show_header: bool = True) -> None:
     """Stockbit-style Broker Summary — inline on the stock's own detail page.
 
     Two modes (default Latest), both real data from the Index Alpha API:
       • Latest     — last completed trading session, fresh-first (cache-safe).
       • Historical — period aggregate (1W/1M/3M/6M/1Y/Custom) via from/to.
+
+    ``key_prefix`` namespaces every widget key so the same Broker Summary can be
+    rendered on several tabs (Swing / Scalping / Smart Money / Search) at once
+    without duplicate-key collisions. ``show_header`` hides the section title when
+    embedded inside an expander that already labels it.
     """
-    st.markdown("#### 🏦 Broker Summary")
-    st.caption("Rincian kepemilikan & serapan broker (data real Index Alpha). "
-               "Harga, volume, dan fundamental saham ini ada di tab lain.")
+    if show_header:
+        st.markdown("#### 🏦 Broker Summary")
+        st.caption("Rincian kepemilikan & serapan broker (data real Index Alpha). "
+                   "Harga, volume, dan fundamental saham ini ada di tab lain.")
     mode = st.radio(
         "Mode broker", ["Latest", "Historical"], horizontal=True,
-        key=f"brk_main_mode_{ticker}_{scan_date}", label_visibility="collapsed",
+        key=f"brk_main_mode_{key_prefix}_{ticker}_{scan_date}", label_visibility="collapsed",
     )
     if mode == "Latest":
-        _render_broker_latest(ticker, scan_date)
+        _render_broker_latest(ticker, scan_date, key_prefix)
     else:
-        _render_broker_historical(ticker, scan_date)
+        _render_broker_historical(ticker, scan_date, key_prefix)
 
 
 # ---------------------------------------------------------------------------
@@ -1249,6 +1256,12 @@ def _render_scalping_detail(row: pd.Series, scan_date: str, api_key: str | None)
                                          sentiment_score=row.get("news_sentiment_score"),
                                          max_chars=500)
             st.markdown(bullets.replace("**", "**"), unsafe_allow_html=False)
+
+    # Broker Summary (kepemilikan & serapan) — collapsed to keep the scalping
+    # momentum view uncluttered; opens on demand.
+    st.divider()
+    with st.expander("🏦 Broker Summary — kepemilikan & serapan broker"):
+        render_broker_section(ticker, scan_date, key_prefix="scalp", show_header=False)
 
 
 # ---------------------------------------------------------------------------
@@ -2202,29 +2215,39 @@ def render_smart_money_tab(df_all: pd.DataFrame, scan_date: str) -> None:
         },
     )
 
-    # ── Per-ticker reason detail ─────────────────────────────────────────
+    # ── Per-ticker detail: reason + price chart + Broker Summary ─────────
     st.divider()
     sel = st.selectbox(
-        "Lihat alasan detail:", options=show["ticker"].tolist(),
+        "Lihat detail kandidat:", options=show["ticker"].tolist(),
         format_func=lambda t: f"{t.replace('.JK', '')} — {get_company_name(t)}",
         key="sm_detail",
     )
     if sel:
         r = show[show["ticker"] == sel].iloc[0]
-        st.markdown(f"**{sel}** — {r['smart_money_label']} ({int(r['smart_money_pillars'])} pillar)")
-        st.markdown(f"- Alasan: {r['reasons']}")
-        st.markdown(f"- Ownership: **{r['ownership']}** · Broker absorption: "
-                    f"**{r['broker_absorption']}**"
-                    + (f" oleh {r['absorb_broker']}" if pd.notna(r.get('absorb_broker')) else ""))
-        st.markdown(f"- Hidden accumulation: **{r['hidden_accum']}** · "
-                    f"Fundamental: **{r['fundamental_grade']}** "
-                    f"({r['fundamental_score'] if pd.notna(r['fundamental_score']) else '—'}/100)")
-        st.caption("Buka tab detail saham (Search/Swing) untuk Broker Summary lengkap.")
+        d_left, d_right = st.columns([1, 1.1])
+        with d_left:
+            st.markdown(f"**{sel.replace('.JK','')}** — {r['smart_money_label']} "
+                        f"({int(r['smart_money_pillars'])} pillar)")
+            st.markdown(f"- Alasan: {r['reasons']}")
+            st.markdown(f"- Ownership: **{r['ownership']}** · Broker absorption: "
+                        f"**{r['broker_absorption']}**"
+                        + (f" oleh {r['absorb_broker']}" if pd.notna(r.get('absorb_broker')) else ""))
+            st.markdown(f"- Hidden accumulation: **{r['hidden_accum']}** · "
+                        f"Fundamental: **{r['fundamental_grade']}** "
+                        f"({r['fundamental_score'] if pd.notna(r['fundamental_score']) else '—'}/100)")
+        with d_right:
+            st.markdown("**📈 Chart Harga**")
+            _sm_raw = load_raw(sel)
+            st.plotly_chart(
+                price_chart(_sm_raw, sel, signal_date=scan_date),
+                use_container_width=True, key=f"sm_chart_{sel}_{scan_date}",
+            )
+
+        with st.expander("🏦 Broker Summary — kepemilikan & serapan broker"):
+            render_broker_section(sel, scan_date, key_prefix="smart", show_header=False)
 
     st.caption(
-        "Skor volume, harga, tren, dan fundamental dihitung untuk **seluruh universe**. "
-        "Detail kepemilikan & serapan broker (Broker Summary) tampil otomatis di "
-        "**halaman detail saham** (tab Search atau Swing) begitu data sesinya tersedia."
+        "Skor volume, harga, tren, dan fundamental dihitung untuk **seluruh universe**."
     )
 
 
