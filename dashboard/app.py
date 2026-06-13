@@ -32,6 +32,7 @@ from dashboard.theme import (
     palette,
     pos_neg_colors,
     render_theme_toggle,
+    style_perf_table,
     style_table,
 )
 from dashboard.data_loader import (
@@ -2318,9 +2319,20 @@ with tab_perf:
         # Pending = signals still awaiting their next session (no eval_date yet).
         _pend = int((_sd["status"] == "pending").sum())
 
+        _perf_pal = palette()
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Sinyal direview", _n)
-        m2.metric("Win / Loss", f"{_w}W / {_n - _w}L")
+        with m2:
+            # W in green, L in red (colour + count + letter — not colour alone).
+            st.markdown(
+                f'<div class="metric-card"><div class="label">Win / Loss</div>'
+                f'<div class="value" style="font-size:22px">'
+                f'<span style="color:{_perf_pal["success"]};font-weight:700">{_w} W</span>'
+                f'<span style="color:var(--c-faint)"> / </span>'
+                f'<span style="color:{_perf_pal["danger"]};font-weight:700">{_n - _w} L</span>'
+                f'</div></div>',
+                unsafe_allow_html=True,
+            )
         m3.metric("Win Rate", f"{_wr}%" if _n else "—")
         m4.metric("Pending (menunggu sesi)", _pend)
         if _pend:
@@ -2334,8 +2346,12 @@ with tab_perf:
             _show[c] = _show[c].apply(lambda x: f"{float(x):+.2f}%" if pd.notna(x) else "—")
         for c in ("prev", "close", "high"):
             _show[c] = _show[c].apply(lambda x: f"{float(x):,.0f}" if pd.notna(x) else "—")
-        show_df(
-            _show, use_container_width=True, hide_index=True,
+        # Theme-correct table with the W/L column highlighted (green W / red L,
+        # tinted cell + bold letter). style_perf_table is used directly instead of
+        # show_df so the W/L colours win over the base cell colours.
+        st.dataframe(
+            style_perf_table(_show, wl_col="wl"),
+            use_container_width=True, hide_index=True,
             column_config={
                 "ticker": st.column_config.TextColumn("Signal", width="small"),
                 "signal": st.column_config.TextColumn("Type", width="small"),
