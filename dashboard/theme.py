@@ -177,6 +177,42 @@ def style_table(df, mode: str | None = None):
         return df
 
 
+def wl_cell_colors(mode: str | None = None) -> dict[str, tuple[str, str]]:
+    """(background, text) for a Win / Loss table cell, per mode. Solid (not
+    semi-transparent) so the tint reads clearly on the canvas dataframe, and the
+    letter keeps >=4.5:1 contrast against its own tinted background."""
+    if (mode or get_mode()) == "light":
+        return {"W": ("#C6F6D5", "#166534"),   # green-200 bg, green-800 text
+                "L": ("#FECACA", "#991B1B")}    # red-200 bg,   red-800 text
+    return {"W": ("#14532D", "#86EFAC"),         # green-900 bg, green-300 text
+            "L": ("#5B1A1A", "#FCA5A5")}          # dark-red bg,  red-300 text
+
+
+def style_perf_table(df, mode: str | None = None, wl_col: str = "wl"):
+    """Theme-correct Styler for the Signal Performance table where the W/L column
+    is highlighted: green for W, red for L, as a tinted cell background PLUS the
+    bold high-contrast letter (never colour alone). Accessible in both modes.
+    """
+    mode = mode or get_mode()
+    bg, fg = table_cell_colors(mode)
+    wl = wl_cell_colors(mode)
+
+    def _wl(v):
+        c = wl.get(str(v).strip().upper())
+        return f"background-color: {c[0]}; color: {c[1]}; font-weight: 700" if c else ""
+
+    try:
+        styler = (df.style
+                  .format(_fmt_cell)
+                  .set_properties(**{"background-color": bg, "color": fg}))
+        if wl_col in getattr(df, "columns", []):
+            _map = getattr(styler, "map", None) or styler.applymap  # pandas <2.1 compat
+            styler = _map(_wl, subset=[wl_col])  # applied AFTER base → wins on W/L cells
+        return styler
+    except Exception:  # noqa: BLE001
+        return style_table(df, mode)
+
+
 # ---------------------------------------------------------------------------
 # CSS — one baked stylesheet per mode. Uses an explicit spacing/type scale so
 # rhythm is consistent. No gradients, restrained radii, single accent.
