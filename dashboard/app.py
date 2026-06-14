@@ -2255,6 +2255,110 @@ def render_smart_money_tab(df_all: pd.DataFrame, scan_date: str) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Consecutive up/down streak screener tab (bullish/sideways only; no bearish)
+# ---------------------------------------------------------------------------
+@st.cache_data(ttl=900, show_spinner=False)
+def _cached_streak_screen() -> pd.DataFrame:
+    """Cached scan of the OHLC bundle for up/down streaks (bearish excluded)."""
+    from dashboard.streaks import screen_streaks
+    return screen_streaks(min_len=3)
+
+
+def _render_streak_card(r: pd.Series, scan_date: str) -> None:
+    """One result: header + trend chips + reason + chart + Broker Summary."""
+    tk = str(r["ticker"])
+    up = r["streak_dir"] == "up"
+    arrow = "🟢 ▲" if up else "🔴 ▼"
+    dir_id = "naik" if up else "turun"
+    trend_chip = {
+        "bullish":  ("chip-ok",    "🟢 Bullish"),
+        "sideways": ("chip-muted", "⚪ Sideways"),
+    }.get(str(r["trend_state"]), ("chip-muted", str(r["trend_state"])))
+
+    st.markdown(f"#### {arrow} {tk.replace('.JK', '')} — {dir_id} "
+                f"{int(r['streak_len'])} hari berturut-turut")
+    st.markdown(
+        f'<span class="chip {trend_chip[0]}">Struktur: {trend_chip[1]}</span>&nbsp;'
+        f'<span class="chip chip-info">{get_company_name(tk)}</span>&nbsp;'
+        f'<span class="chip chip-muted">Close {r["last_close"]:,.0f} · {r["last_date"]}</span>',
+        unsafe_allow_html=True,
+    )
+    st.caption(f"📋 {r['reason']}")
+
+    df_raw = load_raw(tk)
+    st.plotly_chart(
+        price_chart(df_raw, tk, signal_date=scan_date),
+        use_container_width=True, key=f"streak_chart_{tk}",
+    )
+    with st.expander("🏦 Broker Summary — kepemilikan & serapan broker"):
+        render_broker_section(tk, scan_date, key_prefix="streak", show_header=False)
+    st.divider()
+
+
+def render_streak_tab(scan_date: str) -> None:
+    """🔁 Stocks up/down several consecutive days, only if bullish/sideways."""
+    st.markdown("### 🔁 Naik / Turun Beberapa Hari Berturut-turut")
+    st.caption(
+        "Saham yang ditutup **naik** atau **turun** beberapa hari berturut-turut "
+        "(arah close-to-close), disaring hanya yang struktur besarnya **bullish** "
+        "atau **sideways** — yang **bearish (tren turun, termasuk yang lemah) "
+        "dikecualikan**. Sumber: bundle OHLC sesi terakhir yang dipublikasikan."
+    )
+
+    df = _cached_streak_screen()
+    if df is None or df.empty:
+        st.info("📭 Belum ada kandidat beruntun (atau bundle OHLC belum tersedia). "
+                "Bundle dibuat ulang otomatis tiap scan harian.")
+        return
+
+    _pal = palette()
+
+    def _count(dirk: str, ln: int) -> int:
+        return int(((df["streak_dir"] == dirk) & (df["streak_len"] >= ln)).sum())
+
+    # ── Summary cards ────────────────────────────────────────────────────
+    cards = [
+        ("📈 Naik ≥3 hari",  _count("up", 3),   _pal["success"]),
+        ("📈 Naik ≥5 hari",  _count("up", 5),   _pal["success"]),
+        ("📉 Turun ≥3 hari", _count("down", 3), _pal["danger"]),
+        ("📉 Turun ≥5 hari", _count("down", 5), _pal["danger"]),
+    ]
+    for col, (lab, val, color) in zip(st.columns(4), cards):
+        with col:
+            st.markdown(
+                f'<div class="metric-card"><div class="label">{lab}</div>'
+                f'<div class="value" style="color:{color}">{val}</div></div>',
+                unsafe_allow_html=True,
+            )
+    st.markdown("")
+
+    # ── Filters ──────────────────────────────────────────────────────────
+    f1, f2, f3, f4 = st.columns([1.1, 1, 1.3, 1])
+    direction = f1.radio("Arah", ["📈 Naik", "📉 Turun"], horizontal=True, key="streak_dir_f")
+    days      = f2.radio("Minimal", ["3 hari", "5 hari"], horizontal=True, key="streak_days_f")
+    trend     = f3.radio("Struktur", ["Semua", "Bullish", "Sideways"], horizontal=True, key="streak_trend_f")
+    topn      = f4.number_input("Tampilkan", min_value=3, max_value=20, value=6, step=1, key="streak_topn_f")
+
+    dirk  = "up" if "Naik" in direction else "down"
+    minln = 3 if "3" in days else 5
+    sub = df[(df["streak_dir"] == dirk) & (df["streak_len"] >= minln)]
+    if trend == "Bullish":
+        sub = sub[sub["trend_state"] == "bullish"]
+    elif trend == "Sideways":
+        sub = sub[sub["trend_state"] == "sideways"]
+
+    if sub.empty:
+        st.info(f"Tidak ada saham **{direction} {days}** dengan struktur "
+                f"**{trend.lower()}** pada sesi ini. Coba ubah filter "
+                "(mis. 3 hari, atau struktur *Semua*).")
+        return
+
+    st.caption(f"**{len(sub)}** saham cocok — menampilkan {min(len(sub), int(topn))} "
+               "teratas (streak terpanjang dulu).")
+    for _, r in sub.head(int(topn)).iterrows():
+        _render_streak_card(r, scan_date)
+
 
 # ---------------------------------------------------------------------------
 # MAIN PAGE HEADER (left-aligned, restrained — no centred hero)
@@ -2278,9 +2382,10 @@ with _hc_right:
 # ---------------------------------------------------------------------------
 # MAIN TABS
 # ---------------------------------------------------------------------------
-tab_scalping, tab_swing, tab_longterm, tab_smart, tab_perf, tab_search, tab_history = st.tabs(
+(tab_scalping, tab_swing, tab_longterm, tab_smart, tab_streak,
+ tab_perf, tab_search, tab_history) = st.tabs(
     ["📈 Scalping", "🔄 Swing Trading", "📊 Long Term", "🎯 Smart Money",
-     "📋 Signal Performance", "🔍 Search Emiten", "🕐 History"]
+     "🔁 Naik/Turun Beruntun", "📋 Signal Performance", "🔍 Search Emiten", "🕐 History"]
 )
 
 
@@ -2420,6 +2525,13 @@ with tab_longterm:
 # ===========================================================================
 with tab_smart:
     render_smart_money_tab(df_all, selected_date)
+
+
+# ===========================================================================
+# TAB — NAIK / TURUN BERUNTUN (consecutive streaks, bullish/sideways only)
+# ===========================================================================
+with tab_streak:
+    render_streak_tab(selected_date)
 
 
 # ===========================================================================
