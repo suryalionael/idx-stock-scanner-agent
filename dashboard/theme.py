@@ -213,6 +213,36 @@ def style_perf_table(df, mode: str | None = None, wl_col: str = "wl"):
         return style_table(df, mode)
 
 
+def style_change_table(df, mode: str | None = None, pct_cols: tuple[str, ...] = ()):
+    """Themed Styler for a small price table: base per-mode cell colours plus
+    green/red text on the given percent-change column(s) — positive green,
+    negative red. The +/- sign is kept in the text, so it is readable without
+    relying on colour. Contrast is AA in both modes (pos_neg_colors)."""
+    mode = mode or get_mode()
+    bg, fg = table_cell_colors(mode)
+    pos, neg, _ = pos_neg_colors(mode)
+
+    def _chg(v):
+        s = str(v).strip()
+        if s.startswith("+"):
+            return f"color: {pos}; font-weight: 600"
+        if s.startswith("-"):
+            return f"color: {neg}; font-weight: 600"
+        return ""
+
+    try:
+        styler = (df.style
+                  .format(_fmt_cell)
+                  .set_properties(**{"background-color": bg, "color": fg}))
+        cols = [c for c in pct_cols if c in getattr(df, "columns", [])]
+        if cols:
+            _map = getattr(styler, "map", None) or styler.applymap
+            styler = _map(_chg, subset=cols)
+        return styler
+    except Exception:  # noqa: BLE001
+        return style_table(df, mode)
+
+
 # ---------------------------------------------------------------------------
 # CSS — one baked stylesheet per mode. Uses an explicit spacing/type scale so
 # rhythm is consistent. No gradients, restrained radii, single accent.
