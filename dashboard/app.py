@@ -32,6 +32,7 @@ from dashboard.theme import (
     palette,
     pos_neg_colors,
     render_theme_toggle,
+    style_change_table,
     style_perf_table,
     style_table,
 )
@@ -2265,8 +2266,27 @@ def _cached_streak_screen() -> pd.DataFrame:
     return screen_streaks(min_len=3)
 
 
+def _streak_price_df(df_raw: pd.DataFrame, n: int = 12) -> pd.DataFrame | None:
+    """Recent daily price table (newest first): Tanggal, Close, Δ% (close-to-close).
+    Lets the consecutive up/down days be read numerically next to the chart."""
+    if df_raw is None or df_raw.empty or "close" not in df_raw.columns:
+        return None
+    d = df_raw.sort_values("date").copy()
+    d["close"] = pd.to_numeric(d["close"], errors="coerce")
+    d["chg"] = d["close"].pct_change() * 100
+    d = d.tail(n)
+    out = pd.DataFrame({
+        "Tanggal": pd.to_datetime(d["date"]).dt.strftime("%d %b"),
+        "Close": d["close"].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "—"),
+        # exact-zero stays neutral ("0.00%" — no +/- so it isn't tinted)
+        "Δ%": d["chg"].apply(
+            lambda x: "—" if pd.isna(x) else (f"{x:+.2f}%" if round(x, 2) != 0 else "0.00%")),
+    })
+    return out.iloc[::-1].reset_index(drop=True)   # newest at top
+
+
 def _render_streak_card(r: pd.Series, scan_date: str) -> None:
-    """One result: header + trend chips + reason + chart + Broker Summary."""
+    """One result: header + trend chips + reason + chart + price table + broker."""
     tk = str(r["ticker"])
     up = r["streak_dir"] == "up"
     arrow = "🟢 ▲" if up else "🔴 ▼"
@@ -2287,10 +2307,29 @@ def _render_streak_card(r: pd.Series, scan_date: str) -> None:
     st.caption(f"📋 {r['reason']}")
 
     df_raw = load_raw(tk)
-    st.plotly_chart(
-        price_chart(df_raw, tk, signal_date=scan_date),
-        use_container_width=True, key=f"streak_chart_{tk}",
-    )
+    c_chart, c_tbl = st.columns([1.7, 1])
+    with c_chart:
+        st.plotly_chart(
+            price_chart(df_raw, tk, signal_date=scan_date),
+            use_container_width=True, key=f"streak_chart_{tk}",
+        )
+    with c_tbl:
+        st.markdown("**📋 Tabel Harga Harian**")
+        ptbl = _streak_price_df(df_raw)
+        if ptbl is None or ptbl.empty:
+            st.caption("Data harga tidak tersedia.")
+        else:
+            st.dataframe(
+                style_change_table(ptbl, pct_cols=("Δ%",)),
+                use_container_width=True, hide_index=True, height=360,
+                column_config={
+                    "Tanggal": st.column_config.TextColumn("Tanggal", width="small"),
+                    "Close":   st.column_config.TextColumn("Close", width="small"),
+                    "Δ%":      st.column_config.TextColumn("Δ%", width="small"),
+                },
+            )
+            st.caption("Δ% = perubahan close vs sesi sebelumnya (hijau naik / merah turun).")
+
     with st.expander("🏦 Broker Summary — kepemilikan & serapan broker"):
         render_broker_section(tk, scan_date, key_prefix="streak", show_header=False)
     st.divider()
