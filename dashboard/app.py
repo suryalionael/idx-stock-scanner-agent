@@ -2261,9 +2261,10 @@ def render_smart_money_tab(df_all: pd.DataFrame, scan_date: str) -> None:
 # ---------------------------------------------------------------------------
 @st.cache_data(ttl=900, show_spinner=False)
 def _cached_streak_screen() -> pd.DataFrame:
-    """Cached scan of the OHLC bundle for up/down streaks (bearish excluded)."""
+    """Cached scan of the OHLC bundle for up/down streaks (bearish excluded).
+    min_len=1 so the tab can offer any selectable streak length 1–7."""
     from dashboard.streaks import screen_streaks
-    return screen_streaks(min_len=3)
+    return screen_streaks(min_len=1)
 
 
 def _streak_price_df(df_raw: pd.DataFrame, n: int = 12) -> pd.DataFrame | None:
@@ -2351,36 +2352,31 @@ def render_streak_tab(scan_date: str) -> None:
                 "Bundle dibuat ulang otomatis tiap scan harian.")
         return
 
-    _pal = palette()
-
     def _count(dirk: str, ln: int) -> int:
         return int(((df["streak_dir"] == dirk) & (df["streak_len"] >= ln)).sum())
 
-    # ── Summary cards ────────────────────────────────────────────────────
-    cards = [
-        ("📈 Naik ≥3 hari",  _count("up", 3),   _pal["success"]),
-        ("📈 Naik ≥5 hari",  _count("up", 5),   _pal["success"]),
-        ("📉 Turun ≥3 hari", _count("down", 3), _pal["danger"]),
-        ("📉 Turun ≥5 hari", _count("down", 5), _pal["danger"]),
-    ]
-    for col, (lab, val, color) in zip(st.columns(4), cards):
-        with col:
-            st.markdown(
-                f'<div class="metric-card"><div class="label">{lab}</div>'
-                f'<div class="value" style="color:{color}">{val}</div></div>',
-                unsafe_allow_html=True,
-            )
+    # ── Summary counts by streak bucket (bullish/sideways only) ──────────
+    st.markdown("**Ringkasan — jumlah saham per panjang streak** "
+                "<span style='color:var(--c-faint)'>(struktur bullish / sideways saja)</span>",
+                unsafe_allow_html=True)
+    summary = pd.DataFrame({
+        "Streak": [f"≥ {k} hari" for k in range(1, 8)],
+        "📈 Naik": [_count("up", k) for k in range(1, 8)],
+        "📉 Turun": [_count("down", k) for k in range(1, 8)],
+    })
+    st.dataframe(style_table(summary), use_container_width=True, hide_index=True, height=290)
     st.markdown("")
 
     # ── Filters ──────────────────────────────────────────────────────────
-    f1, f2, f3, f4 = st.columns([1.1, 1, 1.3, 1])
+    f1, f2, f3 = st.columns([1.2, 1.3, 1])
     direction = f1.radio("Arah", ["📈 Naik", "📉 Turun"], horizontal=True, key="streak_dir_f")
-    days      = f2.radio("Minimal", ["3 hari", "5 hari"], horizontal=True, key="streak_days_f")
-    trend     = f3.radio("Struktur", ["Semua", "Bullish", "Sideways"], horizontal=True, key="streak_trend_f")
-    topn      = f4.number_input("Tampilkan", min_value=3, max_value=20, value=6, step=1, key="streak_topn_f")
+    trend     = f2.radio("Struktur", ["Semua", "Bullish", "Sideways"], horizontal=True, key="streak_trend_f")
+    topn      = f3.number_input("Tampilkan", min_value=3, max_value=20, value=6, step=1, key="streak_topn_f")
+    # Selectable streak length 1–7 (minimum consecutive days, close-to-close).
+    minln = st.slider("Minimal hari berturut-turut (1–7)", min_value=1, max_value=7,
+                      value=3, key="streak_len_f")
 
-    dirk  = "up" if "Naik" in direction else "down"
-    minln = 3 if "3" in days else 5
+    dirk = "up" if "Naik" in direction else "down"
     sub = df[(df["streak_dir"] == dirk) & (df["streak_len"] >= minln)]
     if trend == "Bullish":
         sub = sub[sub["trend_state"] == "bullish"]
@@ -2388,13 +2384,13 @@ def render_streak_tab(scan_date: str) -> None:
         sub = sub[sub["trend_state"] == "sideways"]
 
     if sub.empty:
-        st.info(f"Tidak ada saham **{direction} {days}** dengan struktur "
-                f"**{trend.lower()}** pada sesi ini. Coba ubah filter "
-                "(mis. 3 hari, atau struktur *Semua*).")
+        st.info(f"Tidak ada saham **{direction}** dengan streak **≥ {minln} hari** "
+                f"& struktur **{trend.lower()}** pada sesi ini. Coba kurangi panjang "
+                "streak atau pilih struktur *Semua*.")
         return
 
-    st.caption(f"**{len(sub)}** saham cocok — menampilkan {min(len(sub), int(topn))} "
-               "teratas (streak terpanjang dulu).")
+    st.caption(f"**{len(sub)}** saham cocok ({direction}, ≥ {minln} hari, {trend.lower()}) "
+               f"— menampilkan {min(len(sub), int(topn))} teratas (streak terpanjang dulu).")
     for _, r in sub.head(int(topn)).iterrows():
         _render_streak_card(r, scan_date)
 
