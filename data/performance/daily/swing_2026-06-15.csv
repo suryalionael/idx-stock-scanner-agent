@@ -5,3 +5,6 @@ signal_date,eval_date,strategy,ticker,signal,prev,close,high,pct_high,pct_close,
 2026-06-12,2026-06-15,swing,LCKM.JK,PRE_MARKUP,131.0,124.0,138.0,5.34,-5.34,L,evaluated
 2026-06-12,2026-06-15,swing,BAIK.JK,BREAKOUT,680.0,645.0,840.0,23.53,-5.15,L,evaluated
 2026-06-12,2026-06-15,swing,NEST.JK,PRE_MARKUP,560.0,600.0,600.0,7.14,7.14,W,evaluated
+2026-06-12,2026-06-15,swing,MGLV.JK,PRE_MARKUP,8500.0,8700.0,9125.0,7.35,2.35,W,evaluated
+2026-06-12,2026-06-15,swing,BOBA.JK,PRE_MARKUP,336.0,330.0,350.0,4.17,-1.79,L,evaluated
+2026-06-12,2026-06-15,swing,BSML.JK,BREAKOUT,428.0,450.0,450.0,5.14,5.14,W,evaluated
