@@ -1899,20 +1899,39 @@ def render_deployment_status(remote_mode: bool, remote_payload: dict) -> None:
     source = "☁️ Remote (GitHub)" if remote_mode else "💻 Local"
     market = _fmt_date_id(scan_date) if scan_date != "—" else "—"
     updated = gen[:16].replace("T", " ") + " WIB" if gen and gen != "—" else "—"
-    # Stale guard: flag if the published session looks old vs now (WIB).
+    # Stale guard: compare the published session to the latest VALID IDX trading
+    # day from the calendar (not a fixed day-count window). The published data is
+    # "fresh" while it is at most one session behind the expected last trading day
+    # (the morning scan normally publishes the prior session); anything older than
+    # that is flagged, and we surface the trading day the data *should* show so the
+    # gap is actionable rather than a silent stale value.
     from datetime import datetime as _dt, timezone as _tz, timedelta as _td
-    today = _dt.now(_tz(_td(hours=7))).date()
+    now_wib = _dt.now(_tz(_td(hours=7)))
+    expected_str = None
+    stale = False
     try:
-        age_days = (today - _dt.strptime(scan_date, "%Y-%m-%d").date()).days
+        from stock_scanner.utils.trading_calendar import (
+            expected_market_date, previous_trading_day,
+        )
+        expected = expected_market_date(now_wib)
+        expected_str = expected.strftime("%Y-%m-%d")
+        pub_date = _dt.strptime(scan_date, "%Y-%m-%d").date()
+        stale = pub_date < previous_trading_day(expected)
     except Exception:  # noqa: BLE001
-        age_days = None
-    dot = "🟢" if (age_days is not None and age_days <= 4) else "🟠"
+        stale = False
+    dot = "🟠" if stale else "🟢"
+    market_line = f'<span class="k">Market date:</span> <b>{market}</b>'
+    if stale and expected_str:
+        market_line += (
+            f'<br><span class="k">⚠️ Data tertinggal:</span> '
+            f'sesi bursa terakhir <b>{_fmt_date_id(expected_str)}</b>'
+        )
     st.markdown(
         f'<div class="status-panel">'
         f'<b>📡 Status Deploy</b> {dot}<br>'
         f'<span class="k">Sumber data:</span> {source}<br>'
         f'<span class="k">Branch/commit:</span> <code>{branch}@{sha}</code><br>'
-        f'<span class="k">Market date:</span> <b>{market}</b><br>'
+        f'{market_line}<br>'
         f'<span class="k">Last updated:</span> {updated}'
         f'</div>',
         unsafe_allow_html=True,
