@@ -102,13 +102,13 @@ IDX_HOLIDAYS: dict[int, frozenset[str]] = {
         "2026-03-19",  # Cuti bersama Idul Fitri (approx)
         "2026-03-23",  # Cuti bersama Idul Fitri (approx)
         "2026-03-24",  # Cuti bersama Idul Fitri (approx)
-        "2026-04-01",  # Hari Lahir Pancasila (moved to Apr? check)  -- actually June 1
         "2026-04-17",  # Jumat Agung / Good Friday (Easter = 19 Apr)
         "2026-05-01",  # Hari Buruh Internasional
         "2026-05-27",  # Cuti bersama / Idul Adha (CONFIRMED from audit: zero volume)
         "2026-05-28",  # Kenaikan Isa Almasih (CONFIRMED from audit: zero volume)
         "2026-06-01",  # Hari Lahir Pancasila
-        "2026-06-17",  # Tahun Baru Islam 1448 H (approx)
+        "2026-06-16",  # Tahun Baru Islam 1448 H (CONFIRMED IDX holiday)
+        "2026-06-17",  # Cuti bersama Tahun Baru Islam 1448 H
         "2026-08-17",  # Hari Kemerdekaan RI
         "2026-09-14",  # Maulid Nabi Muhammad SAW 1448 H (approx)
         "2026-12-25",  # Hari Raya Natal
