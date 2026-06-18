@@ -438,7 +438,10 @@ def enrich_df_with_quality_filters(
     )
 
     # Log a few notable exclusions for auditability
-    excluded = df[df["final_status"].isin(EXCLUDED_STATUSES)][["ticker", "final_status", "exclusion_reason", "pbv", "der"]].head(10)
+    _excl_cols = ["ticker", "final_status", "exclusion_reason"] + [
+        c for c in ["pbv", "der"] if c in df.columns
+    ]
+    excluded = df[df["final_status"].isin(EXCLUDED_STATUSES)][_excl_cols].head(10)
     if not excluded.empty:
         logger.info("Notable exclusions:\n%s", excluded.to_string(index=False))
 
