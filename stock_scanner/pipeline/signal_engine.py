@@ -226,6 +226,13 @@ def _penalty_score(df: pd.DataFrame) -> pd.Series:
     if "adx" in df.columns:
         penalty += (df["adx"].fillna(25) < 15).astype(float) * 2
 
+    # squeeze_on: Bollinger Band masih terkompresi (belum release). Validated
+    # via backtest audit: 0% dari 67 sinyal historis dengan squeeze_on=True
+    # pernah mencapai pct_close>10%, konsisten di setiap time-split,
+    # market-regime-split, dan ticker-exclusion check yang diuji.
+    if "squeeze_on" in df.columns:
+        penalty += df["squeeze_on"].fillna(False).astype(float) * 8
+
     return penalty.clip(0, 10)
 
 
