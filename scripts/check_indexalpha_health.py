@@ -7,21 +7,30 @@ fetch_indexalpha._get() on every real call, and on-disk cache freshness) —
 zero network calls, zero quota cost. The free plan is 5 requests/day; this
 script must never spend one without the caller explicitly asking for it.
 
---live makes EXACTLY ONE real API call (check_usage()) to prove end-to-end
-connectivity. Off by default — never run automatically in CI/cron. A human
-decides when it's worth spending 1 of the 5 daily requests on verification.
+--live makes EXACTLY ONE real API call — a real fetch() for one ticker on
+the last valid IDX trading day (per stock_scanner.utils.trading_calendar,
+the same calendar logic the live market-date bug fix earlier this project
+relies on) — to prove the FULL downstream path, not just connectivity:
+auth, parsing, payload validity, and the exact cache file the dashboard
+reads from. check_usage() alone was considered and rejected — it only
+proves the API key works against a DIFFERENT endpoint than the one any
+real user-facing feature calls, so a green check_usage() would not actually
+prove the broker-summary feature itself works. Off by default — never run
+automatically in CI/cron. A human decides when it's worth spending 1 of the
+5 daily requests on verification.
 
 Exit code: 0 = healthy, 1 = degraded (see printed reasons), 2 = misconfigured.
 
 Usage:
     python scripts/check_indexalpha_health.py
     python scripts/check_indexalpha_health.py --live
+    python scripts/check_indexalpha_health.py --live --ticker BBCA.JK
 """
 import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 repo_root = Path(__file__).parent.parent
@@ -31,6 +40,7 @@ _HEALTH_PATH = repo_root / "data" / "published" / "indexalpha_health.json"
 _BROKER_DIR = repo_root / "data" / "broker"
 _STALE_AFTER_DAYS = 3          # broker data older than this is flagged stale
 _FAILURE_ALERT_THRESHOLD = 3   # consecutive failures before "FAIL" verdict
+_DEFAULT_LIVE_TICKER = "BBCA.JK"  # highly liquid — near-certain to have a real broker summary every session
 
 
 def check_key_configured() -> bool:
@@ -67,17 +77,51 @@ def check_cache_freshness() -> dict:
     return {"newest_date": str(newest), "age_days": age_days, "n_files": len(files)}
 
 
-def run_live_check() -> dict:
-    """Spends exactly 1 of the 5 daily quota requests. Caller must opt in."""
+def run_live_check(ticker: str) -> dict:
+    """Spends exactly 1 of the 5 daily quota requests — one real fetch() for
+    `ticker` on the last valid IDX trading day. Caller must opt in (--live).
+
+    Proves the actual user-facing path: writes to the same cache file
+    dashboard/data_loader.py reads from, so a success here means the next
+    dashboard view of this ticker+date would show real (not stale, not
+    synthetic) broker data. Returns a result dict with everything needed
+    for the verification report — never the API key.
+    """
     from stock_scanner.pipeline.fetch_indexalpha import IndexAlphaFetcher
+    from stock_scanner.utils.trading_calendar import last_trading_day
+
+    target_date = last_trading_day(date.today()).strftime("%Y-%m-%d")
+    import time as _time
+    start = _time.monotonic()
     try:
-        usage = IndexAlphaFetcher().check_usage()
-        return {"ok": bool(usage), "usage": usage}
+        df = IndexAlphaFetcher().fetch(ticker, target_date)
+        latency_ms = (_time.monotonic() - start) * 1000
+        if df.empty:
+            return {"ok": False, "ticker": ticker, "date": target_date,
+                    "latency_ms": round(latency_ms, 1),
+                    "error": "empty result — no broker data for this ticker/date "
+                             "(could be: quota exhausted, no trading that day, or "
+                             "genuinely no broker activity recorded)"}
+        return {
+            "ok": True, "ticker": ticker, "date": target_date,
+            "latency_ms": round(latency_ms, 1),
+            "n_broker_records": int(len(df)),
+            "columns": list(df.columns),
+            "net_lot_range": [float(df["net_lot"].min()), float(df["net_lot"].max())],
+            "cache_path": str(ia_cache_path(ticker, target_date)),
+        }
     except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": str(exc)}
+        latency_ms = (_time.monotonic() - start) * 1000
+        return {"ok": False, "ticker": ticker, "date": target_date,
+                "latency_ms": round(latency_ms, 1), "error": str(exc)}
 
 
-def main(live: bool) -> int:
+def ia_cache_path(ticker: str, trade_date: str) -> Path:
+    from stock_scanner.pipeline.fetch_indexalpha import _broker_cache_path
+    return _broker_cache_path(ticker, trade_date, _BROKER_DIR)
+
+
+def main(live: bool, ticker: str) -> int:
     print("=" * 60)
     print("IndexAlpha Integration Health Check")
     print("=" * 60)
@@ -118,12 +162,22 @@ def main(live: bool) -> int:
 
     live_result = None
     if live:
-        print(f"\n[4] LIVE check requested — spending 1 of 5 daily quota requests...")
-        live_result = run_live_check()
+        print(f"\n[4] LIVE check requested — spending 1 of 5 daily quota requests "
+              f"(real fetch: {ticker})...")
+        live_result = run_live_check(ticker)
         if live_result["ok"]:
-            print(f"    OK — usage: {live_result['usage']}")
+            print(f"    OK — {live_result['n_broker_records']} broker records for "
+                  f"{live_result['ticker']} @ {live_result['date']} "
+                  f"({live_result['latency_ms']:.0f}ms)")
+            print(f"    net_lot range: {live_result['net_lot_range']}")
+            print(f"    cached to:     {live_result['cache_path']}")
         else:
-            print(f"    FAILED — {live_result.get('error')}")
+            print(f"    FAILED — {live_result.get('error')} "
+                  f"({live_result.get('latency_ms', 0):.0f}ms)")
+        # _get() just wrote a fresh entry via _record_health() — re-read so
+        # the verdict reflects what actually just happened, not the
+        # pre-call snapshot read in step [2].
+        state = read_health_state()
 
     # --- Verdict ---
     print("\n" + "=" * 60)
@@ -157,6 +211,8 @@ def main(live: bool) -> int:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--live", action="store_true",
-                        help="Spend 1 of the 5 daily quota requests on a real connectivity check.")
+                        help="Spend 1 of the 5 daily quota requests on a real fetch() check.")
+    parser.add_argument("--ticker", default=_DEFAULT_LIVE_TICKER,
+                        help=f"Ticker to use for --live (default: {_DEFAULT_LIVE_TICKER}).")
     args = parser.parse_args()
-    sys.exit(main(args.live))
+    sys.exit(main(args.live, args.ticker))
