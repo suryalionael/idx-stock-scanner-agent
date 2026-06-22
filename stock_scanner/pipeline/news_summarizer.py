@@ -278,7 +278,6 @@ def format_news_bullets(
 
     # Sentiment score bar
     if sentiment_score is not None:
-        n_pos = len([a for a in pos])  # proxied from summary
         parts.append(
             f"Skor sentimen: **{sentiment_score:.1f}/10** {score_bar}"
         )

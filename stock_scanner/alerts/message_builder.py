@@ -33,7 +33,6 @@ format_swing_full_alert(signals, scan_date) -> list[str]
 """
 from __future__ import annotations
 
-import math
 from datetime import datetime
 from typing import Any
 
@@ -396,7 +395,7 @@ def build_telegram_top_picks_message(
     # Footer
     now_str = datetime.now().strftime("%H:%M WIB")
     parts.append("─────────────────────")
-    parts.append(f"<i>⚠️ Bukan rekomendasi investasi. DYOR.</i>")
+    parts.append("<i>⚠️ Bukan rekomendasi investasi. DYOR.</i>")
     parts.append(f"<i>📡 {now_str}  ·  🤖 IDX Scanner Agent</i>")
 
     text = "\n".join(parts)
@@ -568,8 +567,8 @@ def _build_news_lines(s: dict, articles: list[dict] | None = None) -> list[str]:
     # Rich mode: summarize articles
     try:
         from stock_scanner.pipeline.news_summarizer import (
-            summarize_news_articles,
             format_news_bullets,
+            summarize_news_articles,
         )
         summary = summarize_news_articles(articles)
         count = int(news_count) if news_count else len(articles)
@@ -873,7 +872,7 @@ def _build_swing_compact_block(idx: int, s: dict) -> str:
     elif st == "low_rr" and el and cl:
         lines.append(f"   <code>E:{el:,}  CL:{cl:,}</code>  <i>R:R rendah</i>")
     else:
-        lines.append(f"   <i>Level tidak aktif</i>")
+        lines.append("   <i>Level tidak aktif</i>")
 
     # Mini stats
     info: list[str] = []
@@ -931,7 +930,6 @@ def _build_conclusion(s: dict, articles: list[dict] | None = None) -> str:
     """Build a 2–3 sentence conclusion string."""
     ticker = _ticker_clean(s.get("ticker", ""))
     signal_type = str(s.get("signal", "")).upper()
-    close = _safe_num(s.get("close"))
     rsi = _safe_num(s.get("rsi14"))
     sentiment = _safe_num(s.get("news_sentiment_score"))
     pe = _safe_num(s.get("pe_ratio"))

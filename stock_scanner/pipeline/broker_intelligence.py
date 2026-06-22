@@ -32,7 +32,6 @@ from typing import Any
 
 import pandas as pd
 
-
 # ---------------------------------------------------------------------------
 # Broker classification tables (IDX 2-letter codes)
 # ---------------------------------------------------------------------------
@@ -380,7 +379,8 @@ def compute_longterm_broker_alert(stock_data: dict) -> dict:
             "confidence_score": float  (0–10)
         }
     """
-    _get = lambda k, default=None: stock_data.get(k, default)
+    def _get(k, default=None):
+        return stock_data.get(k, default)
 
     broker_score    = _safe_float(_get("broker_accumulation_score", 0))
     broker_label    = str(_get("broker_accumulation_label", "NO_SIGNAL"))

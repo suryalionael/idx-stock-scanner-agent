@@ -468,7 +468,6 @@ def _rule_based_summary(
     n_breakout = dist.get("BREAKOUT", 0)
     n_premark  = dist.get("PRE_MARKUP", 0)
     n_watch    = dist.get("WATCH", 0)
-    n_scalp    = len(top_sc)
 
     lines: list[str] = []
 
@@ -492,7 +491,7 @@ def _rule_based_summary(
     if sectors:
         lines.append(f"- 🏭 Sektor dominan hari ini: **{', '.join(sectors[:3])}**.")
     else:
-        lines.append(f"- 🏭 Sinyal tersebar di berbagai sektor.")
+        lines.append("- 🏭 Sinyal tersebar di berbagai sektor.")
 
     # Signal quality
     if n_watch > n_premark * 3:
@@ -501,7 +500,7 @@ def _rule_based_summary(
         lines.append(f"- ✅ Sinyal berkualitas tinggi banyak ({n_breakout + n_premark} BREAKOUT+PRE_MARKUP).")
 
     # Risk note
-    lines.append(f"- 💡 Selalu cek chart individual sebelum entry. Level di atas bersifat indikatif.")
+    lines.append("- 💡 Selalu cek chart individual sebelum entry. Level di atas bersifat indikatif.")
 
     return "\n".join(lines)
 

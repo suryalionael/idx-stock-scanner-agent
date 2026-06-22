@@ -157,7 +157,6 @@ def compute_intrinsic_value(row: dict | pd.Series) -> dict:
     """
     close  = _f(row.get("close"))
     eps    = _f(row.get("eps"))
-    pe     = _f(row.get("pe_ratio"))
     pbv    = _f(row.get("pbv"))
 
     iv = None
@@ -247,11 +246,9 @@ def compute_long_term_score(row: dict | pd.Series, sector: str = "") -> dict:
     roe      = _f(row.get("roe_pct"))
     der      = _f(row.get("der"))
     pe       = _f(row.get("pe_ratio"))
-    pbv      = _f(row.get("pbv"))
     rev_g    = _f(row.get("revenue_growth_pct"))
     prof_g   = _f(row.get("profit_growth_pct"))
     div_y    = _f(row.get("div_yield_pct"))
-    fund_st  = str(row.get("fundamental_status", "")).lower()
     cyclical = classify_cyclicality(sector)
 
     # --- Adjust thresholds by cyclicality ---
@@ -282,7 +279,7 @@ def compute_long_term_score(row: dict | pd.Series, sector: str = "") -> dict:
             red_flags.append(f"ROE lemah {roe:.1f}%")
             score -= 0.5
         if roe < 0:
-            red_flags.append(f"ROE negatif — sedang merugi")
+            red_flags.append("ROE negatif — sedang merugi")
             score -= 1.0
     else:
         red_flags.append("Data ROE tidak tersedia")

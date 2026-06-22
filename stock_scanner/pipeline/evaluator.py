@@ -25,13 +25,11 @@ evaluate_all_files(ranked_dir, raw_dir, eval_dir, ...) -> list[Path]
 """
 from __future__ import annotations
 
-import math
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from loguru import logger
-
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -156,14 +154,14 @@ def evaluate_signal_file(
         fwd_lows  = fwd["low"].values
         fwd_closes= fwd["close"].values
 
-        for i, (h, l, c_fwd) in enumerate(zip(fwd_highs, fwd_lows, fwd_closes)):
+        for i, (h, lo, c_fwd) in enumerate(zip(fwd_highs, fwd_lows, fwd_closes)):
             # Check TP first (more conservative), then stop
             if h >= tp:
                 outcome     = "TP"
                 outcome_day = i + 1
                 exit_price  = tp
                 break
-            if l <= cl:
+            if lo <= cl:
                 outcome     = "STOP"
                 outcome_day = i + 1
                 exit_price  = cl

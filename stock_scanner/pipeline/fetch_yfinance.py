@@ -5,7 +5,7 @@ import pandas as pd
 import yfinance as yf
 from loguru import logger
 
-from stock_scanner.pipeline.fetch_base import BaseFetcher, OHLCV_COLS
+from stock_scanner.pipeline.fetch_base import OHLCV_COLS, BaseFetcher
 
 _DEFAULT_LOOKBACK_YEARS = 3
 _DEFAULT_BATCH_SIZE = 20

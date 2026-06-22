@@ -9,7 +9,6 @@ Alur:
 SAAT INI: explain_signal() mengembalikan string dummy formatted.
 Uncomment blok Claude API di bawah untuk integrasi nyata.
 """
-import os
 
 import pandas as pd
 from loguru import logger
@@ -36,7 +35,7 @@ def explain_signal(
     Returns:
         String narasi penjelasan (50–150 kata).
     """
-    prompt = _build_prompt(ticker, row, model_info or {})
+    prompt = _build_prompt(ticker, row, model_info or {})  # noqa: F841 — used once the Claude block below is uncommented
 
     # --- TODO: Uncomment untuk integrasi Claude API nyata ---
     #

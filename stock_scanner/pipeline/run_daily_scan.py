@@ -19,6 +19,7 @@ import pandas as pd
 import yaml
 from loguru import logger
 
+from stock_scanner.alerts.level_calculator import enrich_df_with_levels
 from stock_scanner.pipeline.explain_agent import explain_batch
 from stock_scanner.pipeline.feature_builder import build_features, save_features
 from stock_scanner.pipeline.fetch_yfinance import YFinanceFetcher, incremental_update
@@ -27,13 +28,15 @@ from stock_scanner.pipeline.fundamental import enrich_with_fundamentals
 from stock_scanner.pipeline.ml_ranker import load_ranker, score_candidates
 from stock_scanner.pipeline.news_sentiment import enrich_with_news
 from stock_scanner.pipeline.quality_filters import (
+    EXCLUDED_STATUSES,
     enrich_df_with_quality_filters,
     load_risk_overrides,
-    EXCLUDED_STATUSES,
 )
-from stock_scanner.pipeline.shareholder import PlaceholderShareholderFetcher, enrich_with_shareholders
-from stock_scanner.alerts.level_calculator import enrich_df_with_levels
 from stock_scanner.pipeline.scalping import enrich_df_with_scalping
+from stock_scanner.pipeline.shareholder import (
+    PlaceholderShareholderFetcher,
+    enrich_with_shareholders,
+)
 from stock_scanner.pipeline.signal_engine import compute_signal, save_signals
 from stock_scanner.pipeline.validator import validate
 

@@ -23,7 +23,6 @@ import sys
 import textwrap
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
 from loguru import logger
@@ -119,9 +118,9 @@ class TelegramSender(BaseAlertSender):
         text = message[:_MAX_MSG_LEN - 3] + "…" if len(message) > _MAX_MSG_LEN else message
 
         try:
-            import urllib.request
-            import urllib.parse
             import json
+            import urllib.parse
+            import urllib.request
 
             payload = json.dumps({
                 "chat_id":    self.chat_id,
@@ -167,8 +166,10 @@ class TelegramSender(BaseAlertSender):
         Returns:
             AlertResult
         """
+        import json as _json
+        import urllib.parse
+        import urllib.request
         from pathlib import Path as _Path
-        import urllib.request, urllib.parse, json as _json
 
         file_path = _Path(file_path)
         if not file_path.exists():
@@ -182,9 +183,6 @@ class TelegramSender(BaseAlertSender):
             return AlertResult(success=False, channel=self.channel_name, error=err)
 
         try:
-            import email.mime.multipart, email.mime.base, email.mime.text
-            import email.encoders, io
-
             url = f"https://api.telegram.org/bot{self.bot_token}/sendDocument"
 
             # Build multipart form-data manually (no requests / httpx required)
@@ -464,7 +462,7 @@ def build_morning_message(
     # frame carries the per-ticker scan date, so we also prune those tickers from
     # the ranked top-picks list. (No extra feed — see suspension.py.)
     try:
-        from stock_scanner.pipeline.suspension import annotate_suspension, STATUS_ACTIVE
+        from stock_scanner.pipeline.suspension import STATUS_ACTIVE, annotate_suspension
         if not signals.empty:
             signals = annotate_suspension(signals)
             _susp = set(signals.loc[signals["suspension_status"] != STATUS_ACTIVE, "ticker"].astype(str))
