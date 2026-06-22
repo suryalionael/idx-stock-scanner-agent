@@ -1,0 +1,10 @@
+{
+  "last_attempt_at": "2026-06-22T14:07:28.644177+00:00",
+  "last_status_code": 200,
+  "last_latency_ms": 843.6,
+  "last_error_type": null,
+  "total_calls": 1,
+  "last_success_at": "2026-06-22T14:07:28.644177+00:00",
+  "consecutive_failures": 0,
+  "total_successes": 1
+}
