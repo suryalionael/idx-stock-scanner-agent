@@ -18,6 +18,7 @@ from dashboard.charts import (
     broker_net_flow_chart,
     fundamental_trend_chart,
     history_timeline,
+    ihsg_benchmark_chart,
     monthly_holders_chart,
     price_chart,
     price_chart_longterm,
@@ -55,6 +56,8 @@ from dashboard.data_loader import (
     load_fundamentals_for_date,
     get_fundamental_row,
     load_news_articles_for_ticker,
+    load_ihsg_data,
+    get_ihsg_session,
 )
 from dashboard.explain import explain_signal_llm
 from dashboard.search import (
@@ -2497,6 +2500,67 @@ with tab_perf:
         if _pend:
             st.caption(f"⏳ {_pend} sinyal {_strat} menunggu sesi bursa berikutnya; "
                        "akan otomatis masuk review begitu OHLC-nya tersedia.")
+
+        # -------------------------------------------------------------------
+        # IHSG BENCHMARK — synced to the same review/market date as above so
+        # signal performance and the overall market move are comparable at a
+        # glance. Falls back to the last valid IDX trading day if `_date`
+        # itself has no IHSG session (holiday/weekend), never to a stale
+        # unrelated date.
+        # -------------------------------------------------------------------
+        st.markdown("#### 📈 Benchmark IHSG")
+        _ihsg = get_ihsg_session(str(_date)) if _date else None
+        if _ihsg is None:
+            st.caption("Data IHSG tidak tersedia untuk sesi ini.")
+        else:
+            _status_icon = {"up": "🟢", "down": "🔴", "flat": "⚪"}[_ihsg["status"]]
+            _status_label = {"up": "Naik", "down": "Turun", "flat": "Flat"}[_ihsg["status"]]
+            _ihsg_color = {"up": _perf_pal["success"], "down": _perf_pal["danger"],
+                           "flat": "var(--c-faint)"}[_ihsg["status"]]
+
+            ic1, ic2, ic3 = st.columns(3)
+            with ic1:
+                st.markdown(
+                    f'<div class="metric-card"><div class="label">IHSG Close ({_ihsg["date"]})</div>'
+                    f'<div class="value">{_ihsg["close"]:,.0f}</div></div>',
+                    unsafe_allow_html=True,
+                )
+            with ic2:
+                st.markdown(
+                    f'<div class="metric-card"><div class="label">% Change Harian</div>'
+                    f'<div class="value" style="color:{_ihsg_color}">'
+                    f'{_status_icon} {_ihsg["pct_change"]:+.2f}% ({_status_label})</div></div>',
+                    unsafe_allow_html=True,
+                )
+            with ic3:
+                _avg_ret = _day["pct_close"].astype(float).mean() if _n else None
+                if _avg_ret is not None:
+                    _spread = _avg_ret - _ihsg["pct_change"]
+                    _spread_label = ("Outperform" if _spread > 0
+                                      else "Underperform" if _spread < 0 else "Setara")
+                    _spread_color = (_perf_pal["success"] if _spread > 0
+                                      else _perf_pal["danger"] if _spread < 0 else "var(--c-faint)")
+                    st.markdown(
+                        f'<div class="metric-card"><div class="label">Rata² Return Sinyal vs IHSG</div>'
+                        f'<div class="value" style="color:{_spread_color};font-size:18px">'
+                        f'{_spread_label} {_spread:+.2f}pp</div></div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.caption("Belum ada sinyal evaluated untuk dibandingkan.")
+
+            if _ihsg["date"] != str(_date):
+                st.caption(f"⚠️ Tidak ada data IHSG untuk {_date} (libur/weekend) — "
+                           f"menampilkan sesi bursa valid terakhir: {_ihsg['date']}.")
+
+            _ihsg_hist = load_ihsg_data()
+            if not _ihsg_hist.empty:
+                _window = _ihsg_hist[_ihsg_hist["date"] <= pd.Timestamp(_ihsg["date"])].tail(30)
+                st.plotly_chart(
+                    ihsg_benchmark_chart(_window, highlight_date=_ihsg["date"]),
+                    use_container_width=True, key="ihsg_benchmark_chart",
+                )
+        st.divider()
 
         # Table (matches the screenshot layout)
         _show = _day[["ticker", "signal", "prev", "close", "high",

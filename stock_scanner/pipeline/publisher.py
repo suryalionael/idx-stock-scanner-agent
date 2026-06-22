@@ -357,3 +357,43 @@ def export_recent_ohlc(tickers, raw_dir, out_path=None, sessions: int = 250):
                 out_path.name, bundle["ticker"].nunique(), len(bundle),
                 out_path.stat().st_size / 1024)
     return out_path
+
+
+# ---------------------------------------------------------------------------
+# IHSG (composite index) bundle — committed so the Signal Performance
+# benchmark panel works on Cloud without a live yfinance call at view time.
+# ---------------------------------------------------------------------------
+
+_IHSG_TICKER     = "^JKSE"
+_IHSG_BUNDLE_PATH = _PUBLISHED_DIR / "ihsg_recent.parquet"
+_IHSG_BUNDLE_COLS = ["date", "open", "high", "low", "close", "volume"]
+
+
+def export_ihsg_bundle(out_path=None, sessions: int = 250):
+    """Fetch IHSG (^JKSE) OHLCV via yfinance and bundle the last `sessions`
+    rows into data/published/ihsg_recent.parquet. Mirrors export_recent_ohlc
+    but for the single composite-index ticker (no per-stock raw cache exists
+    for ^JKSE, so this always does a live fetch — cheap, single ticker)."""
+    out_path = out_path or _IHSG_BUNDLE_PATH
+    try:
+        from stock_scanner.pipeline.fetch_yfinance import YFinanceFetcher
+        start = (datetime.now() - timedelta(days=int(sessions * 1.6) + 30)).strftime("%Y-%m-%d")
+        end = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+        df = YFinanceFetcher(batch_size=1).fetch_single(_IHSG_TICKER, start, end)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("export_ihsg_bundle: fetch failed — {}", exc)
+        return None
+    if df is None or df.empty:
+        logger.warning("export_ihsg_bundle: no data returned for %s", _IHSG_TICKER)
+        return None
+    keep = [c for c in _IHSG_BUNDLE_COLS if c in df.columns]
+    df = df[keep].copy()
+    df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None).dt.normalize()
+    df = df.sort_values("date").tail(sessions).reset_index(drop=True)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(out_path, index=False)
+    logger.info("IHSG bundle written: {} ({} rows, last={}, {:.1f} KB)",
+                out_path.name, len(df),
+                str(df["date"].max().date()) if len(df) else "—",
+                out_path.stat().st_size / 1024)
+    return out_path

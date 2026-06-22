@@ -911,3 +911,77 @@ def broker_history_trend_line(
         hovermode="x unified",
     )
     return _apply_text_theme(fig)
+
+
+def _hex_to_rgba(hex_color: str, alpha: float) -> str:
+    """Convert '#RRGGBB' to 'rgba(r,g,b,alpha)'. Falls back to a neutral
+    translucent grey if hex_color isn't a 6-digit hex string."""
+    h = hex_color.lstrip("#")
+    if len(h) != 6:
+        return f"rgba(148,163,184,{alpha})"
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def ihsg_benchmark_chart(df_ihsg: pd.DataFrame, highlight_date: str | None = None) -> go.Figure:
+    """Line chart of IHSG close over the given window, with the selected
+    market-session date highlighted (marker coloured by up/down day).
+
+    Args:
+        df_ihsg       : DataFrame with columns date, close (already windowed
+                        to the sessions the caller wants plotted).
+        highlight_date: "YYYY-MM-DD" session to mark (the synced Signal
+                        Performance review date). Skipped if not in df_ihsg.
+
+    Returns:
+        Plotly Figure area/line chart.
+    """
+    if df_ihsg.empty or "close" not in df_ihsg.columns:
+        return _empty_figure("Tidak ada data IHSG untuk periode ini.")
+
+    df = df_ihsg.copy()
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date")
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df["date"], y=df["close"],
+        mode="lines",
+        name="IHSG",
+        line=dict(color=_ACCENT, width=2),
+        fill="tozeroy",
+        fillcolor=_hex_to_rgba(_ACCENT, 0.08),
+        hovertemplate="<b>%{x|%d %b %Y}</b><br>IHSG: %{y:,.0f}<extra></extra>",
+    ))
+
+    if highlight_date:
+        hl = df[df["date"] == pd.Timestamp(highlight_date)]
+        if not hl.empty:
+            row = hl.iloc[0]
+            idx = hl.index[0]
+            pos = df.index.get_loc(idx)
+            prev_close = df.iloc[pos - 1]["close"] if pos > 0 else row["close"]
+            up = row["close"] >= prev_close
+            fig.add_trace(go.Scatter(
+                x=[row["date"]], y=[row["close"]],
+                mode="markers",
+                name="Sesi terpilih",
+                marker=dict(size=12, color=(_UP if up else _DOWN),
+                            line=dict(width=2, color=_TEXT)),
+                hovertemplate="<b>%{x|%d %b %Y}</b><br>IHSG: %{y:,.0f}<extra></extra>",
+                showlegend=False,
+            ))
+
+    fig.update_layout(
+        template=_TEMPLATE,
+        paper_bgcolor=_PAPER,
+        plot_bgcolor=_SURFACE,
+        height=260,
+        margin=dict(l=10, r=10, t=30, b=10),
+        title=dict(text="IHSG — Indeks Harga Saham Gabungan", font=dict(size=12, color=_MUTED)),
+        xaxis=dict(title=None, showgrid=False),
+        yaxis=dict(title=None, showgrid=True, gridcolor=_GRID),
+        showlegend=False,
+        hovermode="x unified",
+    )
+    return _apply_text_theme(fig)
