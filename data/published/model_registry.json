@@ -1,0 +1,83 @@
+{
+  "model_registry": [
+    {
+      "model_version_id": "rule_score_20260622T124358",
+      "model_type": "rule_score",
+      "feature_list_json": "[\"squeeze_on\", \"atr_breakout\", \"vol_spike\", \"vol_ratio_20d\"]",
+      "train_start_date": "2026-05-08",
+      "train_end_date": "2026-05-25",
+      "val_start_date": "2026-05-26",
+      "val_end_date": "2026-06-03",
+      "test_start_date": "2026-06-05",
+      "test_end_date": "2026-06-17",
+      "label_threshold_pct": 10.0,
+      "label_horizon": "next_session",
+      "train_metrics_json": "{\"n\": 927, \"n_selected\": 43, \"baseline\": 0.025889967637540454, \"precision\": 0.06976744186046512, \"recall\": 0.125, \"lift\": 2.694767441860465, \"n_success\": 24, \"vol_ratio_20d_threshold\": 3.0}",
+      "val_metrics_json": "{\"n\": 221, \"n_selected\": 41, \"baseline\": 0.06787330316742081, \"precision\": 0.17073170731707318, \"recall\": 0.4666666666666667, \"lift\": 2.515447154471545, \"n_success\": 15, \"vol_ratio_20d_threshold\": 3.0}",
+      "test_metrics_json": "{\"n\": 410, \"n_selected\": 45, \"baseline\": 0.046341463414634146, \"precision\": 0.2222222222222222, \"recall\": 0.5263157894736842, \"lift\": 4.7953216374269, \"n_success\": 19, \"vol_ratio_20d_threshold\": 3.0}",
+      "sensitivity_json": "{\"passed\": true, \"checks\": {\"threshold_perturbation\": {\"passed\": true, \"base_lift\": 3.5042735042735043}, \"ticker_exclusion\": {\"passed\": true, \"excluded_ticker\": \"MMIX.JK\", \"lift_after_exclusion\": 3.1749128919860627}, \"time_split\": {\"passed\": true, \"early_lift\": 3.161125319693095, \"late_lift\": 2.8350000000000004}, \"regime_split\": {\"passed\": true, \"up_lift\": 2.0833333333333335, \"down_lift\": 3.596078431372549}}}",
+      "artifact_path": null,
+      "status": "candidate",
+      "promoted_at": null,
+      "retired_at": null,
+      "trained_at": "2026-06-22 12:43:58"
+    },
+    {
+      "model_version_id": "rule_score_20260622T125552",
+      "model_type": "rule_score",
+      "feature_list_json": "[\"squeeze_on\", \"atr_breakout\", \"vol_spike\", \"vol_ratio_20d\"]",
+      "train_start_date": "2026-05-08",
+      "train_end_date": "2026-05-25",
+      "val_start_date": "2026-05-26",
+      "val_end_date": "2026-06-03",
+      "test_start_date": "2026-06-05",
+      "test_end_date": "2026-06-17",
+      "label_threshold_pct": 10.0,
+      "label_horizon": "next_session",
+      "train_metrics_json": "{\"n\": 927, \"n_selected\": 43, \"baseline\": 0.025889967637540454, \"precision\": 0.06976744186046512, \"recall\": 0.125, \"lift\": 2.694767441860465, \"n_success\": 24, \"vol_ratio_20d_threshold\": 3.0}",
+      "val_metrics_json": "{\"n\": 221, \"n_selected\": 41, \"baseline\": 0.06787330316742081, \"precision\": 0.17073170731707318, \"recall\": 0.4666666666666667, \"lift\": 2.515447154471545, \"n_success\": 15, \"vol_ratio_20d_threshold\": 3.0}",
+      "test_metrics_json": "{\"n\": 410, \"n_selected\": 45, \"baseline\": 0.046341463414634146, \"precision\": 0.2222222222222222, \"recall\": 0.5263157894736842, \"lift\": 4.7953216374269, \"n_success\": 19, \"vol_ratio_20d_threshold\": 3.0}",
+      "sensitivity_json": "{\"passed\": true, \"checks\": {\"threshold_perturbation\": {\"passed\": true, \"base_lift\": 3.5042735042735043}, \"ticker_exclusion\": {\"passed\": true, \"excluded_ticker\": \"MMIX.JK\", \"lift_after_exclusion\": 3.1749128919860627}, \"time_split\": {\"passed\": true, \"early_lift\": 3.161125319693095, \"late_lift\": 2.8350000000000004}, \"regime_split\": {\"passed\": true, \"up_lift\": 2.0833333333333335, \"down_lift\": 3.596078431372549}}}",
+      "artifact_path": null,
+      "status": "candidate",
+      "promoted_at": null,
+      "retired_at": null,
+      "trained_at": "2026-06-22 12:55:52"
+    }
+  ],
+  "promotion_decisions": [
+    {
+      "decision_id": 1,
+      "challenger_model_id": "rule_score_20260622T124358",
+      "production_model_id": null,
+      "decision": "needs_more_data",
+      "challenger_metrics_json": "{\"n\": 410, \"n_selected\": 45, \"baseline\": 0.046341463414634146, \"precision\": 0.2222222222222222, \"recall\": 0.5263157894736842, \"lift\": 4.7953216374269, \"n_success\": 19, \"precision_excl_top_ticker\": 0.14634146341463414}",
+      "production_metrics_json": null,
+      "reason": "No existing champion, but only 19 positive test examples (< 30 minimum) \u2014 not enough evidence either way yet.",
+      "decided_at": "2026-06-22 12:44:31"
+    },
+    {
+      "decision_id": 2,
+      "challenger_model_id": "rule_score_20260622T125552",
+      "production_model_id": null,
+      "decision": "needs_more_data",
+      "challenger_metrics_json": "{\"n\": 410, \"n_selected\": 45, \"baseline\": 0.046341463414634146, \"precision\": 0.2222222222222222, \"recall\": 0.5263157894736842, \"lift\": 4.7953216374269, \"n_success\": 19, \"precision_excl_top_ticker\": 0.14634146341463414}",
+      "production_metrics_json": null,
+      "reason": "No existing champion, but only 19 positive test examples (< 30 minimum) \u2014 not enough evidence either way yet.",
+      "decided_at": "2026-06-22 12:55:52"
+    }
+  ],
+  "live_monitoring": [
+    {
+      "monitor_date": "2026-06-17",
+      "production_model_id": null,
+      "n_signals": 139,
+      "n_evaluated": 1558,
+      "realized_win_rate": null,
+      "realized_precision_at_threshold": null,
+      "avg_predicted_prob": null,
+      "feature_drift_flag": 0,
+      "alert_triggered": 0
+    }
+  ]
+}
