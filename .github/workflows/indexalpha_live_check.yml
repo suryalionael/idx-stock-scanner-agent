@@ -1,0 +1,93 @@
+name: IndexAlpha Live Verification (manual only)
+
+# Deliberately has NO schedule trigger. The free plan is 5 requests/day
+# shared across this check AND real dashboard usage — this workflow exists
+# so a human can run exactly one controlled, auditable live verification
+# (one real fetch() call) on demand, never automatically. See
+# docs/INDEXALPHA_AUDIT.md for why this exists and scripts/
+# check_indexalpha_health.py for what --live actually does (one real
+# broker-summary fetch for one ticker on the last valid IDX trading day —
+# not a cheaper /usage ping, because that wouldn't prove the feature users
+# actually see works).
+#
+# Wires secrets.INDEX_ALPHA_API_KEY into INDEX_ALPHA_API_KEY env — this is
+# the actual fix: the secret has existed in this repo since 2026-06-04 but
+# no workflow referenced it before this one (confirmed via `gh secret list`
+# vs `grep -r INDEX_ALPHA_API_KEY .github/workflows/` during the audit).
+on:
+  workflow_dispatch:
+    inputs:
+      ticker:
+        description: "Ticker to fetch (e.g. BBCA.JK) — must be a liquid IDX name likely to have a real broker summary"
+        required: false
+        default: "BBCA.JK"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: indexalpha-live-check
+  cancel-in-progress: false
+
+jobs:
+  live-check:
+    name: One real fetch() — prove the integration end to end
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TZ: Asia/Jakarta
+      INDEX_ALPHA_API_KEY: ${{ secrets.INDEX_ALPHA_API_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      # Base deps only (pandas/numpy/pyarrow/loguru) — this script doesn't
+      # need the full scanner/dashboard extras.
+      - name: Install dependencies
+        run: pip install -e .
+
+      # Confirms wiring WITHOUT ever printing the secret: GitHub Actions
+      # automatically masks any log line that contains the literal secret
+      # value, so even an accidental print would show as "***" — this just
+      # proves the env var landed (non-empty) before spending the quota call.
+      - name: Confirm secret wiring (presence only, never the value)
+        run: |
+          python -c "
+          import os
+          key = os.environ.get('INDEX_ALPHA_API_KEY', '')
+          print(f'INDEX_ALPHA_API_KEY present: {bool(key.strip())}')
+          print(f'INDEX_ALPHA_API_KEY length: {len(key)} chars')
+          "
+
+      # The ONE live call this workflow makes. --live is required to spend
+      # quota; omitting it would just run the free, read-only checks.
+      - name: Run live verification (spends 1 of 5 daily IndexAlpha requests)
+        run: python scripts/check_indexalpha_health.py --live --ticker "${{ github.event.inputs.ticker }}"
+
+      # Only the health-state JSON is committed — it's the audit trail
+      # (status code, latency, error type, consecutive failures; never the
+      # API key or response payload). The broker cache parquet this run
+      # writes to data/broker/ is intentionally NOT committed: that
+      # directory is gitignored by design (a derived, ephemeral cache the
+      # dashboard repopulates from real user interaction — committing one
+      # CI-fetched snapshot would imply it's the canonical source, which it
+      # isn't).
+      - name: Publish health-state evidence to main
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/published/indexalpha_health.json || true
+          if git diff --cached --quiet; then
+            echo "No health-state changes to publish."
+          else
+            git commit -m "data: IndexAlpha live verification ($(date +%F)) [skip ci]"
+            git push origin HEAD:main
+            echo "Published indexalpha_health.json to main."
+          fi

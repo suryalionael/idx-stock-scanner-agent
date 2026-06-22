@@ -93,6 +93,18 @@ jobs:
         # backfill syncs today's freshly-evaluated outcomes, drift check
         # reads both, export persists the new live_monitoring row.
 
+      # IndexAlpha health monitoring (docs/INDEXALPHA_AUDIT.md) — quota-safe,
+      # zero network calls, runs every day this workflow runs. continue-on-
+      # error so a degraded/misconfigured IndexAlpha integration never blocks
+      # the actual job here (signal performance publishing) — the verdict is
+      # still clearly visible as a warned step in the Actions run, which is
+      # the alert. Never passes --live: spending IndexAlpha quota on a
+      # schedule is a deliberate decision this workflow does not make on its
+      # own — see indexalpha_live_check.yml (workflow_dispatch only).
+      - name: IndexAlpha health check (alert-only, no quota spent)
+        continue-on-error: true
+        run: python scripts/check_indexalpha_health.py
+
       - name: Publish performance data to main
         run: |
           git config user.name  "github-actions[bot]"
