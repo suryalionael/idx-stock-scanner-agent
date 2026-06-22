@@ -41,7 +41,7 @@ from loguru import logger
 repo_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(repo_root))
 
-from stock_scanner.pipeline.feature_builder import build_features
+from stock_scanner.pipeline.feature_builder import build_features  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -197,7 +197,7 @@ def train_from_dataset(
         _model_name = "GradientBoostingClassifier (XGBoost not installed)"
 
     try:
-        from sklearn.metrics import roc_auc_score, classification_report
+        from sklearn.metrics import classification_report, roc_auc_score
     except ImportError as e:
         raise ImportError("scikit-learn required for evaluation: pip install scikit-learn") from e
 
@@ -456,14 +456,14 @@ def main(
     )
 
     print(f"\n{'='*60}")
-    print(f"✅ TRAINING COMPLETE")
+    print("✅ TRAINING COMPLETE")
     print(f"  Model   : {mp}")
     print(f"  Metrics : {metp}")
     print(f"  AUC-ROC : {auc:.4f}")
     print(f"  Period  : {metrics['train_period']} [train]")
     print(f"          : {metrics['test_period']} [test]")
     print(f"  Tickers in training: {dataset['_ticker'].nunique()}")
-    print(f"\nNext: run the daily scan — ml_prob column will now be active.")
+    print("\nNext: run the daily scan — ml_prob column will now be active.")
     print(f"{'='*60}")
 
 

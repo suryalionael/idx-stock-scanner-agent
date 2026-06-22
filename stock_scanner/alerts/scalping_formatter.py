@@ -241,11 +241,11 @@ def _build_scalping_block(idx: int, row: dict) -> str:
         if rr >= 1.0:
             lines.append(f"   <i>R:R ≈ 1:{rr:.1f}</i>")
     elif status == "low_rr":
-        lines.append(f"   <i>⚠️ Level ada tapi R:R kurang ideal — sizing kecil</i>")
+        lines.append("   <i>⚠️ Level ada tapi R:R kurang ideal — sizing kecil</i>")
         if el:
             lines.append(f"   Entry~CL  : <code>{el:,} / {cl:,}</code>  TP~<code>{tl:,}</code>")
     else:
-        lines.append(f"   <i>Level tidak dihitung (data kurang)</i>")
+        lines.append("   <i>Level tidak dihitung (data kurang)</i>")
 
     # Reason line — shorten if too long
     short_reason = reason[:80] + "…" if len(reason) > 80 else reason
@@ -293,7 +293,7 @@ def _pack_into_messages(
             msg = separator.join(current_parts) + "\n" + footer
             messages.append(msg)
             # Start new chunk with continuation header
-            cont_hdr = f"⚡ <b>SCALPING HIGH</b> (sambungan)"
+            cont_hdr = "⚡ <b>SCALPING HIGH</b> (sambungan)"
             current_parts = [cont_hdr, block]
             current_len = len(cont_hdr) + block_len + len(footer) + len(separator)
         else:

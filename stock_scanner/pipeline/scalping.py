@@ -29,7 +29,6 @@ from typing import Any
 
 import pandas as pd
 
-
 # ---------------------------------------------------------------------------
 # Scoring weights & thresholds
 # ---------------------------------------------------------------------------
@@ -45,6 +44,7 @@ _SCORE_WATCH = 4.0   # threshold for SCALPING_WATCH
 # Flagged (not auto-excluded) in dashboard + Telegram scalping outputs.
 # Configurable at runtime via env var SCALPING_ROC5_OVERHEATED.
 import os as _os  # noqa: E402
+
 ROC5_OVERHEATED_PCT = float(_os.getenv("SCALPING_ROC5_OVERHEATED", "30"))
 
 

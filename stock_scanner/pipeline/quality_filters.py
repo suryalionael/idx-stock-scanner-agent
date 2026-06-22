@@ -43,7 +43,6 @@ from typing import Any
 import pandas as pd
 from loguru import logger
 
-
 # ---------------------------------------------------------------------------
 # Default config values (override via scanner_config.yaml quality_filters:)
 # ---------------------------------------------------------------------------
@@ -267,7 +266,12 @@ def apply_quality_penalty(
     base_score = float(_get(row, "total_score", 0.0) or 0.0)
     penalty = 0.0
 
-    flags = risk_flags_list or []
+    # NOTE: risk_flags_list is accepted for API compatibility but every
+    # penalty check below independently reads from `row` directly — this
+    # function does not actually consult a pre-computed flags list. Found
+    # during the 2026-06-22 lint cleanup; not changed here since it's a
+    # behavior question (should pre-computed flags short-circuit these
+    # checks?) for a deliberate follow-up, not a silent lint-pass fix.
 
     # EBITDA negative
     ebitda = _float(row, "ebitda")

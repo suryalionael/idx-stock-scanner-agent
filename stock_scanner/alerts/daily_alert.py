@@ -18,12 +18,10 @@ Environment variables required for sending:
 from __future__ import annotations
 
 import argparse
-import os
 import textwrap
 import time
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
 from loguru import logger

@@ -14,7 +14,7 @@ Statuses surfaced in `suspension_status`:
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -64,6 +64,7 @@ def _trading_days_between(d0: date, d1: date, cap: int | None = None) -> int:
     if not d0 or not d1 or d1 <= d0:
         return 0
     import warnings
+
     from stock_scanner.utils.trading_calendar import is_trading_day
     n, cur = 0, d0 + timedelta(days=1)
     with warnings.catch_warnings():

@@ -187,7 +187,7 @@ def _write_excel(path: Path, swing: pd.DataFrame, scalping: pd.DataFrame, signal
     """Ready-to-read workbook: a sheet per strategy, % formatting, W/L colour,
     win-rate summary at the top. Best-effort (skipped if openpyxl missing)."""
     try:
-        from openpyxl.styles import Font, PatternFill, Alignment
+        from openpyxl.styles import Alignment, Font, PatternFill
     except Exception as exc:  # noqa: BLE001
         logger.warning("openpyxl not available — skipping Excel ({}).", exc)
         return
@@ -443,8 +443,12 @@ def _refresh_raw_for(tickers: list[str], raw_dir: Path, lookback_years: int = 1)
     if not tickers:
         return 0
     from datetime import datetime, timedelta
+
     from stock_scanner.pipeline.fetch_yfinance import (
-        YFinanceFetcher, load_raw, save_raw, default_start_date,
+        YFinanceFetcher,
+        default_start_date,
+        load_raw,
+        save_raw,
     )
     fetcher = YFinanceFetcher(batch_size=20)
     end = (datetime.today() + timedelta(days=1)).strftime("%Y-%m-%d")  # inclusive of today
