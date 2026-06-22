@@ -67,6 +67,13 @@ jobs:
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python -m stock_scanner.pipeline.performance --evening --telegram
 
+      # Rebuilds data/performance/successful_signal_list.xlsx FROM SCRATCH off
+      # today's data/performance/daily/*.csv (just refreshed above) — always a
+      # full overwrite, never an append, so a stale cache restore of data/ can
+      # never leave old rows in the committed file.
+      - name: Build successful_signal_list.xlsx (>10% signals)
+        run: python scripts/build_successful_signal_list.py
+
       - name: Publish performance data to main
         run: |
           git config user.name  "github-actions[bot]"
