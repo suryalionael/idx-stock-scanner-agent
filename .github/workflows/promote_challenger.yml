@@ -1,0 +1,87 @@
+name: Promote Challenger (manual only)
+
+# Deliberately has NO schedule trigger — promotion never happens as a side
+# effect of a cron tick. A human runs this from the Actions tab (or
+# `gh workflow run`), reviews the printed decision, and only then does the
+# model_registry status flip take effect. Same workflow handles rollback via
+# the `rollback` input — both are explicit, auditable, human-triggered
+# actions (docs/SELF_IMPROVING_ARCHITECTURE.md §5).
+on:
+  workflow_dispatch:
+    inputs:
+      model_type:
+        description: "model_type to evaluate/promote (e.g. rule_score)"
+        required: false
+        default: "rule_score"
+      rollback:
+        description: "Set to 'true' to roll back to the previously-retired model instead of evaluating a new promotion"
+        required: false
+        default: "false"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: promote-challenger
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Evaluate promotion criteria (or rollback)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TZ: Asia/Jakarta
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -e ".[scanner]"
+
+      - name: Restore scan data cache
+        uses: actions/cache/restore@v4
+        with:
+          path: data/
+          key: idx-scan-promote-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            idx-scan-data-${{ runner.os }}-
+
+      - name: Rebuild DB + recover registry history
+        run: |
+          python scripts/init_db_and_backfill.py
+          python -c "from stock_scanner.db.init_db import get_connection; from stock_scanner.db.registry_io import import_registry; import_registry(get_connection())"
+
+      # Every outcome (promoted / rejected / needs_more_data / rolled_back)
+      # writes a promotion_decisions row — this step's own log output is the
+      # human-readable record of why, alongside the DB row.
+      - name: Evaluate promotion criteria or roll back
+        run: |
+          if [ "${{ github.event.inputs.rollback }}" = "true" ]; then
+            python scripts/promote_challenger.py --model-type "${{ github.event.inputs.model_type }}" --rollback
+          else
+            python scripts/promote_challenger.py --model-type "${{ github.event.inputs.model_type }}"
+          fi
+
+      - name: Export registry
+        run: python -c "from stock_scanner.db.init_db import get_connection; from stock_scanner.db.registry_io import export_registry; export_registry(get_connection())"
+
+      - name: Publish registry update to main
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/published/model_registry.json || true
+          if git diff --cached --quiet; then
+            echo "No registry changes to publish."
+          else
+            git commit -m "data: promotion decision ($(date +%F)) [skip ci]"
+            git push origin HEAD:main
+            echo "Published updated model_registry.json to main."
+          fi
