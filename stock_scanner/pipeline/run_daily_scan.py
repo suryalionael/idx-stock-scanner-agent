@@ -300,6 +300,13 @@ def main(config_path: Path = _DEFAULT_CONFIG, force_holiday: bool = False) -> No
     except Exception as exc:  # noqa: BLE001
         logger.warning("OHLC bundle export skipped: {}", exc)
 
+    # --- Step 10c: IHSG (composite index) bundle for the benchmark panel ---
+    try:
+        from stock_scanner.pipeline.publisher import export_ihsg_bundle
+        export_ihsg_bundle(sessions=250)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("IHSG bundle export skipped: {}", exc)
+
     # --- Step 11: Signal List performance tracking (non-fatal) ---
     # Archives today's Swing/Scalping signals and evaluates any pending prior
     # signals against this freshly-scanned session's OHLC. Writes CSV + Excel.

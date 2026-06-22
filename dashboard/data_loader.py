@@ -323,6 +323,105 @@ def _load_raw_live(ticker: str, diag: dict | None = None) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# IHSG (composite index) benchmark — for the Signal Performance tab
+# ---------------------------------------------------------------------------
+
+_IHSG_TICKER = "^JKSE"
+_IHSG_BUNDLE_PATH = _ROOT / "data" / "published" / "ihsg_recent.parquet"
+_IHSG_LIVE_CACHE: pd.DataFrame | None = None
+
+
+def _strip_trailing_zero_volume(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop trailing zero-volume rows (yfinance holiday / in-progress-session
+    artefact) so the last row is always a real completed trading session.
+    Mirrors the same strip applied to per-stock OHLC in run_daily_scan.py."""
+    if df.empty or "volume" not in df.columns:
+        return df
+    non_zero = df["volume"].fillna(0) > 0
+    if not non_zero.any():
+        return df.iloc[0:0]
+    last_real = non_zero[non_zero].index[-1]
+    return df.loc[:last_real]
+
+
+def load_ihsg_data() -> pd.DataFrame:
+    """Load IHSG (^JKSE) OHLCV history, in priority order:
+      1) committed bundle data/published/ihsg_recent.parquet (Cloud-safe;
+         refreshed daily by the scan pipeline)
+      2) live yfinance fetch (local dev fallback / bundle missing)
+    Returns columns date, open, high, low, close, volume — sorted ascending,
+    trailing zero-volume rows stripped.
+    """
+    global _IHSG_LIVE_CACHE
+    df = pd.DataFrame()
+    if _IHSG_BUNDLE_PATH.exists():
+        try:
+            df = pd.read_parquet(_IHSG_BUNDLE_PATH)
+        except Exception:  # noqa: BLE001
+            df = pd.DataFrame()
+
+    if df.empty:
+        if _IHSG_LIVE_CACHE is not None:
+            df = _IHSG_LIVE_CACHE
+        else:
+            try:
+                from datetime import datetime, timedelta
+                from stock_scanner.pipeline.fetch_yfinance import YFinanceFetcher
+                start = (datetime.today() - timedelta(days=420)).strftime("%Y-%m-%d")
+                end = (datetime.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+                raw = YFinanceFetcher(batch_size=1).fetch_single(_IHSG_TICKER, start, end)
+                if raw is not None and not raw.empty:
+                    keep = [c for c in ["date", "open", "high", "low", "close", "volume"]
+                            if c in raw.columns]
+                    df = raw[keep].copy()
+            except Exception:  # noqa: BLE001
+                df = pd.DataFrame()
+            _IHSG_LIVE_CACHE = df
+
+    if df.empty:
+        return df
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None).dt.normalize()
+    df = df.sort_values("date").reset_index(drop=True)
+    return _strip_trailing_zero_volume(df)
+
+
+def get_ihsg_session(target_date: str) -> dict | None:
+    """IHSG session synced to `target_date` (the Signal Performance review
+    date), with fallback to the most recent prior available session if
+    `target_date` itself has no IHSG row (holiday/weekend/data lag) — walks
+    back one real trading day at a time, never jumps to an unrelated stale
+    date.
+
+    Returns:
+        dict {date, close, prev_close, pct_change, status} where status is
+        "up" / "down" / "flat", or None if no IHSG data exists at or before
+        target_date (e.g. bundle empty and live fetch failed).
+    """
+    df = load_ihsg_data()
+    if df.empty:
+        return None
+    target = pd.Timestamp(target_date).normalize()
+    avail = df[df["date"] <= target]
+    if avail.empty:
+        return None
+    pos = avail.index[-1]
+    if pos == 0:
+        return None  # no prior session to compute % change against
+    close = float(df.loc[pos, "close"])
+    prev_close = float(df.loc[pos - 1, "close"])
+    pct = (close - prev_close) / prev_close * 100 if prev_close else 0.0
+    status = "up" if pct > 0 else ("down" if pct < 0 else "flat")
+    return {
+        "date": str(df.loc[pos, "date"].date()),
+        "close": close,
+        "prev_close": prev_close,
+        "pct_change": pct,
+        "status": status,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Load history
 # ---------------------------------------------------------------------------
 
