@@ -74,11 +74,30 @@ jobs:
       - name: Build successful_signal_list.xlsx (>10% signals)
         run: python scripts/build_successful_signal_list.py
 
+      # Self-improving-system loop (docs/SELF_IMPROVING_ARCHITECTURE.md):
+      # sync today's freshly-evaluated outcomes into the SQLite mirror, then
+      # run the alert-only daily drift check. Never retrains or promotes —
+      # this step only writes a live_monitoring row and logs a recommended
+      # action if a drift flag fires; a human acts on it deliberately via
+      # train_challenger.yml / promote_challenger.yml.
+      - name: Sync DB + daily drift check
+        run: |
+          python scripts/init_db_and_backfill.py
+          python -c "from stock_scanner.db.init_db import get_connection; from stock_scanner.db.registry_io import import_registry; import_registry(get_connection())"
+          python scripts/check_drift.py
+          python -c "from stock_scanner.db.init_db import get_connection; from stock_scanner.db.registry_io import export_registry; export_registry(get_connection())"
+        # Order note: backfill and registry import touch disjoint tables (the
+        # former never writes model_registry/promotion_decisions/
+        # live_monitoring), so the exact order between them doesn't change
+        # correctness — registry import recovers prior model history,
+        # backfill syncs today's freshly-evaluated outcomes, drift check
+        # reads both, export persists the new live_monitoring row.
+
       - name: Publish performance data to main
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/performance/ || true
+          git add data/performance/ data/published/model_registry.json || true
           if git diff --cached --quiet; then
             echo "No performance changes to publish."
           else

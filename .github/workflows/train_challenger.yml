@@ -1,0 +1,87 @@
+name: Train Challenger (weekly)
+
+# Trains + validates a challenger against the live-labeled DB
+# (docs/SELF_IMPROVING_ARCHITECTURE.md). This workflow ONLY produces a
+# model_registry row with status='candidate' (or 'rejected'/'needs_more_data'
+# if it fails the sensitivity gate) — it NEVER promotes. Promotion is a
+# separate, manually-triggered workflow (promote_challenger.yml) so a new
+# model is never one cron tick away from replacing production.
+#
+# Timezone: GitHub cron is UTC. Sunday 22:00 UTC = Monday 05:00 WIB — runs
+# right before the week's first scan.yml, so a freshly-registered candidate
+# is available to review before the week starts, never mid-week.
+on:
+  schedule:
+    - cron: "0 22 * * 0"   # Sunday 22:00 UTC = Monday 05:00 WIB
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: train-challenger
+  cancel-in-progress: false   # never cancel a training run mid-write
+
+jobs:
+  train:
+    name: Train + validate challenger (no promotion)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TZ: Asia/Jakarta
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -e ".[scanner]"
+
+      # Same cache scan.yml/performance.yml write to — gives access to the
+      # gitignored data/signals/*.parquet feature snapshots. Read-only here;
+      # this workflow never saves back to this cache.
+      - name: Restore scan data cache
+        uses: actions/cache/restore@v4
+        with:
+          path: data/
+          key: idx-scan-train-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            idx-scan-data-${{ runner.os }}-
+
+      # Rebuild the SQLite mirror from committed sources + cached feature
+      # snapshots, then recover prior model_registry/promotion_decisions/
+      # live_monitoring history (data/db/ itself is gitignored — see
+      # stock_scanner/db/registry_io.py for why the JSON round-trip exists).
+      - name: Rebuild DB + recover registry history
+        run: |
+          python scripts/init_db_and_backfill.py
+          python -c "from stock_scanner.db.init_db import get_connection; from stock_scanner.db.registry_io import import_registry; import_registry(get_connection())"
+
+      # Trains on TRAIN, picks the threshold on VAL, runs the sensitivity
+      # battery (threshold perturbation / ticker exclusion / time-split /
+      # regime-split) on TRAIN+VAL, and ONLY evaluates TEST if that battery
+      # passes. Writes exactly one model_registry row either way.
+      - name: Train + validate challenger
+        run: python scripts/train_challenger.py
+
+      - name: Export registry
+        run: python -c "from stock_scanner.db.init_db import get_connection; from stock_scanner.db.registry_io import export_registry; export_registry(get_connection())"
+
+      - name: Publish registry update to main
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/published/model_registry.json || true
+          if git diff --cached --quiet; then
+            echo "No registry changes to publish."
+          else
+            git commit -m "data: train challenger run ($(date +%F)) [skip ci]"
+            git push origin HEAD:main
+            echo "Published updated model_registry.json to main."
+          fi
