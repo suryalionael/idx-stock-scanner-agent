@@ -28,6 +28,7 @@ data/broker/
 data/shareholders/
 data/fundamentals/
 data/reports/
+data/db/
 # data/risk/ dikecualikan manual karena ada force-add untuk uma_overrides.csv
 data/risk/*.parquet
 data/risk/*.csv
