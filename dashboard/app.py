@@ -90,6 +90,7 @@ from stock_scanner.reference.issuers import get_company_name, get_sector, ticker
 
 _BROKER_DIR = Path(__file__).parent.parent / "data" / "broker"
 _ROOT_PERF = Path(__file__).parent.parent / "data" / "performance"
+_INDEXALPHA_HEALTH_PATH = Path(__file__).parent.parent / "data" / "published" / "indexalpha_health.json"
 
 
 def show_df(data, **kwargs):
@@ -533,18 +534,6 @@ def render_shareholders_section(ticker: str, scan_date: str) -> None:
 # Broker section (reusable, with real Index Alpha data)
 # ---------------------------------------------------------------------------
 
-def _load_broker_data_from_cache(ticker: str, scan_date: str) -> pd.DataFrame:
-    """Load broker data dari cache parquet file saja (no API calls).
-
-    Path: data/broker/{ticker}_{scan_date}.parquet
-    Returns empty DataFrame jika file tidak ditemukan.
-    """
-    from stock_scanner.pipeline.broker_summary import load_broker_summary
-
-    # Use absolute path from repo root (same as data_loader)
-    return load_broker_summary(ticker, scan_date, _BROKER_DIR)
-
-
 def _format_number(val: float | None, decimals: int = 0) -> str:
     """Format number dengan thousand separator rapi."""
     if val is None or pd.isna(val):
@@ -808,6 +797,50 @@ def _render_broker_historical(ticker: str, scan_date: str, key_prefix: str = "")
     )
 
 
+def _render_indexalpha_integration_badge() -> None:
+    """Integration-level health (separate from the per-session fresh/cache/
+    fallback badge already shown by _render_broker_latest). This answers
+    "is the IndexAlpha connection itself trustworthy right now", not "is
+    this specific session's data fresh" — both must be visible, neither
+    should be inferred from the other. Reads the local health-state file
+    written by fetch_indexalpha._get() on every real call; never makes a
+    network call itself (zero quota cost)."""
+    import json as _json
+    import os as _os
+    from datetime import datetime as _dt, timezone as _tz
+
+    key_set = bool(_os.environ.get("INDEX_ALPHA_API_KEY", "").strip())
+    state = {}
+    if _INDEXALPHA_HEALTH_PATH.exists():
+        try:
+            state = _json.loads(_INDEXALPHA_HEALTH_PATH.read_text())
+        except Exception:  # noqa: BLE001
+            state = {}
+
+    if not key_set and not state:
+        st.warning(
+            "⚠️ **IndexAlpha API belum pernah terhubung di environment ini** "
+            "(API key tidak diset, belum ada riwayat panggilan tersimpan). "
+            "Data broker di bawah — jika ada — berasal dari cache lama, bukan sesi live."
+        )
+        return
+
+    consec_fail = state.get("consecutive_failures", 0)
+    last_success = state.get("last_success_at")
+    if consec_fail and consec_fail >= 3:
+        st.warning(f"⚠️ **IndexAlpha: {consec_fail} kegagalan berturut-turut.** "
+                   f"Terakhir sukses: {last_success or 'tidak pernah'}.")
+    elif not key_set:
+        st.caption("ℹ️ INDEX_ALPHA_API_KEY tidak diset di environment ini — "
+                   "menampilkan cache yang ada, tidak akan fetch sesi baru.")
+    elif last_success:
+        try:
+            age_h = (_dt.now(_tz.utc) - _dt.fromisoformat(last_success)).total_seconds() / 3600
+            st.caption(f"✅ IndexAlpha terverifikasi tersambung — sukses terakhir {age_h:.0f} jam lalu.")
+        except Exception:  # noqa: BLE001
+            st.caption(f"✅ IndexAlpha sukses terakhir: {last_success}.")
+
+
 def render_broker_section(ticker: str, scan_date: str, key_prefix: str = "",
                           show_header: bool = True) -> None:
     """Stockbit-style Broker Summary — inline on the stock's own detail page.
@@ -825,6 +858,7 @@ def render_broker_section(ticker: str, scan_date: str, key_prefix: str = "",
         st.markdown("#### 🏦 Broker Summary")
         st.caption("Rincian kepemilikan & serapan broker (data real Index Alpha). "
                    "Harga, volume, dan fundamental saham ini ada di tab lain.")
+    _render_indexalpha_integration_badge()
     mode = st.radio(
         "Mode broker", ["Latest", "Historical"], horizontal=True,
         key=f"brk_main_mode_{key_prefix}_{ticker}_{scan_date}", label_visibility="collapsed",
