@@ -1,12 +1,75 @@
 # IndexAlpha Integration — Production Audit
 
-**Date:** 2026-06-22
+**Date:** 2026-06-22 (original audit), **updated 2026-06-22** with live
+verification results.
 **Scope:** Connectivity/auth, actual usage, data validity, fallback behavior,
 monitoring, production hardening — per the production-trust audit request.
 **Method:** Evidence-based. Every claim below is backed by a command run
 against the real repo/CI/secrets in this session — not inferred from reading
 code in isolation. Where I could not verify something (e.g. Streamlit
 Cloud's own secrets store), that is stated explicitly rather than assumed.
+
+---
+
+## UPDATE (2026-06-22, same day): Live Verification — VERIFIED HEALTHY
+
+The original audit below correctly reported "not verified" — at that time it
+was true. Since then, the actual gap (secret never wired into any workflow)
+was fixed and a single, deliberate, controlled live call was executed. This
+section is an addendum, not a rewrite — the original findings stay below
+exactly as recorded, because they were accurate for that point in time.
+
+**What changed:**
+1. `.github/workflows/indexalpha_live_check.yml` created — `workflow_dispatch`
+   only, no schedule, wires `secrets.INDEX_ALPHA_API_KEY` into env.
+2. Triggered exactly once via `gh workflow run` (run
+   [27958749130](https://github.com/suryalionael/idx-stock-scanner-agent/actions/runs/27958749130)).
+3. Real result, captured verbatim from the run log:
+   ```
+   IndexAlpha fetch: BBCA @ 2026-06-22 (investor=all, market=RG)
+   IndexAlpha /stocks/broker-summary BBCA -> 200 in 844ms (success=True, items=67)
+   IndexAlpha: 67 broker records untuk BBCA @ 2026-06-22 (net_lot range: -17985100 … 27966200)
+   VERDICT: HEALTHY
+   ```
+4. `INDEX_ALPHA_API_KEY: ***` confirmed masked in every env dump in the log —
+   never leaked.
+5. Committed evidence: `data/published/indexalpha_health.json` (commit
+   `8162329`, pushed automatically by the workflow):
+   ```json
+   {"last_attempt_at": "2026-06-22T14:07:28...", "last_status_code": 200,
+    "last_latency_ms": 843.6, "last_error_type": null, "total_calls": 1,
+    "last_success_at": "2026-06-22T14:07:28...", "consecutive_failures": 0,
+    "total_successes": 1}
+   ```
+
+**Honest caveat — what this does and doesn't prove:**
+- **Proves:** the API key is valid, the endpoint/auth/parsing/caching code
+  path works end to end, for a GitHub Actions runner with the secret wired.
+- **Does NOT prove:** Streamlit Cloud's deployment has the same key
+  configured (separate secrets store, not inspectable from here) — so the
+  *dashboard a real user sees* may still be running key-less and serving
+  fallback/cache, even though the integration itself is now proven sound.
+  This is the one remaining open item — see "Belum dibereskan" below.
+- Running `python scripts/check_indexalpha_health.py` (no `--live`) in any
+  OTHER environment (e.g. this local shell) will correctly still report
+  `DEGRADED` — because that specific environment has no key and its own
+  local `data/broker/` cache is still 12 days old. That is not a
+  contradiction: health is per-environment, and the script is intentionally
+  honest about THIS vantage point rather than borrowing the CI run's
+  success to claim something it can't see (Streamlit Cloud's state).
+
+**Status akhir: integration code = VERIFIED HEALTHY. Dashboard production
+deployment = UNKNOWN (cannot be checked from a coding session).**
+
+**Belum dibereskan sebelum diklaim layak production sepenuhnya:**
+1. Verifikasi manual: apakah Streamlit Cloud secrets panel punya
+   `INDEX_ALPHA_API_KEY`? Hanya pemilik akun yang bisa cek ini.
+2. Kalau TIDAK ada di Streamlit Cloud: tambahkan di sana — quota tetap 5/hari
+   dipakai bersama, jadi ini keputusan produk (berapa banyak dashboard usage
+   vs CI verification yang boleh memakai quota), bukan keputusan teknis yang
+   aman diambil sepihak.
+3. 55 ruff lint error pre-existing di file lain — masih di luar scope (lihat
+   audit asli di bawah).
 
 ---
 
