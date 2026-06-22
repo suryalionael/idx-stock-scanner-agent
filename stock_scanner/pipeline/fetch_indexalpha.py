@@ -64,7 +64,7 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -120,6 +120,51 @@ IDX_BROKER_NAMES: dict[str, str] = {
 def _clean_ticker(ticker: str) -> str:
     """Strip .JK suffix if present — Index Alpha expects bare codes."""
     return ticker.upper().replace(".JK", "").strip()
+
+
+# ---------------------------------------------------------------------------
+# Health state — persisted record of every real call (success or failure).
+# Read by scripts/check_indexalpha_health.py. Never contains the API key or
+# response payload content — only status code / latency / error type, which
+# are safe to commit and inspect.
+# ---------------------------------------------------------------------------
+
+_HEALTH_PATH = Path(__file__).parent.parent.parent / "data" / "published" / "indexalpha_health.json"
+
+
+def _record_health(success: bool, status_code: int | None, latency_ms: float | None,
+                    error_type: str | None) -> None:
+    import json
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    state = {}
+    if _HEALTH_PATH.exists():
+        try:
+            state = json.loads(_HEALTH_PATH.read_text())
+        except Exception:  # noqa: BLE001
+            state = {}
+
+    state["last_attempt_at"] = now
+    state["last_status_code"] = status_code
+    state["last_latency_ms"] = round(latency_ms, 1) if latency_ms is not None else None
+    state["last_error_type"] = error_type
+    state["total_calls"] = state.get("total_calls", 0) + 1
+
+    if success:
+        state["last_success_at"] = now
+        state["consecutive_failures"] = 0
+        state["total_successes"] = state.get("total_successes", 0) + 1
+    else:
+        state["consecutive_failures"] = state.get("consecutive_failures", 0) + 1
+        state["total_failures"] = state.get("total_failures", 0) + 1
+
+    try:
+        _HEALTH_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _HEALTH_PATH.write_text(json.dumps(state, indent=2))
+    except Exception as exc:  # noqa: BLE001
+        # Health tracking must never break the actual data fetch.
+        logger.debug("IndexAlpha health-state write failed (non-fatal): {}", exc)
 
 
 def _get_api_key() -> str:
@@ -199,12 +244,18 @@ def _get(path: str, params: dict, api_key: str) -> dict:
       timeout — raises TimeoutError
       non-2xx — raises RuntimeError
 
+    Every attempt (success or failure) is recorded to the persisted health
+    state (status code, latency, error type — never the API key or the
+    Authorization header) via _record_health(), so success rate / latency /
+    consecutive-failures / last-successful-fetch are derivable without a
+    dedicated monitoring call. See scripts/check_indexalpha_health.py.
+
     Returns:
       Parsed JSON response dict.
     """
-    import urllib.request
-    import urllib.parse
     import json
+    import urllib.parse
+    import urllib.request
 
     url = f"{_BASE_URL}{path}?{urllib.parse.urlencode(params)}"
     headers = {
@@ -213,14 +264,28 @@ def _get(path: str, params: dict, api_key: str) -> dict:
     }
 
     for attempt in range(1, _MAX_RETRIES + 2):
+        start = time.monotonic()
         try:
             req    = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
                 body = resp.read().decode("utf-8")
-            return json.loads(body)
+                status = resp.status
+            latency_ms = (time.monotonic() - start) * 1000
+            parsed = json.loads(body)
+            # Safe-for-logs summary: shape only, never full payload content.
+            n_items = len(parsed.get("data", [])) if isinstance(parsed.get("data"), list) else None
+            logger.info(
+                "IndexAlpha {} {} -> {} in {:.0f}ms (success={}, items={})",
+                path, params.get("ticker", ""), status, latency_ms,
+                parsed.get("success"), n_items,
+            )
+            _record_health(success=True, status_code=status, latency_ms=latency_ms, error_type=None)
+            return parsed
 
         except urllib.error.HTTPError as exc:
+            latency_ms = (time.monotonic() - start) * 1000
             if exc.code == 401:
+                _record_health(success=False, status_code=401, latency_ms=latency_ms, error_type="auth_error")
                 raise PermissionError(
                     "Index Alpha API — 401 Unauthorized. "
                     "Periksa INDEX_ALPHA_API_KEY."
@@ -228,25 +293,30 @@ def _get(path: str, params: dict, api_key: str) -> dict:
             if exc.code == 429:
                 if attempt <= _MAX_RETRIES:
                     logger.warning(
-                        "Index Alpha 429 rate-limit (attempt {}/{}). "
+                        "Index Alpha 429 rate-limit (attempt {}/{}, {:.0f}ms). "
                         "Menunggu {:.0f}s ...",
-                        attempt, _MAX_RETRIES + 1, _RETRY_WAIT,
+                        attempt, _MAX_RETRIES + 1, latency_ms, _RETRY_WAIT,
                     )
                     time.sleep(_RETRY_WAIT)
                     continue
+                _record_health(success=False, status_code=429, latency_ms=latency_ms, error_type="rate_limit")
                 raise RuntimeError(
                     "Index Alpha API — 429 rate-limit setelah retries. "
                     "Kuota harian free plan (5 req/day) mungkin habis."
                 ) from exc
+            _record_health(success=False, status_code=exc.code, latency_ms=latency_ms, error_type="http_error")
             raise RuntimeError(
                 "Index Alpha API — HTTP {} pada {}".format(exc.code, url)
             ) from exc
 
         except TimeoutError as exc:
+            latency_ms = (time.monotonic() - start) * 1000
+            _record_health(success=False, status_code=None, latency_ms=latency_ms, error_type="timeout")
             raise TimeoutError(
                 "Index Alpha API — timeout setelah {}s pada {}".format(_TIMEOUT, url)
             ) from exc
 
+    _record_health(success=False, status_code=None, latency_ms=None, error_type="exhausted_retries")
     raise RuntimeError("Index Alpha API — semua retries gagal.")
 
 
@@ -598,7 +668,7 @@ def _manual_test(ticker: str = "BBCA", trade_date: str | None = None) -> None:
         trade_date = last_trading_day(date.today()).strftime("%Y-%m-%d")
 
     print(f"\n{'='*55}")
-    print(f"Index Alpha API — Manual Test")
+    print("Index Alpha API — Manual Test")
     print(f"Ticker: {ticker}  Date: {trade_date}")
     print(f"{'='*55}")
 
