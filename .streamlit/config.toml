@@ -14,3 +14,15 @@ font = "sans serif"
 
 [client]
 toolbarMode = "minimal"
+
+# fileWatcherType = "none" disables Streamlit's filesystem watcher (inotify on
+# Linux). Root cause this fixes: Streamlit Cloud's container hit
+# "OSError: [Errno 28] inotify watch limit reached" at startup — the default
+# "auto" watcher recursively watches every file under the repo root, and this
+# repo's working tree includes data/ (large, many small parquet/csv files) plus
+# several unrelated side-projects checked out alongside the app, well past the
+# container's inotify limit. Hot-reload-on-file-change is a local dev
+# convenience only; disabling it has no effect on app logic or runtime
+# behavior, and a deployed app's source doesn't change underneath it anyway.
+[server]
+fileWatcherType = "none"
