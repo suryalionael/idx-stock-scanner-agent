@@ -1,7 +1,7 @@
 # idx-stock-scanner-agent
 
 AI-powered daily scanner untuk saham IDX (Bursa Efek Indonesia).
-**Decision-support tool — bukan jaminan profit.**
+**Decision-support tool — bukan jaminan profit**
 
 ---
 
