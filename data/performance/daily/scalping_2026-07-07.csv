@@ -71,3 +71,4 @@ signal_date,eval_date,strategy,ticker,signal,prev,close,high,pct_high,pct_close,
 2026-07-06,2026-07-07,scalping,SMLE.JK,SCALPING_HIGH,102.0,109.0,115.0,12.75,6.86,W,evaluated
 2026-07-06,2026-07-07,scalping,ACRO.JK,SCALPING_HIGH,62.0,60.0,62.0,0.0,-3.23,L,evaluated
 2026-07-06,2026-07-07,scalping,WIFI.JK,SCALPING_HIGH,1725.0,1735.0,1745.0,1.16,0.58,W,evaluated
+2026-07-06,2026-07-07,scalping,DCII.JK,SCALPING_HIGH,198950.0,198950.0,198950.0,0.0,0.0,L,evaluated
