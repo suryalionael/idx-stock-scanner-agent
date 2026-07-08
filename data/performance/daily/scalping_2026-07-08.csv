@@ -131,3 +131,5 @@ signal_date,eval_date,strategy,ticker,signal,prev,close,high,pct_high,pct_close,
 2026-07-07,2026-07-08,scalping,SMLE.JK,SCALPING_HIGH,109.0,115.0,116.0,6.42,5.5,W,evaluated
 2026-07-07,2026-07-08,scalping,DCII.JK,SCALPING_HIGH,198950.0,198925.0,198975.0,0.01,-0.01,L,evaluated
 2026-07-07,2026-07-08,scalping,AHAP.JK,SCALPING_HIGH,93.0,91.0,95.0,2.15,-2.15,L,evaluated
+2026-07-07,2026-07-08,scalping,ADHI.JK,SCALPING_HIGH,159.0,155.0,159.0,0.0,-2.52,L,evaluated
+2026-07-07,2026-07-08,scalping,STTP.JK,SCALPING_HIGH,10375.0,10325.0,10325.0,-0.48,-0.48,L,evaluated
