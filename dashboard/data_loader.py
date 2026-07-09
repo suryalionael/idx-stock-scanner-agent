@@ -52,10 +52,10 @@ _BROKER_DIR        = _ROOT / "data" / "broker"
 _FUNDAMENTALS_DIR  = _ROOT / "data" / "fundamentals"
 _BROKER_CONFIG     = _ROOT / "stock_scanner" / "configs" / "broker_config.yaml"
 
-# Kolom tabel utama (urutan display) — top_buyer & top_seller di awal
+# Kolom tabel utama (urutan display) — Ticker, lalu Top Buyer, Top Seller
 TABLE_COLS = [
-    "top_buyer", "top_seller",
-    "ticker", "signal", "total_score", "enhanced_total_score",
+    "ticker", "top_buyer", "top_seller",
+    "signal", "total_score", "enhanced_total_score",
     "trend_score", "momentum_score", "breakout_score", "volume_score", "penalty_score",
     "news_score", "foreign_score",
     "close", "rsi14", "vol_ratio_20d", "pct_from_52w_high",
@@ -1256,12 +1256,14 @@ def enrich_df_with_top_brokers(
             broker_df, "net_lot", ascending=True, n=3,
         )
 
-    # Pindahkan kolom baru ke awal
+    # Pindahkan kolom ke urutan: ticker, top_buyer, top_seller, [rest]
     cols = result.columns.tolist()
     for col in ("top_buyer", "top_seller"):
         if col in cols:
             cols.remove(col)
-    result = result[["top_buyer", "top_seller"] + cols]
+    if "ticker" in cols:
+        cols.remove("ticker")
+    result = result[["ticker", "top_buyer", "top_seller"] + cols]
 
     return result
 
