@@ -721,14 +721,37 @@ def _render_broker_latest(ticker: str, scan_date: str, key_prefix: str = "") -> 
         df, note, info = _cached_broker_latest(ticker)
 
     if df is None or df.empty:
-        st.info(
-            f"📊 **Broker Summary belum dimuat** untuk {ticker.replace('.JK','')} sesi ini.\n\n"
-            "Harga, volume, tren, dan fundamental saham ini tetap lengkap di tab lain — "
-            "yang belum ada hanya rincian **kepemilikan & serapan broker** (sumber Index Alpha). "
-            "Klik **🔄 Refresh** di atas untuk memuatnya."
-        )
-        if note:
-            st.caption(f"_{note}_")
+        err_msg = note or "Data broker belum tersedia."
+        if "401" in err_msg or "Unauthorized" in err_msg or "auth" in err_msg.lower():
+            st.error(
+                f"❌ **Autentikasi Index Alpha gagal** — API key mungkin salah/habis masa berlaku. "
+                f"Periksa INDEX_ALPHA_API_KEY di Streamlit secrets panel."
+            )
+        elif "429" in err_msg or "rate" in err_msg.lower() or "kuota" in err_msg:
+            st.warning(
+                f"⚠️ **Kuota Index Alpha habis** — free plan 5 req/hari. "
+                f"Coba lagi besok atau upgrade plan. Data broker dari cache masih ada."
+            )
+        elif "timeout" in err_msg.lower():
+            st.warning(
+                f"⚠️ **Index Alpha timeout** — server lambat. Coba lagi nanti. "
+                f"Data dari cache masih ditampilkan."
+            )
+        elif "key tidak diset" in err_msg.lower() or "key belum" in err_msg.lower() or "404" in err_msg:
+            st.info(
+                f"📊 **Broker Summary belum dimuat** untuk {ticker.replace('.JK','')} sesi ini.\n\n"
+                f"_{err_msg}_\n\n"
+                "Harga, volume, tren, dan fundamental saham ini tetap lengkap di tab lain."
+            )
+        else:
+            st.info(
+                f"📊 **Broker Summary belum dimuat** untuk {ticker.replace('.JK','')} sesi ini.\n\n"
+                "Harga, volume, tren, dan fundamental saham ini tetap lengkap di tab lain — "
+                "yang belum ada hanya rincian **kepemilikan & serapan broker** (sumber Index Alpha). "
+                "Klik **🔄 Refresh** di atas untuk memuatnya."
+            )
+            if note:
+                st.caption(f"_{note}_")
         return
 
     src = info.get("source")
@@ -827,16 +850,75 @@ def _render_indexalpha_integration_badge() -> None:
 
     consec_fail = state.get("consecutive_failures", 0)
     last_success = state.get("last_success_at")
+    last_error_type = state.get("last_error_type")
+    last_status_code = state.get("last_status_code")
+
+    # ── Specific error messages ────────────────────────────────────────
+    if last_error_type == "missing_key":
+        st.warning(
+            "⚠️ **IndexAlpha: API key tidak ditemukan.** "
+            "Data broker hanya dari cache. "
+            "Set INDEX_ALPHA_API_KEY di environment untuk fetch sesi baru."
+        )
+        return
+    if last_error_type == "auth_error":
+        st.error(
+            "❌ **IndexAlpha: Autentikasi gagal (401).** "
+            "Periksa INDEX_ALPHA_API_KEY di environment/Streamlit secrets."
+        )
+        return
+    if last_error_type == "forbidden":
+        st.error(
+            "❌ **IndexAlpha: Akses ditolak (403).** "
+            "API key mungkin tidak memiliki akses ke endpoint ini."
+        )
+        return
+    if last_error_type in ("rate_limit", "rate_limit_exhausted"):
+        st.warning(
+            "⚠️ **IndexAlpha: Rate limit / kuota harian habis.** "
+            "Free plan hanya 5 req/hari. Tunggu reset atau upgrade plan. "
+            "Data cache masih tersedia untuk sesi yang sudah di-fetch sebelumnya."
+        )
+        return
+    if last_error_type == "timeout" and consec_fail >= 3:
+        st.warning(
+            "⚠️ **IndexAlpha: Timeout berulang.** "
+            f"Server lambat ({_CONNECT_TIMEOUT}s connect / {_READ_TIMEOUT}s read). "
+            "Data broker dari cache akan ditampilkan dulu."
+        )
+        return
+    if last_error_type == "connection_error" and consec_fail >= 3:
+        st.warning(
+            "⚠️ **IndexAlpha: Koneksi gagal.** "
+            "api.indexalpha.id tidak dapat dijangkau. "
+            "Data broker dari cache akan ditampilkan dulu."
+        )
+        return
+    if last_error_type == "logical_failure":
+        st.warning(
+            f"⚠️ **IndexAlpha: Response tidak sesuai** (HTTP {last_status_code}). "
+            "Endpoint mungkin berubah. Data cache akan ditampilkan."
+        )
+        return
+
+    # ── Generic consecutive failure ────────────────────────────────────
     if consec_fail and consec_fail >= 3:
-        st.warning(f"⚠️ **IndexAlpha: {consec_fail} kegagalan berturut-turut.** "
-                   f"Terakhir sukses: {last_success or 'tidak pernah'}.")
-    elif not key_set:
+        code_str = f" (HTTP {last_status_code})" if last_status_code else ""
+        err_str = f" — {last_error_type}" if last_error_type else ""
+        st.warning(
+            f"⚠️ **IndexAlpha: {consec_fail} kegagalan berturut-turut{err_str}{code_str}.** "
+            f"Terakhir sukses: {last_success or 'tidak pernah'}. "
+            "Data broker dari cache masih ditampilkan."
+        )
+        return
+
+    if not key_set:
         st.caption("ℹ️ INDEX_ALPHA_API_KEY tidak diset di environment ini — "
                    "menampilkan cache yang ada, tidak akan fetch sesi baru.")
     elif last_success:
         try:
             age_h = (_dt.now(_tz.utc) - _dt.fromisoformat(last_success)).total_seconds() / 3600
-            st.caption(f"✅ IndexAlpha terverifikasi tersambung — sukses terakhir {age_h:.0f} jam lalu.")
+            st.caption(f"✅ IndexAlpha terverifikasi — sukses terakhir {age_h:.0f} jam lalu.")
         except Exception:  # noqa: BLE001
             st.caption(f"✅ IndexAlpha sukses terakhir: {last_success}.")
 
@@ -1347,7 +1429,7 @@ def render_swing_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | None,
         df_filtered = df_all.copy()
 
     if not df_filtered.empty:
-        df_table = get_table_df(df_filtered)
+        df_table = get_table_df(df_filtered, scan_date=scan_date)
         display = df_table.copy()
         for col in ["total_score", "enhanced_total_score", "trend_score", "momentum_score",
                     "breakout_score", "volume_score", "penalty_score", "news_score", "foreign_score"]:
@@ -1361,6 +1443,8 @@ def render_swing_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | None,
             display,
             use_container_width=True, hide_index=True, height=320,
             column_config={
+                "top_buyer":            st.column_config.TextColumn("Top Buyer",  width="small"),
+                "top_seller":           st.column_config.TextColumn("Top Seller", width="small"),
                 "ticker":               st.column_config.TextColumn("Ticker",      width="small"),
                 "signal":               st.column_config.TextColumn("Signal",      width="small"),
                 "total_score":          st.column_config.TextColumn("Score",       width="small"),
