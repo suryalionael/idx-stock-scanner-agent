@@ -1152,6 +1152,28 @@ def _top_n_broker_codes(df: pd.DataFrame, column: str, ascending: bool, n: int =
     return ",".join(codes)
 
 
+def _newest_broker_date_for_ticker(ticker: str, bdir: Path) -> str | None:
+    """Cari tanggal broker cache paling baru untuk ticker tertentu.
+
+    Scan data/broker/ untuk file {ticker}_{YYYY-MM-DD}.parquet dan
+    {ticker}.JK_{YYYY-MM-DD}.parquet, return tanggal terbaru.
+    """
+    clean = ticker.upper().replace(".JK", "").strip()
+    from datetime import datetime as _dt
+    best: str | None = None
+    for pattern in (f"{clean}_*.parquet", f"{clean}.JK_*.parquet"):
+        for f in sorted(bdir.glob(pattern), reverse=True):
+            parts = f.stem.rsplit("_", 1)
+            if len(parts) == 2:
+                try:
+                    _dt.strptime(parts[1], "%Y-%m-%d")
+                    if best is None or parts[1] > best:
+                        best = parts[1]
+                except ValueError:
+                    continue
+    return best
+
+
 def enrich_df_with_top_brokers(
     df: pd.DataFrame,
     scan_date: str,
@@ -1162,6 +1184,10 @@ def enrich_df_with_top_brokers(
     Membaca cache parquet per ticker, mengambil 3 broker code dengan net_lot
     terbesar (buyer) dan terkecil (seller). TIDAK memanggil API — hanya baca
     cache yang sudah ada.
+
+    Fallback: jika cache untuk scan_date tidak ada, cari broker date terbaru
+    untuk ticker tersebut (agar tabel tetap terisi meski scan_date lebih baru
+    dari broker data terakhir).
 
     Args:
         df        : DataFrame utama (harus punya kolom 'ticker').
@@ -1188,10 +1214,16 @@ def enrich_df_with_top_brokers(
     for idx in result.index:
         ticker = str(result.at[idx, ticker_col])
         clean = ticker.upper().replace(".JK", "").strip()
-        cache_file = bdir / f"{clean}.JK_{scan_date}.parquet"
 
+        # Coba exact scan_date dulu, lalu fallback ke newest cache
+        cache_file = bdir / f"{clean}.JK_{scan_date}.parquet"
         if not cache_file.exists():
-            continue
+            best_date = _newest_broker_date_for_ticker(ticker, bdir)
+            if best_date is None:
+                continue
+            cache_file = bdir / f"{clean}.JK_{best_date}.parquet"
+            if not cache_file.exists():
+                continue
 
         try:
             broker_df = pd.read_parquet(cache_file)
