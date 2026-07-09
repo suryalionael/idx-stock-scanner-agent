@@ -119,7 +119,7 @@ _HEALTH_PATH = Path(__file__).parent.parent.parent / "data" / "published" / "ind
 
 
 def _record_health(success: bool, status_code: int | None, latency_ms: float | None,
-                    error_type: str | None) -> None:
+                    error_type: str | None, error_detail: str | None = None) -> None:
     import json
     from datetime import datetime, timezone
 
@@ -135,12 +135,15 @@ def _record_health(success: bool, status_code: int | None, latency_ms: float | N
     state["last_status_code"] = status_code
     state["last_latency_ms"] = round(latency_ms, 1) if latency_ms is not None else None
     state["last_error_type"] = error_type
+    if error_detail and not success:
+        state["last_error_detail"] = error_detail[:300]
     state["total_calls"] = state.get("total_calls", 0) + 1
 
     if success:
         state["last_success_at"] = now
         state["consecutive_failures"] = 0
         state["total_successes"] = state.get("total_successes", 0) + 1
+        state.pop("last_error_detail", None)
     else:
         state["consecutive_failures"] = state.get("consecutive_failures", 0) + 1
         state["total_failures"] = state.get("total_failures", 0) + 1
@@ -294,18 +297,44 @@ def _get(path: str, params: dict, api_key: str) -> dict:
             latency_ms = (time.monotonic() - start) * 1000
             code = exc.code
 
+            # Read response body for better error diagnostics
+            try:
+                err_body = exc.read().decode("utf-8", errors="replace")[:500]
+            except Exception:
+                err_body = None
+
+            # Build a descriptive error message from API response
+            api_msg = ""
+            if err_body:
+                try:
+                    err_json = json.loads(err_body)
+                    api_msg = err_json.get("detail") or err_json.get("error") or err_json.get("message") or ""
+                except (json.JSONDecodeError, TypeError):
+                    api_msg = err_body
+
             # ── Non-retryable client errors ──────────────────────────
-            if code in (401, 403):
-                err_type = "auth_error" if code == 401 else "forbidden"
-                _record_health(success=False, status_code=code, latency_ms=latency_ms, error_type=err_type)
+            if code == 401:
+                _record_health(success=False, status_code=401, latency_ms=latency_ms,
+                               error_type="auth_error", error_detail=api_msg or None)
                 raise PermissionError(
-                    f"Index Alpha API — {code}. Periksa INDEX_ALPHA_API_KEY."
+                    f"Index Alpha API — 401 Unauthorized. Periksa INDEX_ALPHA_API_KEY."
+                    + (f" API: {api_msg}" if api_msg else "")
+                ) from exc
+
+            if code == 403:
+                _record_health(success=False, status_code=403, latency_ms=latency_ms,
+                               error_type="forbidden", error_detail=api_msg or None)
+                raise PermissionError(
+                    f"Index Alpha API — 403 Forbidden. API key tidak memiliki akses."
+                    + (f" API: {api_msg}" if api_msg else "")
                 ) from exc
 
             if code in (400, 404, 405, 422):
                 _record_health(success=False, status_code=code, latency_ms=latency_ms, error_type="client_error")
                 raise RuntimeError(
-                    f"Index Alpha API — HTTP {code} (client error). Ticker/parameter mungkin invalid."
+                    f"Index Alpha API — HTTP {code}."
+                    + (f" API: {api_msg}" if api_msg else "")
+                    + " Parameter mungkin invalid."
                 ) from exc
 
             # ── Retryable: 429, 5xx ──────────────────────────────────
@@ -323,14 +352,15 @@ def _get(path: str, params: dict, api_key: str) -> dict:
                     continue
                 _record_health(success=False, status_code=code, latency_ms=latency_ms, error_type=f"{err_type}_exhausted")
                 raise RuntimeError(
-                    f"Index Alpha API — {code} setelah {_MAX_RETRIES}x retry. "
-                    "Server sibuk atau kuota habis."
+                    f"Index Alpha API — {code} setelah {_MAX_RETRIES}x retry."
+                    + (f" API: {api_msg}" if api_msg else "")
                 ) from exc
 
             # ── Other HTTP errors ────────────────────────────────────
             _record_health(success=False, status_code=code, latency_ms=latency_ms, error_type="http_error")
             raise RuntimeError(
-                f"Index Alpha API — HTTP {code} pada {url.split('?')[0]}"
+                f"Index Alpha API — HTTP {code}."
+                + (f" API: {api_msg}" if api_msg else "")
             ) from exc
 
         except (urllib.error.URLError, OSError, ConnectionError) as exc:

@@ -1432,6 +1432,7 @@ def render_swing_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | None,
                 f"consec_fail={_h.get('consecutive_failures', '?')} "
                 f"last_err={_h.get('last_error_type', 'none')} "
                 f"last_status={_h.get('last_status_code', '?')} "
+                f"last_detail={_h.get('last_error_detail', '')} "
                 f"last_success={_h.get('last_success_at', 'never')} "
                 f"total_calls={_h.get('total_calls', 0)}"
             )
