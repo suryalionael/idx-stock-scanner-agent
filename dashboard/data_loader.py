@@ -503,6 +503,17 @@ def get_table_df(df: pd.DataFrame, scan_date: str | None = None) -> pd.DataFrame
 #   buy_freq, sell_freq
 
 
+def _broker_api_key_available() -> bool:
+    """Cek apakah INDEX_ALPHA_API_KEY tersedia di os.environ atau st.secrets."""
+    if os.environ.get("INDEX_ALPHA_API_KEY", "").strip():
+        return True
+    try:
+        import streamlit as _st
+        return bool(_st.secrets.get("INDEX_ALPHA_API_KEY", "").strip())
+    except Exception:
+        return False
+
+
 def _broker_cache_file(ticker: str, date: str) -> Path:
     """Canonical broker cache path (consistent with fetch_indexalpha)."""
     clean = ticker.upper().replace(".JK", "").strip()
@@ -558,7 +569,7 @@ def fetch_broker_summary(
             return pd.DataFrame(), f"Gagal membaca cache broker: {exc}"
 
     # 2) Need the API. Require a key — otherwise fall back to cache or warn.
-    if not os.environ.get("INDEX_ALPHA_API_KEY", "").strip():
+    if not _broker_api_key_available():
         if cache_path.exists():
             try:
                 return pd.read_parquet(cache_path), None
@@ -566,7 +577,8 @@ def fetch_broker_summary(
                 pass
         return pd.DataFrame(), (
             "⚠️ Konfigurasi: INDEX_ALPHA_API_KEY belum diset. "
-            "Set environment variable untuk mengambil data broker dari Index Alpha."
+            "Set environment variable atau Streamlit secret "
+            "INDEX_ALPHA_API_KEY untuk mengambil data broker dari Index Alpha."
         )
 
     # 3) Call the Index Alpha service layer (caches the parquet on success).
@@ -644,15 +656,16 @@ def fetch_broker_range(
         except Exception as exc:  # noqa: BLE001
             return pd.DataFrame(), f"Gagal membaca cache range: {exc}"
 
-    if not os.environ.get("INDEX_ALPHA_API_KEY", "").strip():
+    if not _broker_api_key_available():
         if cache_path.exists():
             try:
                 return pd.read_parquet(cache_path), None
             except Exception:  # noqa: BLE001
                 pass
         return pd.DataFrame(), (
-            "INDEX_ALPHA_API_KEY belum diset. Set environment variable untuk "
-            "mengambil broker summary historical dari Index Alpha."
+            "INDEX_ALPHA_API_KEY belum diset. Set environment variable atau "
+            "Streamlit secret INDEX_ALPHA_API_KEY untuk mengambil broker "
+            "summary historical dari Index Alpha."
         )
 
     try:
@@ -714,7 +727,7 @@ def fetch_broker_latest(
             pass
 
     # 2) Not cached. With a key, fetch the target session (1 quota).
-    if os.environ.get("INDEX_ALPHA_API_KEY", "").strip():
+    if _broker_api_key_available():
         df, err = fetch_broker_summary(
             ticker, target, investor=investor, market=market, force_refresh=True,
         )

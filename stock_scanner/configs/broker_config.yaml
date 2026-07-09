@@ -1,0 +1,180 @@
+# Broker Analytics Configuration
+# Konfigurasi terpusat untuk broker groups, metric thresholds, dan display preferences.
+#
+# Digunakan oleh:
+#   - stock_scanner/pipeline/broker_analytics.py (metric calculators)
+#   - dashboard/data_loader.py (load config)
+#   - dashboard/app.py (UI rendering)
+#
+# Updated: 2026-06-02
+
+# ---------------------------------------------------------------------------
+# BROKER CLASSIFICATIONS
+# ---------------------------------------------------------------------------
+# Setiap broker IDX dikelompokkan berdasarkan jenis investor yang dilayani.
+# Klasifikasi ini menentukan kategori di setiap metric (FAR, Retail Ratio, SMS).
+
+broker_groups:
+  # Foreign institutional brokers — investor asing (fund, asset manager, bank)
+  foreign:
+    codes:
+      - CS     # Credit Suisse / UBS Securities
+      - ML     # Merrill Lynch / BofA Securities
+      - MS     # Morgan Stanley
+      - JP     # JPMorgan Securities
+      - DB     # Deutsche Bank
+      - YU     # CLSA Securities Indonesia
+      - ZP     # Macquarie Sekuritas
+      - RB     # CGS-CIMB Securities
+      - GS     # Goldman Sachs
+      - UX     # UOB Kay Hian Securities
+      - AK     # UBS Securities Indonesia
+      - DP     # DBS Vickers Securities
+      - SB     # Nomura Securities
+      - BK     # JP Securities / Barclays
+      - QA     # Citigroup Securities
+      - LS     # Credit Suisse International
+      - MK     # Daiwa Capital Markets
+      - KK     # Maybank Securities
+      - OX     # CIMB Securities
+      - SA     # Societe Generale
+    description: "Foreign institutional investors"
+
+  # Large domestic brokers — sekuritas lokal besar dengan basis investor besar
+  big_local:
+    codes:
+      - YP     # Indo Premier Sekuritas / Mirae Asset
+      - OD     # Mandiri Sekuritas
+      - DH     # Bahana Sekuritas
+      - YJ     # Trimegah Sekuritas
+      - ZH     # CIMB Niaga Sekuritas
+      - BW     # BNI Sekuritas
+      - DR     # OSO Sekuritas
+      - CC     # Mirae Asset Sekuritas
+      - ID     # Sinarmas Sekuritas
+      - YB     # Panin Sekuritas
+      - GI     # BRI Danareksa Sekuritas
+      - LG     # Phillip Sekuritas
+      - ZU     # Danareksa Sekuritas
+      - HD     # HD Capital Sekuritas
+      - PD     # Henan Putihrai
+      - EP     # MNC Sekuritas
+      - FZ     # Manulife Sekuritas
+      - KI     # Ciptadana Sekuritas
+      - AD     # Phintraco Sekuritas
+      - NI     # BCA Sekuritas
+    description: "Large domestic brokers"
+
+  # Institution brokers — fokus pada corporate/fund buyers lokal
+  # Subset dari big_local yang spesifik untuk accumulation tracking
+  institution:
+    codes:
+      - CP     # Valbury Asia Securities / institutional desk
+      - CC     # Mirae Asset Sekuritas
+      - CD     # (Corporate direct)
+      - PD     # Henan Putihrai (institutional)
+      - NI     # BCA Sekuritas (institutional)
+      - HD     # HD Capital Sekuritas (institutional)
+    description: "Institutional buyers (domestic funds, corporations)"
+
+  # Retail brokers — focused pada retail investor
+  retail:
+    codes:
+      - XL     # XL Investindo
+      - XC     # (Retail platform)
+      - YB     # Panin Sekuritas (retail desk)
+      - EM     # (Retail segment)
+      - IX     # (Retail platform)
+    description: "Retail-focused brokers"
+
+  # Local (other) brokers — tidak termasuk big_local atau foreign
+  local:
+    codes: []  # Auto-populated jika broker_code tidak match di atas
+    description: "Other domestic brokers"
+
+# ---------------------------------------------------------------------------
+# METRIC THRESHOLDS & CONFIGURATION
+# ---------------------------------------------------------------------------
+
+metrics:
+  # FAR — Foreign Accumulation Ratio
+  # Formula: Foreign Net Buy / Total Positive Net Buy × 100
+  # Range: 0-100%
+  far:
+    thresholds:
+      retail_dominated: 30         # FAR < 30% → retail accumulation (foreign sedikit)
+      foreign_dominated: 60        # FAR > 60% → foreign accumulation (retail sedikit)
+      strong_accumulation: 80      # FAR > 80% → strong foreign accumulation
+    description: "Persentase asing dari total akumulasi positif"
+
+  # Retail Ratio
+  # Formula: Retail Net Buy / Total Positive Net Buy × 100
+  # Range: 0-100%
+  retail_ratio:
+    thresholds:
+      significant: 50             # > 50% = retail significant participation
+      moderate: 20                # 20-50% = moderate
+      low: 0                      # < 20% = weak
+    description: "Persentase retail dari total akumulasi positif"
+
+  # RIDR — Retail-to-Institution Distribution Ratio
+  # Formula: Retail Net Buy / abs(Institution Net Sell)
+  # Interpretasi:
+  #   < 1.0     = institutional dominasi (mereka ambil, retail tidak beli)
+  #   1.0-1.5   = neutral
+  #   > 1.5     = retail ambil alih (risk distribusi retail)
+  ridr:
+    thresholds:
+      institutional_accumulation: 1.0
+      neutral_min: 1.0
+      neutral_max: 1.5
+      retail_distribution_risk: 1.5
+    description: "Rasio retail buy vs institution sell"
+
+  # Smart Money Score (SMS)
+  # Composite score dari 3 kategori broker
+  # Formula: (Foreign Net × weight_foreign) + (Institution Net × weight_institution) - (Retail Net × weight_retail)
+  # Normalize ke 0-100
+  # Interpretasi: semakin tinggi, semakin kuat smart money accumulation
+  smart_money_score:
+    weights:
+      foreign: 1.0              # asing = smart (weight tinggi)
+      institution: 0.7          # institusi lokal = somewhat smart
+      retail: -0.3              # retail = distribution signal (negatif)
+    categories:
+      weak: [0, 25]             # < 25 = weak (retail dominasi)
+      moderate: [25, 50]        # 25-50 = moderate
+      strong: [50, 75]          # 50-75 = strong (smart money ambil)
+      very_strong: [75, 100]    # 75-100 = very strong accumulation
+    description: "Skor akumulasi smart money (weighted foreign + institution - retail)"
+
+# ---------------------------------------------------------------------------
+# DISPLAY & UI PREFERENCES
+# ---------------------------------------------------------------------------
+
+display:
+  # Leaderboard defaults
+  top_n_leaderboard: 10        # Top N saham di leaderboard
+  top_n_brokers: 5             # Top N brokers di detail view
+
+  # Date range
+  date_range_default_days: 20  # Default lookback untuk history
+
+  # Chart styling
+  chart_colors:
+    foreign: "#3b82f6"         # blue
+    institution: "#8b5cf6"      # purple
+    retail: "#f97316"           # orange
+    local: "#64748b"            # gray
+    accumulation: "#4ade80"      # green (positive net)
+    distribution: "#ef4444"      # red (negative net)
+    neutral: "#64748b"           # gray (zero/neutral)
+
+# ---------------------------------------------------------------------------
+# NOTES
+# ---------------------------------------------------------------------------
+# - Broker codes diambil dari IDX standar (2-letter codes)
+# - Institution adalah subset dari big_local, dipakai untuk SMS weighting terpisah
+# - Retail codes bersifat eksperimental (belum ada definisi formal dari IDX)
+# - Metric menggunakan net_lot saja (lot-based); value-based metrics untuk fase extended
+# - Jika broker_code tidak ada di daftar manapun, akan di-classify sebagai "local"
