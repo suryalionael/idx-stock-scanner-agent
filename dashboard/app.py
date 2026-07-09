@@ -890,7 +890,7 @@ def _render_indexalpha_integration_badge() -> None:
     if last_error_type == "timeout" and consec_fail >= 3:
         st.warning(
             "⚠️ **IndexAlpha: Timeout berulang.** "
-            f"Server lambat ({_CONNECT_TIMEOUT}s connect / {_READ_TIMEOUT}s read). "
+            "Server lambat atau jaringan tidak stabil. "
             "Data broker dari cache akan ditampilkan dulu."
         )
         return
