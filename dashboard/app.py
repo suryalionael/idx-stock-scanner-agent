@@ -833,6 +833,13 @@ def _render_indexalpha_integration_badge() -> None:
     from datetime import datetime as _dt, timezone as _tz
 
     key_set = bool(_os.environ.get("INDEX_ALPHA_API_KEY", "").strip())
+    if not key_set:
+        try:
+            import streamlit as _st_key
+            _sk_val = _st_key.secrets.get("INDEX_ALPHA_API_KEY", "")
+            key_set = bool(_sk_val)
+        except Exception:
+            pass
     state = {}
     if _INDEXALPHA_HEALTH_PATH.exists():
         try:
@@ -1395,14 +1402,49 @@ def _render_scalping_detail(row: pd.Series, scan_date: str, api_key: str | None)
 def render_swing_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | None,
                      signal_filter: list[str]) -> None:
     """Render the 🔄 Swing Trading tab content — refactored Today Overview."""
-    # ── Diagnostic marker: confirms the correct deploy commit is running ──
-    _branch_diag, _sha_diag = _git_commit_info()
-    st.caption(
-        f"🧪 DIAG_SWING_V2 · commit {_sha_diag} · scan_date={scan_date} "
-        f"· df_all.columns={list(df_all.columns)[:6]}…"
-    )
-
     st.markdown("### 🔄 Swing Trading — Setup Teknikal 3–10 Hari")
+
+    # ── Production diagnostics (temporary) ─────────────────────────────
+    _diag_branch, _diag_sha = _git_commit_info()
+    _diag_broker_dir = Path(__file__).parent.parent / "data" / "broker"
+    _diag_n_broker_files = len(list(_diag_broker_dir.glob("*.parquet"))) if _diag_broker_dir.exists() else -1
+    _diag_broker_dir_tracked = _diag_broker_dir.exists() and bool(list(_diag_broker_dir.glob("*.parquet")))
+    _diag_os_key = "✅ SET" if os.environ.get("INDEX_ALPHA_API_KEY", "").strip() else "❌ NOT SET"
+    _diag_ss_key = "N/A"
+    try:
+        import streamlit as _st_diag
+        _sk = _st_diag.secrets.get("INDEX_ALPHA_API_KEY", "")
+        _diag_ss_key = "✅ SET" if _sk else "❌ NOT SET"
+    except Exception:
+        _diag_ss_key = "⚠️ st.secrets not available"
+    _diag_health_path = Path(__file__).parent.parent / "data" / "published" / "indexalpha_health.json"
+    _diag_health = "NOT FOUND"
+    if _diag_health_path.exists():
+        try:
+            import json
+            _h = json.loads(_diag_health_path.read_text())
+            _diag_health = (
+                f"consec_fail={_h.get('consecutive_failures', '?')} "
+                f"last_err={_h.get('last_error_type', 'none')} "
+                f"last_status={_h.get('last_status_code', '?')} "
+                f"last_success={_h.get('last_success_at', 'never')} "
+                f"total_calls={_h.get('total_calls', 0)}"
+            )
+        except Exception as _e:
+            _diag_health = f"read error: {_e}"
+    with st.expander("🔍 DIAGNOSTIC (production deploy check)", expanded=False):
+        st.code(
+            f"commit={_diag_sha}  branch={_diag_branch}\n"
+            f"scan_date={scan_date}  df_all.shape={df_all.shape}\n"
+            f"os.environ[INDEX_ALPHA_API_KEY] = {_diag_os_key}\n"
+            f"st.secrets[INDEX_ALPHA_API_KEY] = {_diag_ss_key}\n"
+            f"data/broker/ dir_exists={_diag_broker_dir.exists()}  "
+            f"parquet_count={_diag_n_broker_files}\n"
+            f"indexalpha_health.json = {_diag_health}\n"
+            f"df_all.columns[:10] = {list(df_all.columns[:10])}\n"
+            f"top_buyer in df_all = {'top_buyer' in df_all.columns}\n"
+            f"top_seller in df_all = {'top_seller' in df_all.columns}"
+        )
 
     # Signal distribution
     sig_counts_all = df_all["signal"].value_counts() if "signal" in df_all.columns else pd.Series(dtype=int)
@@ -1446,11 +1488,6 @@ def render_swing_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | None,
             if col in display.columns:
                 display[col] = display[col].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
 
-        st.caption(
-            f"🧪 DIAG_COLS: {list(display.columns)[:6]}…  "
-            f"top_buyer_sample={display['top_buyer'].iloc[0] if 'top_buyer' in display.columns and len(display) else 'N/A'}  "
-            f"top_seller_sample={display['top_seller'].iloc[0] if 'top_seller' in display.columns and len(display) else 'N/A'}"
-        )
         show_df(
             display,
             use_container_width=True, hide_index=True, height=320,

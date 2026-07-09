@@ -157,9 +157,17 @@ def _record_health(success: bool, status_code: int | None, latency_ms: float | N
 def _get_api_key() -> str:
     key = os.environ.get("INDEX_ALPHA_API_KEY", "").strip()
     if not key:
+        # Fallback: check Streamlit secrets (Streamlit Cloud deployment)
+        try:
+            import streamlit as _st
+            key = str(_st.secrets.get("INDEX_ALPHA_API_KEY", "")).strip()
+        except Exception:
+            pass
+    if not key:
         raise EnvironmentError(
             "INDEX_ALPHA_API_KEY tidak ditemukan di environment. "
-            "Set dengan: export INDEX_ALPHA_API_KEY='your_token_here'"
+            "Set dengan: export INDEX_ALPHA_API_KEY='your_token_here' "
+            "atau di Streamlit secrets sebagai INDEX_ALPHA_API_KEY"
         )
     return key
 
