@@ -40,8 +40,7 @@ from loguru import logger
 # ---------------------------------------------------------------------------
 
 _BASE_URL       = "https://api.indexalpha.id"
-_CONNECT_TIMEOUT = 10       # seconds — connection establishment
-_READ_TIMEOUT    = 30       # seconds — waiting for response body
+_TIMEOUT        = 30       # seconds — total timeout (urllib doesn't support separate connect/read timeout)
 _MAX_RETRIES     = 3        # max retry attempts (total attempts = _MAX_RETRIES + 1)
 _BASE_BACKOFF    = 1.0      # seconds — initial backoff
 _MAX_BACKOFF     = 30.0     # seconds — cap exponential backoff
@@ -254,7 +253,7 @@ def _get(path: str, params: dict, api_key: str) -> dict:
         "Accept":        "application/json",
     }
 
-    timeout = (_CONNECT_TIMEOUT, _READ_TIMEOUT)  # connect + read
+    timeout = _TIMEOUT
 
     for attempt in range(1, _MAX_RETRIES + 2):
         start = time.monotonic()
@@ -365,7 +364,7 @@ def _get(path: str, params: dict, api_key: str) -> dict:
             _record_health(success=False, status_code=None, latency_ms=latency_ms, error_type="timeout_exhausted")
             raise TimeoutError(
                 f"Index Alpha API — timeout setelah {_MAX_RETRIES}x retry "
-                f"(connect={_CONNECT_TIMEOUT}s, read={_READ_TIMEOUT}s)."
+                f"(timeout={_TIMEOUT}s)."
             ) from exc
 
         except json.JSONDecodeError as exc:
