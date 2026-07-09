@@ -52,8 +52,9 @@ _BROKER_DIR        = _ROOT / "data" / "broker"
 _FUNDAMENTALS_DIR  = _ROOT / "data" / "fundamentals"
 _BROKER_CONFIG     = _ROOT / "stock_scanner" / "configs" / "broker_config.yaml"
 
-# Kolom tabel utama (urutan display) — termasuk kolom baru
+# Kolom tabel utama (urutan display) — top_buyer & top_seller di awal
 TABLE_COLS = [
+    "top_buyer", "top_seller",
     "ticker", "signal", "total_score", "enhanced_total_score",
     "trend_score", "momentum_score", "breakout_score", "volume_score", "penalty_score",
     "news_score", "foreign_score",
@@ -469,8 +470,15 @@ def load_all_ranked(
 # Table display helper
 # ---------------------------------------------------------------------------
 
-def get_table_df(df: pd.DataFrame) -> pd.DataFrame:
-    """Pilih dan urutkan kolom untuk tabel sinyal utama."""
+def get_table_df(df: pd.DataFrame, scan_date: str | None = None) -> pd.DataFrame:
+    """Pilih dan urutkan kolom untuk tabel sinyal utama.
+
+    Jika scan_date diberikan, otomatis enrich dengan top_buyer/top_seller
+    dari broker cache (zero API calls).
+    """
+    if scan_date is not None:
+        df = enrich_df_with_top_brokers(df, scan_date)
+
     available = [c for c in TABLE_COLS if c in df.columns]
     result = df[available].copy()
     if "total_score" in result.columns:
@@ -557,8 +565,8 @@ def fetch_broker_summary(
             except Exception:  # noqa: BLE001
                 pass
         return pd.DataFrame(), (
-            "INDEX_ALPHA_API_KEY belum diset. Set environment variable "
-            "INDEX_ALPHA_API_KEY untuk mengambil data broker dari Index Alpha."
+            "⚠️ Konfigurasi: INDEX_ALPHA_API_KEY belum diset. "
+            "Set environment variable untuk mengambil data broker dari Index Alpha."
         )
 
     # 3) Call the Index Alpha service layer (caches the parquet on success).
@@ -569,17 +577,21 @@ def fetch_broker_summary(
             investor=investor, market=market, force_refresh=force_refresh,
         )
     except Exception as exc:  # noqa: BLE001
+        err_msg = str(exc)
         if cache_path.exists():
             try:
                 return pd.read_parquet(cache_path), None
             except Exception:  # noqa: BLE001
                 pass
-        return pd.DataFrame(), f"Gagal mengambil data dari Index Alpha: {exc}"
+        return pd.DataFrame(), (
+            f"⚠️ Gagal ambil data dari Index Alpha: {err_msg}"
+        )
 
     if df is None or df.empty:
         return pd.DataFrame(), (
-            f"Tidak ada data broker dari Index Alpha untuk {ticker} @ {date}. "
-            "Kemungkinan bukan hari bursa, di luar cakupan data, atau kuota harian habis."
+            f"ℹ️ Tidak ada data broker dari Index Alpha untuk {ticker} @ {date}. "
+            "Kemungkinan: bukan hari bursa, ticker tidak aktif, "
+            "atau Index Alpha belum memiliki data untuk sesi ini."
         )
     return df, None
 
@@ -1113,6 +1125,100 @@ def available_dates_unified(payload: dict | None = None) -> list[str]:
     if pub and (not dates or pub > dates[0]):
         dates = [pub] + [d for d in dates if d != pub]
     return dates
+
+
+# ---------------------------------------------------------------------------
+# Top Buyer / Top Seller enrichment — dari broker cache (zero API calls)
+# ---------------------------------------------------------------------------
+
+def _top_n_broker_codes(df: pd.DataFrame, column: str, ascending: bool, n: int = 3) -> str:
+    """Ambil n broker code teratas dari broker DataFrame.
+
+    Args:
+        df        : broker DataFrame (kolom broker_code, net_lot).
+        column    : kolom untuk sorting (net_lot).
+        ascending : True = seller (net_lot terkecil), False = buyer (net_lot terbesar).
+        n         : jumlah broker yang diambil.
+
+    Returns:
+        CSV string seperti "XL,QC,CK" atau "-" jika data tidak tersedia.
+    """
+    if df is None or df.empty or column not in df.columns:
+        return "-"
+    sorted_df = df.sort_values(column, ascending=ascending)
+    codes = sorted_df["broker_code"].dropna().astype(str).str.upper().head(n).tolist()
+    if not codes:
+        return "-"
+    return ",".join(codes)
+
+
+def enrich_df_with_top_brokers(
+    df: pd.DataFrame,
+    scan_date: str,
+    broker_dir: Path | None = None,
+) -> pd.DataFrame:
+    """Enrich DataFrame dengan kolom top_buyer dan top_seller dari broker cache.
+
+    Membaca cache parquet per ticker, mengambil 3 broker code dengan net_lot
+    terbesar (buyer) dan terkecil (seller). TIDAK memanggil API — hanya baca
+    cache yang sudah ada.
+
+    Args:
+        df        : DataFrame utama (harus punya kolom 'ticker').
+        scan_date : "YYYY-MM-DD" — tanggal untuk lookup broker cache.
+        broker_dir: Path ke data/broker/. Default dari konstanta modul.
+
+    Returns:
+        DataFrame dengan kolom top_buyer dan top_seller ditambahkan (di awal).
+    """
+    result = df.copy()
+    bdir = broker_dir or _BROKER_DIR
+
+    if "top_buyer" in result.columns and "top_seller" in result.columns:
+        return result  # sudah ada, skip
+
+    # Inisialisasi default
+    result["top_buyer"] = "-"
+    result["top_seller"] = "-"
+
+    ticker_col = "ticker"
+    if ticker_col not in result.columns:
+        return result
+
+    for idx in result.index:
+        ticker = str(result.at[idx, ticker_col])
+        clean = ticker.upper().replace(".JK", "").strip()
+        cache_file = bdir / f"{clean}.JK_{scan_date}.parquet"
+
+        if not cache_file.exists():
+            continue
+
+        try:
+            broker_df = pd.read_parquet(cache_file)
+        except Exception:  # noqa: BLE001
+            continue
+
+        if broker_df.empty or "net_lot" not in broker_df.columns:
+            continue
+
+        # Top 3 buyer: net_lot terbesar
+        result.at[idx, "top_buyer"] = _top_n_broker_codes(
+            broker_df, "net_lot", ascending=False, n=3,
+        )
+
+        # Top 3 seller: net_lot terkecil
+        result.at[idx, "top_seller"] = _top_n_broker_codes(
+            broker_df, "net_lot", ascending=True, n=3,
+        )
+
+    # Pindahkan kolom baru ke awal
+    cols = result.columns.tolist()
+    for col in ("top_buyer", "top_seller"):
+        if col in cols:
+            cols.remove(col)
+    result = result[["top_buyer", "top_seller"] + cols]
+
+    return result
 
 
 def load_all_tickers_unified(

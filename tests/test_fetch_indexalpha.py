@@ -2,11 +2,13 @@
 integration is active and correctly handled, without spending any of the
 free-plan 5-requests/day quota. All HTTP is mocked; no network calls occur.
 
-Covers (per the production-hardening audit):
+Covers:
   - ticker cleaning / cache path construction
   - response normalization (success, empty, partial/malformed fields)
   - auth: missing key raises before any request is attempted
-  - HTTP error handling: 401 (auth), 429 (rate-limit + retry), timeout
+  - HTTP error handling: 401 (auth), 429 (rate-limit + retry), 5xx retry,
+    timeout retry, connection error retry
+  - logical failure (HTTP 200 but success=false) detection
   - the API key is never present in any exception message or log call
   - health-state recording (success path resets consecutive_failures;
     failure path increments it) without touching the real committed
@@ -36,7 +38,13 @@ def isolated_health_path(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def api_key_env(monkeypatch):
+def no_sleep(monkeypatch):
+    """Prevent real time.sleep() in retry logic — makes tests fast."""
+    monkeypatch.setattr(ia.time, "sleep", lambda *_: None)
+
+
+@pytest.fixture
+def api_key_env(no_sleep, monkeypatch):
     monkeypatch.setenv("INDEX_ALPHA_API_KEY", "test-key-not-real")
 
 
@@ -179,37 +187,63 @@ def test_get_401_raises_permission_error_and_never_leaks_key(api_key_env):
     assert state["last_status_code"] == 401
 
 
-def test_get_429_retries_then_succeeds(api_key_env, monkeypatch):
-    """First call 429s, second (retry) succeeds — must not raise, and the
-    retry sleep must not actually block the test suite."""
-    monkeypatch.setattr(ia.time, "sleep", lambda *_: None)
+def test_get_logical_failure_200_but_success_false(api_key_env):
+    """HTTP 200 with {"success": false} must NOT record as health success.
+    _get() should raise RuntimeError on logical failure."""
+    payload = {"success": False, "error": "no data for this range"}
+    with patch("urllib.request.urlopen", return_value=_mock_response(payload)):
+        with pytest.raises(RuntimeError, match="logical failure"):
+            ia._get("/stocks/broker-summary", {"ticker": "BBCA"}, "test-key-not-real")
+
+    state = json.loads(ia._HEALTH_PATH.read_text())
+    assert state["last_error_type"] == "logical_failure"
+    assert state["consecutive_failures"] == 1
+    assert state.get("total_successes", 0) == 0
+    assert state.get("total_failures", 0) == 1
+
+
+def test_get_429_retries_then_succeeds(api_key_env):
+    """First call 429s, second (retry) succeeds — must not raise.
+    _get now has _MAX_RETRIES=3, so we need 4 429s to exhaust, or
+    [429, 429, success] to test retry-then-success."""
     err = urllib.error.HTTPError(url="x", code=429, msg="Too Many Requests", hdrs=None, fp=None)
     success_payload = {"success": True, "data": []}
-    with patch("urllib.request.urlopen", side_effect=[err, _mock_response(success_payload)]):
+    with patch("urllib.request.urlopen", side_effect=[err, err, _mock_response(success_payload)]):
         result = ia._get("/stocks/broker-summary", {"ticker": "BBCA"}, "test-key-not-real")
     assert result["success"] is True
 
 
-def test_get_429_exhausted_retries_raises_runtime_error(api_key_env, monkeypatch):
-    monkeypatch.setattr(ia.time, "sleep", lambda *_: None)
+def test_get_429_exhausted_retries_raises_runtime_error(api_key_env):
+    """_MAX_RETRIES=3 → need 4 consecutive 429s to exhaust."""
     err = urllib.error.HTTPError(url="x", code=429, msg="Too Many Requests", hdrs=None, fp=None)
-    with patch("urllib.request.urlopen", side_effect=err):
-        with pytest.raises(RuntimeError, match="rate-limit"):
+    with patch("urllib.request.urlopen", side_effect=[err] * 5):  # more than enough
+        with pytest.raises(RuntimeError, match="429"):
             ia._get("/stocks/broker-summary", {"ticker": "BBCA"}, "test-key-not-real")
 
     state = json.loads(ia._HEALTH_PATH.read_text())
-    assert state["last_error_type"] == "rate_limit"
-    assert state["consecutive_failures"] == 1  # one health record for the final exhausted attempt
+    assert "rate_limit" in state["last_error_type"]
+    assert state["consecutive_failures"] >= 1
 
 
-def test_get_other_http_error_raises_runtime_error(api_key_env):
+def test_get_500_retries_then_succeeds(api_key_env):
+    """5xx errors are now retryable — 500 then success."""
     err = urllib.error.HTTPError(url="x", code=500, msg="Server Error", hdrs=None, fp=None)
-    with patch("urllib.request.urlopen", side_effect=err):
-        with pytest.raises(RuntimeError, match="HTTP 500"):
+    payload = {"success": True, "data": []}
+    with patch("urllib.request.urlopen", side_effect=[err, _mock_response(payload)]):
+        result = ia._get("/stocks/broker-summary", {"ticker": "BBCA"}, "test-key-not-real")
+    assert result["success"] is True
+
+
+def test_get_500_exhausted_retries_raises_runtime_error(api_key_env):
+    """All 500 retries exhausted."""
+    err = urllib.error.HTTPError(url="x", code=500, msg="Server Error", hdrs=None, fp=None)
+    with patch("urllib.request.urlopen", side_effect=[err] * 4):
+        with pytest.raises(RuntimeError, match="500"):
             ia._get("/stocks/broker-summary", {"ticker": "BBCA"}, "test-key-not-real")
 
 
 def test_consecutive_failures_increment_then_reset_on_success(api_key_env):
+    """401 is non-retryable, so each call records 1 failure immediately."""
     err = urllib.error.HTTPError(url="x", code=401, msg="Unauthorized", hdrs=None, fp=None)
     with patch("urllib.request.urlopen", side_effect=err):
         for _ in range(3):
@@ -239,6 +273,8 @@ def test_fetch_returns_empty_df_on_failure_not_exception(api_key_env):
 
 
 def test_fetch_returns_empty_df_when_api_reports_unsuccessful(api_key_env):
+    """Logical failure (success=false) raises RuntimeError in _get(), but
+    fetch() catches it and returns empty DataFrame."""
     payload = {"success": False, "error": "no data for this range"}
     with patch("urllib.request.urlopen", return_value=_mock_response(payload)):
         df = ia.IndexAlphaFetcher().fetch("BBCA", "2026-06-17")

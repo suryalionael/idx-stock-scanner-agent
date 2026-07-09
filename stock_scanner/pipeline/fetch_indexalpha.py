@@ -1,69 +1,33 @@
-"""Index Alpha API — proof-of-concept broker summary fetcher.
+"""Index Alpha API — broker summary fetcher dengan error handling robust.
 
 Source: https://indexalpha.id / https://api.indexalpha.id
 
-Hanya untuk testing manual dan proof-of-usefulness.
-JANGAN dipanggil dari dashboard atau pipeline loop utama (kuota sangat kecil).
-
-Free plan quota
----------------
-  5 requests / day
-  10 requests / minute
-  → cukup untuk fetch 5 ticker per hari, atau 1 ticker × 5 hari range
-
-Authentication
---------------
-  Header: Authorization: Bearer <token>
-  Set env var sebelum dipakai:
-      export INDEX_ALPHA_API_KEY="your_token_here"
-
-Endpoint yang dipakai
----------------------
+Endpoint
+--------
   GET https://api.indexalpha.id/stocks/broker-summary
   Params:
-    ticker   (str)  — kode saham IDX tanpa suffix .JK, mis. "BBCA"
+    ticker   (str)  — "BBCA" (tanpa .JK)
     from     (date) — YYYY-MM-DD
     to       (date) — YYYY-MM-DD
     investor (enum) — "all" | "f" (foreign) | "or" | "d" (domestic)
     market   (enum) — "RG" (Regular, default) | "NG" (Negotiated) | "ALL"
 
   GET https://api.indexalpha.id/usage
-  → cek sisa kuota harian
 
-Response (per-broker per request):
-  code         str   — 2-letter IDX broker code (e.g. "YP")
-  buy_freq     int   — jumlah transaksi beli
-  buy_volume   int   — total lot beli
-  buy_value    int   — total nilai beli (IDR)
-  sell_freq    int   — jumlah transaksi jual
-  sell_volume  int   — total lot jual
-  sell_value   int   — total nilai jual (IDR)
-  buy_avg      float — rata-rata harga beli
-  sell_avg     float — rata-rata harga jual
+Free plan: 5 req/day, 10 req/minute → cache-first, retry cuma utk transient error.
 
-Data availability
-  Regular Market (RG) : mulai Juni 2025
-  Negotiated Market   : mulai Januari 2026
-  Update harian: ~12:00 GMT (19:00 WIB)
-
-Normalized DataFrame schema (backward-compatible dengan broker_summary.py)
-  broker_code      str   — mapped dari "code"
-  broker_name      str   — dari IDX_BROKER_NAMES lookup, fallback "Unknown"
-  buy_lot          float — dari buy_volume
-  sell_lot         float — dari sell_volume
-  net_lot          float — buy_lot - sell_lot
-  buy_value        float — total nilai beli IDR  [NEW vs placeholder]
-  sell_value       float — total nilai jual IDR  [NEW vs placeholder]
-  net_value        float — buy_value - sell_value [NEW vs placeholder]
-  buy_avg_price    float — avg harga beli         [NEW vs placeholder]
-  sell_avg_price   float — avg harga jual         [NEW vs placeholder]
-  buy_freq         int   — jumlah transaksi beli  [NEW vs placeholder]
-  sell_freq        int   — jumlah transaksi jual  [NEW vs placeholder]
+Health state dicatat utk SETIAP percobaan (sukses & gagal), termasuk saat key
+tidak diset. Bedakan HTTP-level error vs logical error (JSON success: false).
 """
 from __future__ import annotations
 
+import json
 import os
+import random
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -75,10 +39,15 @@ from loguru import logger
 # Config
 # ---------------------------------------------------------------------------
 
-_BASE_URL   = "https://api.indexalpha.id"
-_TIMEOUT    = 15          # seconds per request
-_RETRY_WAIT = 2.0         # seconds between auto-retries (on 429)
-_MAX_RETRIES = 2
+_BASE_URL       = "https://api.indexalpha.id"
+_CONNECT_TIMEOUT = 10       # seconds — connection establishment
+_READ_TIMEOUT    = 30       # seconds — waiting for response body
+_MAX_RETRIES     = 3        # max retry attempts (total attempts = _MAX_RETRIES + 1)
+_BASE_BACKOFF    = 1.0      # seconds — initial backoff
+_MAX_BACKOFF     = 30.0     # seconds — cap exponential backoff
+
+# Status codes yang aman di-retry (transient)
+_RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 
 # Known IDX broker codes → names (subset; extend sesuai kebutuhan)
 IDX_BROKER_NAMES: dict[str, str] = {
@@ -120,6 +89,24 @@ IDX_BROKER_NAMES: dict[str, str] = {
 def _clean_ticker(ticker: str) -> str:
     """Strip .JK suffix if present — Index Alpha expects bare codes."""
     return ticker.upper().replace(".JK", "").strip()
+
+
+def _compute_backoff(attempt: int, rate_limited: bool) -> float:
+    """Exponential backoff + jitter.
+
+    Args:
+        attempt: current attempt number (1-based).
+        rate_limited: True jika karena 429 — backoff lebih agresif.
+
+    Returns:
+        Sleep time in seconds.
+    """
+    base = _BASE_BACKOFF * (2 ** (attempt - 1))
+    if rate_limited:
+        base *= 2  # double backoff for rate limits
+    capped = min(base, _MAX_BACKOFF)
+    jitter = random.uniform(0, capped * 0.25)  # up to 25% jitter
+    return capped + jitter
 
 
 # ---------------------------------------------------------------------------
@@ -236,86 +223,151 @@ def _normalize_response(data: list[dict[str, Any]]) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def _get(path: str, params: dict, api_key: str) -> dict:
-    """Make a GET request to the Index Alpha API.
+    """Make a GET request to the Index Alpha API with retry + exponential backoff.
 
-    Handles:
-      401 — invalid / missing API key
-      429 — rate limit exceeded (retries once after _RETRY_WAIT)
-      timeout — raises TimeoutError
-      non-2xx — raises RuntimeError
+    Retry policy:
+      - 401 (auth)       → langsung raise, TIDAK di-retry
+      - 403 (forbidden)  → langsung raise, TIDAK di-retry
+      - 400, 404, 422    → langsung raise (client error, bukan transient)
+      - 429 (rate limit) → retry dengan exponential backoff + jitter
+      - 5xx              → retry dengan exponential backoff + jitter
+      - timeout          → retry dengan exponential backoff + jitter
+      - connection error → retry dengan exponential backoff + jitter
 
-    Every attempt (success or failure) is recorded to the persisted health
-    state (status code, latency, error type — never the API key or the
-    Authorization header) via _record_health(), so success rate / latency /
-    consecutive-failures / last-successful-fetch are derivable without a
-    dedicated monitoring call. See scripts/check_indexalpha_health.py.
+    Health state dicatat SETIAP attempt (sukses & gagal) — termasuk logical
+    failure (JSON success=false) yang TIDAK dicatat sebagai sukses.
 
     Returns:
-      Parsed JSON response dict.
+      Parsed JSON response dict (sudah diverifikasi `success=True` di body).
     """
-    import json
-    import urllib.parse
-    import urllib.request
-
     url = f"{_BASE_URL}{path}?{urllib.parse.urlencode(params)}"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Accept":        "application/json",
     }
 
+    timeout = (_CONNECT_TIMEOUT, _READ_TIMEOUT)  # connect + read
+
     for attempt in range(1, _MAX_RETRIES + 2):
         start = time.monotonic()
         try:
-            req    = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 body = resp.read().decode("utf-8")
                 status = resp.status
             latency_ms = (time.monotonic() - start) * 1000
             parsed = json.loads(body)
-            # Safe-for-logs summary: shape only, never full payload content.
-            n_items = len(parsed.get("data", [])) if isinstance(parsed.get("data"), list) else None
+
+            # ── Logical check: HTTP 200 !== success ─────────────────────
+            if not parsed.get("success"):
+                err_msg = parsed.get("error") or "unknown error (logical failure)"
+                n_items = len(parsed.get("data", [])) if isinstance(parsed.get("data"), list) else 0
+                logger.warning(
+                    "IndexAlpha {} {} -> 200 logical_fail (items={}, error={})",
+                    path, params.get("ticker", ""), n_items, err_msg,
+                )
+                _record_health(
+                    success=False, status_code=status, latency_ms=latency_ms,
+                    error_type="logical_failure",
+                )
+                raise RuntimeError(
+                    f"Index Alpha API — logical failure: {err_msg}"
+                )
+
+            # ── Success path ────────────────────────────────────────────
+            n_items = len(parsed.get("data", [])) if isinstance(parsed.get("data"), list) else 0
             logger.info(
-                "IndexAlpha {} {} -> {} in {:.0f}ms (success={}, items={})",
-                path, params.get("ticker", ""), status, latency_ms,
-                parsed.get("success"), n_items,
+                "IndexAlpha {} {} -> {} in {:.0f}ms ({} items)",
+                path, params.get("ticker", ""), status, latency_ms, n_items,
             )
             _record_health(success=True, status_code=status, latency_ms=latency_ms, error_type=None)
             return parsed
 
         except urllib.error.HTTPError as exc:
             latency_ms = (time.monotonic() - start) * 1000
-            if exc.code == 401:
-                _record_health(success=False, status_code=401, latency_ms=latency_ms, error_type="auth_error")
+            code = exc.code
+
+            # ── Non-retryable client errors ──────────────────────────
+            if code in (401, 403):
+                err_type = "auth_error" if code == 401 else "forbidden"
+                _record_health(success=False, status_code=code, latency_ms=latency_ms, error_type=err_type)
                 raise PermissionError(
-                    "Index Alpha API — 401 Unauthorized. "
-                    "Periksa INDEX_ALPHA_API_KEY."
+                    f"Index Alpha API — {code}. Periksa INDEX_ALPHA_API_KEY."
                 ) from exc
-            if exc.code == 429:
-                if attempt <= _MAX_RETRIES:
-                    logger.warning(
-                        "Index Alpha 429 rate-limit (attempt {}/{}, {:.0f}ms). "
-                        "Menunggu {:.0f}s ...",
-                        attempt, _MAX_RETRIES + 1, latency_ms, _RETRY_WAIT,
-                    )
-                    time.sleep(_RETRY_WAIT)
-                    continue
-                _record_health(success=False, status_code=429, latency_ms=latency_ms, error_type="rate_limit")
+
+            if code in (400, 404, 405, 422):
+                _record_health(success=False, status_code=code, latency_ms=latency_ms, error_type="client_error")
                 raise RuntimeError(
-                    "Index Alpha API — 429 rate-limit setelah retries. "
-                    "Kuota harian free plan (5 req/day) mungkin habis."
+                    f"Index Alpha API — HTTP {code} (client error). Ticker/parameter mungkin invalid."
                 ) from exc
-            _record_health(success=False, status_code=exc.code, latency_ms=latency_ms, error_type="http_error")
+
+            # ── Retryable: 429, 5xx ──────────────────────────────────
+            if code in _RETRYABLE_STATUSES:
+                if attempt <= _MAX_RETRIES:
+                    backoff = _compute_backoff(attempt, code == 429)
+                    err_type = "rate_limit" if code == 429 else f"http_{code}"
+                    _record_health(success=False, status_code=code, latency_ms=latency_ms, error_type=err_type)
+                    logger.warning(
+                        "IndexAlpha {} (attempt {}/{}, {}ms). "
+                        "Retry in {:.1f}s ...",
+                        err_type, attempt, _MAX_RETRIES + 1, latency_ms, backoff,
+                    )
+                    time.sleep(backoff)
+                    continue
+                _record_health(success=False, status_code=code, latency_ms=latency_ms, error_type=f"{err_type}_exhausted")
+                raise RuntimeError(
+                    f"Index Alpha API — {code} setelah {_MAX_RETRIES}x retry. "
+                    "Server sibuk atau kuota habis."
+                ) from exc
+
+            # ── Other HTTP errors ────────────────────────────────────
+            _record_health(success=False, status_code=code, latency_ms=latency_ms, error_type="http_error")
             raise RuntimeError(
-                "Index Alpha API — HTTP {} pada {}".format(exc.code, url)
+                f"Index Alpha API — HTTP {code} pada {url.split('?')[0]}"
+            ) from exc
+
+        except (urllib.error.URLError, OSError, ConnectionError) as exc:
+            latency_ms = (time.monotonic() - start) * 1000
+            if attempt <= _MAX_RETRIES:
+                backoff = _compute_backoff(attempt, rate_limited=False)
+                _record_health(success=False, status_code=None, latency_ms=latency_ms, error_type="connection_error")
+                logger.warning(
+                    "IndexAlpha connection error (attempt {}/{}, {}ms): {}. "
+                    "Retry in {:.1f}s ...",
+                    attempt, _MAX_RETRIES + 1, latency_ms, exc, backoff,
+                )
+                time.sleep(backoff)
+                continue
+            _record_health(success=False, status_code=None, latency_ms=latency_ms, error_type="connection_exhausted")
+            raise ConnectionError(
+                f"Index Alpha API — koneksi gagal setelah {_MAX_RETRIES}x retry: {exc}"
             ) from exc
 
         except TimeoutError as exc:
             latency_ms = (time.monotonic() - start) * 1000
-            _record_health(success=False, status_code=None, latency_ms=latency_ms, error_type="timeout")
+            if attempt <= _MAX_RETRIES:
+                backoff = _compute_backoff(attempt, rate_limited=False)
+                _record_health(success=False, status_code=None, latency_ms=latency_ms, error_type="timeout")
+                logger.warning(
+                    "IndexAlpha timeout (attempt {}/{}, {}ms). Retry in {:.1f}s ...",
+                    attempt, _MAX_RETRIES + 1, latency_ms, backoff,
+                )
+                time.sleep(backoff)
+                continue
+            _record_health(success=False, status_code=None, latency_ms=latency_ms, error_type="timeout_exhausted")
             raise TimeoutError(
-                "Index Alpha API — timeout setelah {}s pada {}".format(_TIMEOUT, url)
+                f"Index Alpha API — timeout setelah {_MAX_RETRIES}x retry "
+                f"(connect={_CONNECT_TIMEOUT}s, read={_READ_TIMEOUT}s)."
             ) from exc
 
+        except json.JSONDecodeError as exc:
+            latency_ms = (time.monotonic() - start) * 1000
+            _record_health(success=False, status_code=None, latency_ms=latency_ms, error_type="parse_error")
+            raise RuntimeError(
+                f"Index Alpha API — response tidak valid JSON: {exc}"
+            ) from exc
+
+    # ── All retries exhausted ────────────────────────────────────────────
     _record_health(success=False, status_code=None, latency_ms=None, error_type="exhausted_retries")
     raise RuntimeError("Index Alpha API — semua retries gagal.")
 
@@ -390,17 +442,26 @@ class IndexAlphaFetcher:
             clean, trade_date, investor, market,
         )
 
+        # ── Resolve API key — record health even when key is missing ───
         try:
-            resp = _get("/stocks/broker-summary", params, self._key())
-        except Exception as exc:
+            key = self._key()
+        except EnvironmentError as exc:
+            _record_health(success=False, status_code=None, latency_ms=None, error_type="missing_key")
             logger.error("IndexAlpha fetch gagal untuk {} @ {}: {}", clean, trade_date, exc)
             return pd.DataFrame()
 
-        if not resp.get("success"):
-            err = resp.get("error") or "unknown error"
-            logger.warning("IndexAlpha response tidak sukses untuk {} @ {}: {}", clean, trade_date, err)
+        try:
+            resp = _get("/stocks/broker-summary", params, key)
+        except PermissionError as exc:
+            # 401/403 already recorded by _get() — just log and return empty
+            logger.error("IndexAlpha auth gagal untuk {} @ {}: {}", clean, trade_date, exc)
+            return pd.DataFrame()
+        except (RuntimeError, ConnectionError, TimeoutError) as exc:
+            logger.error("IndexAlpha fetch gagal untuk {} @ {}: {}", clean, trade_date, exc)
             return pd.DataFrame()
 
+        # Note: logical failure (success=false) already raises RuntimeError
+        # inside _get(), so this path is only reached on success.
         data = resp.get("data") or []
         df   = _normalize_response(data)
 
@@ -456,23 +517,33 @@ class IndexAlphaFetcher:
             clean, from_date, to_date, investor, market,
         )
 
+        # ── Resolve API key — record health even when key is missing ───
         try:
-            resp = _get("/stocks/broker-summary", params, self._key())
-        except Exception as exc:
+            key = self._key()
+        except EnvironmentError as exc:
+            _record_health(success=False, status_code=None, latency_ms=None, error_type="missing_key")
             logger.error(
                 "IndexAlpha fetch_range gagal untuk {} [{} → {}]: {}",
                 clean, from_date, to_date, exc,
             )
             return pd.DataFrame()
 
-        if not resp.get("success"):
-            err = resp.get("error") or "unknown error"
-            logger.warning(
-                "IndexAlpha response tidak sukses untuk {} [{} → {}]: {}",
-                clean, from_date, to_date, err,
+        try:
+            resp = _get("/stocks/broker-summary", params, key)
+        except PermissionError as exc:
+            logger.error(
+                "IndexAlpha auth gagal untuk {} [{} → {}]: {}",
+                clean, from_date, to_date, exc,
+            )
+            return pd.DataFrame()
+        except (RuntimeError, ConnectionError, TimeoutError) as exc:
+            logger.error(
+                "IndexAlpha fetch_range gagal untuk {} [{} → {}]: {}",
+                clean, from_date, to_date, exc,
             )
             return pd.DataFrame()
 
+        # Note: logical failure already raises RuntimeError in _get()
         data = resp.get("data") or []
         df   = _normalize_response(data)
 
@@ -502,17 +573,21 @@ class IndexAlphaFetcher:
             Empty dict jika gagal.
         """
         try:
-            resp = _get("/usage", {}, self._key())
-            if resp.get("success"):
-                usage = resp.get("data", {})
-                logger.info(
-                    "IndexAlpha usage: {}/{} used, {} remaining (reset: {})",
-                    usage.get("current_usage"),
-                    usage.get("monthly_limit"),
-                    usage.get("remaining"),
-                    usage.get("reset_date"),
-                )
-                return usage
+            key = self._key()
+        except EnvironmentError:
+            return {}
+
+        try:
+            resp = _get("/usage", {}, key)
+            usage = resp.get("data", {})
+            logger.info(
+                "IndexAlpha usage: {}/{} used, {} remaining (reset: {})",
+                usage.get("current_usage"),
+                usage.get("monthly_limit"),
+                usage.get("remaining"),
+                usage.get("reset_date"),
+            )
+            return usage
         except Exception as exc:
             logger.error("IndexAlpha check_usage gagal: {}", exc)
         return {}
