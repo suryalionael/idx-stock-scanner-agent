@@ -1395,6 +1395,13 @@ def _render_scalping_detail(row: pd.Series, scan_date: str, api_key: str | None)
 def render_swing_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | None,
                      signal_filter: list[str]) -> None:
     """Render the 🔄 Swing Trading tab content — refactored Today Overview."""
+    # ── Diagnostic marker: confirms the correct deploy commit is running ──
+    _branch_diag, _sha_diag = _git_commit_info()
+    st.caption(
+        f"🧪 DIAG_SWING_V2 · commit {_sha_diag} · scan_date={scan_date} "
+        f"· df_all.columns={list(df_all.columns)[:6]}…"
+    )
+
     st.markdown("### 🔄 Swing Trading — Setup Teknikal 3–10 Hari")
 
     # Signal distribution
@@ -1439,6 +1446,11 @@ def render_swing_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | None,
             if col in display.columns:
                 display[col] = display[col].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
 
+        st.caption(
+            f"🧪 DIAG_COLS: {list(display.columns)[:6]}…  "
+            f"top_buyer_sample={display['top_buyer'].iloc[0] if 'top_buyer' in display.columns and len(display) else 'N/A'}  "
+            f"top_seller_sample={display['top_seller'].iloc[0] if 'top_seller' in display.columns and len(display) else 'N/A'}"
+        )
         show_df(
             display,
             use_container_width=True, hide_index=True, height=320,

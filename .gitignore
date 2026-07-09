@@ -24,7 +24,9 @@ data/signals/
 data/ranked/
 data/news/
 data/foreign/
-data/broker/
+# data/broker/ sengaja TIDAK di-exclude — cache broker parquet harus di-track
+# agar Streamlit Cloud bisa membaca top_buyer/top_seller tanpa API call
+# data/broker/
 data/shareholders/
 data/fundamentals/
 data/reports/
