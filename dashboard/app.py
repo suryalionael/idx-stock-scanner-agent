@@ -1231,7 +1231,10 @@ def render_scalping_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | Non
         return
 
     # Table
-    tbl_cols = ["ticker", "scalping_score", "scalping_label", "scalping_reason",
+    from dashboard.data_loader import enrich_df_with_top_brokers
+    df_show = enrich_df_with_top_brokers(df_show, scan_date)
+    tbl_cols = ["ticker", "top_buyer", "top_seller",
+                "scalping_score", "scalping_label", "scalping_reason",
                 "close", "vol_ratio_20d", "roc5", "rsi14", "momentum_score",
                 "atr_breakout", "vol_spike", "entry_low", "entry_high", "tp_low", "cutloss"]
     disp_cols = [c for c in tbl_cols if c in df_show.columns]
@@ -1261,6 +1264,8 @@ def render_scalping_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | Non
         height=min(38 * len(tbl) + 40, 500),
         column_config={
             "ticker":          st.column_config.TextColumn("Ticker",         width="small"),
+            "top_buyer":       st.column_config.TextColumn("Top Buyer",      width="small"),
+            "top_seller":      st.column_config.TextColumn("Top Seller",     width="small"),
             "Status":          st.column_config.TextColumn("Status",         width="small"),
             "scalping_score":  st.column_config.TextColumn("Scalp Score",    width="small"),
             "scalping_label":  st.column_config.TextColumn("Label",          width="medium"),
@@ -1492,9 +1497,9 @@ def render_swing_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | None,
             display,
             use_container_width=True, hide_index=True, height=320,
             column_config={
-                "top_buyer":            st.column_config.TextColumn("Top Buyer",  width="small"),
-                "top_seller":           st.column_config.TextColumn("Top Seller", width="small"),
                 "ticker":               st.column_config.TextColumn("Ticker",      width="small"),
+                "top_buyer":            st.column_config.TextColumn("Top Buyer",   width="small"),
+                "top_seller":           st.column_config.TextColumn("Top Seller",  width="small"),
                 "signal":               st.column_config.TextColumn("Signal",      width="small"),
                 "total_score":          st.column_config.TextColumn("Score",       width="small"),
                 "enhanced_total_score": st.column_config.TextColumn("Enh.Score",  width="small"),
@@ -1580,8 +1585,11 @@ def render_longterm_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | Non
         return
 
     # Fundamental table
+    from dashboard.data_loader import enrich_df_with_top_brokers
+    df_lt_show = enrich_df_with_top_brokers(df_lt_show, scan_date)
     tbl_cols_lt = [
-        "ticker", "long_term_score", "long_term_label", "valuation_status",
+        "ticker", "top_buyer", "top_seller",
+        "long_term_score", "long_term_label", "valuation_status",
         "close", "pe_ratio", "pbv", "roe_pct", "der",
         "revenue_growth_pct", "profit_growth_pct", "div_yield_pct",
         "intrinsic_value", "margin_of_safety",
@@ -1610,6 +1618,8 @@ def render_longterm_tab(df_all: pd.DataFrame, scan_date: str, api_key: str | Non
         height=min(38 * len(tbl_lt) + 40, 520),
         column_config={
             "ticker":              st.column_config.TextColumn("Ticker",        width="small"),
+            "top_buyer":           st.column_config.TextColumn("Top Buyer",     width="small"),
+            "top_seller":          st.column_config.TextColumn("Top Seller",    width="small"),
             "long_term_score":     st.column_config.TextColumn("LT Score",      width="small"),
             "long_term_label":     st.column_config.TextColumn("Label",         width="medium"),
             "valuation_status":    st.column_config.TextColumn("Valuasi",       width="small"),
@@ -2374,6 +2384,8 @@ def render_smart_money_tab(df_all: pd.DataFrame, scan_date: str) -> None:
         return
 
     # ── Table ────────────────────────────────────────────────────────────
+    from dashboard.data_loader import enrich_df_with_top_brokers
+    show = enrich_df_with_top_brokers(show, scan_date)
     disp = show.copy()
     disp["close"] = disp["close"].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "—")
     disp["vol_ratio_20d"] = disp["vol_ratio_20d"].apply(
@@ -2384,7 +2396,8 @@ def render_smart_money_tab(df_all: pd.DataFrame, scan_date: str) -> None:
     disp["fundamental_score"] = disp["fundamental_score"].apply(
         lambda x: f"{int(x)}" if pd.notna(x) else "—")
 
-    cols = ["ticker", "smart_money_label", "smart_money_pillars", "close",
+    cols = ["ticker", "top_buyer", "top_seller",
+            "smart_money_label", "smart_money_pillars", "close",
             "volume_accum", "vol_ratio_20d", "roc20", "ownership",
             "broker_absorption", "absorb_broker", "absorb_share",
             "hidden_accum", "fundamental_grade", "fundamental_score"]
@@ -2393,6 +2406,8 @@ def render_smart_money_tab(df_all: pd.DataFrame, scan_date: str) -> None:
         height=min(40 * len(disp) + 44, 560),
         column_config={
             "ticker": st.column_config.TextColumn("Ticker", width="small"),
+            "top_buyer": st.column_config.TextColumn("Top Buyer", width="small"),
+            "top_seller": st.column_config.TextColumn("Top Seller", width="small"),
             "smart_money_label": st.column_config.TextColumn("Kandidat", width="medium"),
             "smart_money_pillars": st.column_config.NumberColumn("Pillar", width="small"),
             "close": st.column_config.TextColumn("Close", width="small"),
