@@ -112,6 +112,45 @@ CREATE TABLE IF NOT EXISTS daily_movers (
 CREATE INDEX IF NOT EXISTS idx_daily_movers_date ON daily_movers(trade_date);
 
 -- ---------------------------------------------------------------------------
+-- Top signals >10% (non-production, standalone daily persistence — see
+-- stock_scanner/pipeline/top_signals.py, scripts/build_top_signals.py).
+-- Deliberately NOT the knowledge_base table (Learning Agent Phase 1) — this
+-- is a plain filtered/ranked mirror of already-evaluated signal outcomes,
+-- with no hypothesis-generation or LLM step. Not read by signal_engine.py,
+-- ml_ranker.py, or any promotion path. signal_id is deterministic
+-- (stock_scanner.db.init_db.signal_id) but there is NO foreign key to
+-- signals(signal_id) — this table is built directly and independently from
+-- the always-committed data/performance/signal_results.csv, so it never
+-- depends on the signals/outcomes tables being populated first.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS top_signals (
+    signal_id               TEXT PRIMARY KEY,
+    ticker                  TEXT NOT NULL,
+    strategy                TEXT NOT NULL,
+    signal_date             DATE NOT NULL,
+    eval_date               DATE NOT NULL,
+    signal_label            TEXT,
+    prev_close              REAL,
+    eval_close              REAL,
+    eval_high               REAL,
+    pct_close               REAL,
+    pct_high                REAL,
+    forward_return_pct      REAL NOT NULL,
+    quality_adjusted_score  REAL,
+    total_score             REAL,
+    enhanced_total_score    REAL,
+    ml_prob                 REAL,
+    quality_source          TEXT NOT NULL DEFAULT 'unavailable',
+    rank_in_day             INTEGER NOT NULL,
+    filter_threshold_pct    REAL NOT NULL DEFAULT 10.0,
+    source_run_id           TEXT,
+    computed_at             TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_top_signals_eval_date ON top_signals(eval_date);
+CREATE INDEX IF NOT EXISTS idx_top_signals_return    ON top_signals(forward_return_pct DESC);
+
+-- ---------------------------------------------------------------------------
 -- Model lifecycle
 -- ---------------------------------------------------------------------------
 
