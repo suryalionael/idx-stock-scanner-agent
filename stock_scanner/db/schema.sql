@@ -132,3 +132,31 @@ CREATE TABLE IF NOT EXISTS live_monitoring (
     feature_drift_flag              INTEGER,
     alert_triggered                 INTEGER
 );
+
+-- ---------------------------------------------------------------------------
+-- Learning Agent (research-only — see docs/LEARNING_AGENT_ARCHITECTURE.md)
+-- ---------------------------------------------------------------------------
+
+-- LLM-articulated hypotheses over statistically-gated, de-duplicated
+-- pattern clusters (stock_scanner.learning.pattern_miner / pattern_dedup).
+-- Read-only research output: nothing in stock_scanner/pipeline/ reads this
+-- table, and status never leaves 'candidate' automatically — promotion to
+-- production still requires a human running scripts/train_challenger.py +
+-- scripts/promote_challenger.py, unchanged.
+CREATE TABLE IF NOT EXISTS knowledge_base (
+    hypothesis_id           TEXT PRIMARY KEY,   -- sha1(hypothesis || generated_at)
+    generated_at             TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    hypothesis               TEXT NOT NULL,
+    confidence               REAL,               -- LLM's qualitative framing, NOT a p-value
+    supporting_trades        INTEGER,
+    affected_sector          TEXT,
+    affected_dimension       TEXT,
+    pattern_json             TEXT NOT NULL,       -- source ClusteredPattern, full audit trail
+    expected_effect          TEXT,
+    status                   TEXT NOT NULL DEFAULT 'candidate',
+        -- 'candidate' | 'reviewed' | 'testing' | 'tested_passed' | 'tested_failed' | 'promoted' | 'archived'
+    reviewed_by              TEXT,
+    linked_model_version_id  TEXT REFERENCES model_registry(model_version_id),
+    source_run_id            TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_base_status ON knowledge_base(status);
