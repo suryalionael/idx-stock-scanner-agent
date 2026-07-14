@@ -47,6 +47,16 @@ _REMOTE_KNOWLEDGE_BASE_URL = os.environ.get(
 )
 _LOCAL_KNOWLEDGE_BASE_PATH = Path(__file__).parent.parent / "data" / "published" / "knowledge_base.json"
 
+# Daily movers >10% mirror — read-only, standalone feature. Same
+# remote-then-local pattern; never reads data/db/signals.db directly (also
+# gitignored, absent on Streamlit Cloud). See
+# stock_scanner/db/daily_movers.py / scripts/build_daily_movers.py.
+_REMOTE_DAILY_MOVERS_URL = os.environ.get(
+    "REMOTE_DAILY_MOVERS_URL",
+    "https://raw.githubusercontent.com/suryalionael/idx-stock-scanner-agent/main/data/published/daily_movers.json",
+)
+_LOCAL_DAILY_MOVERS_PATH = Path(__file__).parent.parent / "data" / "published" / "daily_movers.json"
+
 # Marker string yang menandakan URL belum dikonfigurasi dengan benar
 _URL_PLACEHOLDERS = ("PLACEHOLDER_USER", "PLACEHOLDER_REPO", "<username>", "<user>", "<repo>")
 
@@ -1183,6 +1193,66 @@ def _load_local_knowledge_base() -> dict:
     except Exception as exc:
         print(f"[data_loader] ERROR: Gagal baca knowledge_base lokal: {exc}", file=sys.stderr)
         return {"knowledge_base": []}
+
+
+def load_daily_movers_payload(url: str | None = None) -> dict:
+    """Load the daily movers >10% mirror — read-only, standalone feature.
+    Same remote-then-local pattern as load_knowledge_base_payload(). Returns
+    {"rows": [], "summary": {}} (not an exception) if neither source is
+    available — the workflow may simply not have run yet."""
+    import json
+    import sys
+    import urllib.request
+
+    target_url = url or _REMOTE_DAILY_MOVERS_URL
+
+    if any(p in target_url for p in _URL_PLACEHOLDERS):
+        return _load_local_daily_movers()
+
+    try:
+        with urllib.request.urlopen(target_url, timeout=10) as resp:
+            raw = resp.read().decode("utf-8")
+        payload = json.loads(raw)
+        print(
+            f"[data_loader] INFO: Remote daily_movers loaded dari {target_url} "
+            f"({len(payload.get('rows', []))} rows)",
+            file=sys.stderr,
+        )
+        return payload
+    except Exception as exc:
+        print(
+            f"[data_loader] WARNING: Gagal load remote daily_movers dari {target_url}: {exc} "
+            f"— mencoba file lokal.",
+            file=sys.stderr,
+        )
+
+    return _load_local_daily_movers()
+
+
+def _load_local_daily_movers() -> dict:
+    import json
+    import sys
+
+    if not _LOCAL_DAILY_MOVERS_PATH.exists():
+        print(
+            f"[data_loader] INFO: daily_movers.json tidak ditemukan secara lokal "
+            f"({_LOCAL_DAILY_MOVERS_PATH}) — build_daily_movers.py mungkin belum pernah dijalankan.",
+            file=sys.stderr,
+        )
+        return {"rows": [], "summary": {}}
+
+    try:
+        with open(_LOCAL_DAILY_MOVERS_PATH, encoding="utf-8") as f:
+            payload = json.load(f)
+        print(
+            f"[data_loader] INFO: Local daily_movers loaded "
+            f"({len(payload.get('rows', []))} rows)",
+            file=sys.stderr,
+        )
+        return payload
+    except Exception as exc:
+        print(f"[data_loader] ERROR: Gagal baca daily_movers lokal: {exc}", file=sys.stderr)
+        return {"rows": [], "summary": {}}
 
 
 def df_from_published_payload(payload: dict) -> pd.DataFrame:

@@ -1,0 +1,88 @@
+name: Daily Movers >10% (standalone, non-production)
+
+# Standalone feature — does NOT touch signal_engine.py, scanner_config.yaml,
+# ml_ranker.py, or any promotion path, and is not read by scan.yml / the live
+# morning scan. See stock_scanner/pipeline/daily_movers.py,
+# stock_scanner/db/daily_movers.py, scripts/build_daily_movers.py.
+#
+# Timezone: GitHub cron is UTC. WIB = UTC+7. IDX closes ~15:50 WIB, so run
+# comfortably after close: 16:30 WIB = 09:30 UTC, Mon-Fri WIB == Mon-Fri UTC
+# for this afternoon time (no day-boundary crossing like the pre-market
+# scan.yml has).
+on:
+  schedule:
+    - cron: "30 9 * * 1-5"   # 16:30 WIB, Mon-Fri
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Target trade date YYYY-MM-DD (default: last IDX trading day)"
+        required: false
+        default: ""
+
+concurrency:
+  group: daily-movers
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build daily movers table + publish artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Needed to push the refreshed published artifact back to main.
+    permissions:
+      contents: write
+    env:
+      TZ: Asia/Jakarta
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      # Only needs yfinance + pandas/loguru (already in the base deps) — no
+      # need for the full scanner extras (ta/xgboost/scikit-learn/anthropic).
+      - name: Install dependencies
+        run: pip install -e ".[scanner]"
+
+      # idx_universe.csv is gitignored (private watchlist) → recreate from secret,
+      # same pattern as scan.yml.
+      - name: Write universe file from secret
+        env:
+          IDX_UNIVERSE_CSV: ${{ secrets.IDX_UNIVERSE_CSV }}
+        run: |
+          mkdir -p stock_scanner/configs
+          printf '%s\n' "$IDX_UNIVERSE_CSV" > stock_scanner/configs/idx_universe.csv
+          rows=$(grep -cve '^[[:space:]]*$' stock_scanner/configs/idx_universe.csv || true)
+          echo "Universe rows written: $rows"
+          if [ "$rows" -lt 2 ]; then
+            echo "::error::IDX_UNIVERSE_CSV secret is empty or unset."
+            exit 1
+          fi
+
+      - name: Build daily movers
+        run: |
+          if [ -n "${{ github.event.inputs.date }}" ]; then
+            python scripts/build_daily_movers.py --date "${{ github.event.inputs.date }}"
+          else
+            python scripts/build_daily_movers.py
+          fi
+
+      # Publish the refreshed artifact back to main — same commit pattern as
+      # scan.yml/promote_challenger.yml.
+      - name: Publish daily_movers.json to main
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/published/daily_movers.json || true
+          if git diff --cached --quiet; then
+            echo "No daily movers changes to publish."
+          else
+            git commit -m "data: refresh daily_movers.json ($(date +%F)) [skip ci]"
+            git push origin HEAD:main
+            echo "Published refreshed daily_movers.json to main."
+          fi
