@@ -1,0 +1,12 @@
+{
+  "as_of_date": null,
+  "filter_rule": "forward_return_pct > 0.10 (pct_close / 100, strict)",
+  "rank_method": "eval_date cohort: forward_return_pct desc, quality_adjusted_score desc (nulls last), ticker asc",
+  "generated_at": "2026-07-14T05:20:45.069756+00:00",
+  "summary": {
+    "total_rows": 0,
+    "distinct_dates": 0,
+    "quality_enriched_count": 0
+  },
+  "rows": []
+}

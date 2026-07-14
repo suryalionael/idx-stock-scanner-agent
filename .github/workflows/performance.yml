@@ -74,6 +74,17 @@ jobs:
       - name: Build successful_signal_list.xlsx (>10% signals)
         run: python scripts/build_successful_signal_list.py
 
+      # Standalone daily persistence (NOT the knowledge_base / Learning Agent
+      # Phase 1 table): filters today's freshly-evaluated signal_results.csv
+      # to forward_return_pct > 10%, ranks by return + quality-adjusted score
+      # (best-effort — degrades gracefully to return-only ranking if no
+      # ranked CSV / promoted-model score is available that day), and
+      # UPSERTs into a local SQLite table. Self-contained — reads only the
+      # already-committed signal_results.csv, so it never depends on
+      # data/db/signals.db or the self-improving-system sync step below.
+      - name: Build top signals (>10%) table + JSON mirror
+        run: python scripts/build_top_signals.py
+
       # Self-improving-system loop (docs/SELF_IMPROVING_ARCHITECTURE.md):
       # sync today's freshly-evaluated outcomes into the SQLite mirror, then
       # run the alert-only daily drift check. Never retrains or promotes —
@@ -109,7 +120,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/performance/ data/published/model_registry.json || true
+          git add data/performance/ data/published/model_registry.json data/published/top_signals.json || true
           if git diff --cached --quiet; then
             echo "No performance changes to publish."
           else
