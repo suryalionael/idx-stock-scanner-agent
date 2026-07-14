@@ -43,6 +43,7 @@ scanner = [
     "httpx>=0.27",            # AI Lab: async 9router client (stock_scanner/ai_lab/client.py)
     "pydantic>=2.6",          # AI Lab: structured LLM I/O validation (stock_scanner/ai_lab/schemas.py)
     "tenacity>=8.2",          # AI Lab: retry/backoff for 9router calls
+    "python-dotenv>=1.0",     # AI Lab: load NINEROUTER_* from a local .env (never committed)
 ]
 # Install lokal dengan dashboard: pip install -e ".[dashboard]"
 dashboard = [
@@ -62,6 +63,7 @@ all = [
     "httpx>=0.27",
     "pydantic>=2.6",
     "tenacity>=8.2",
+    "python-dotenv>=1.0",
 ]
 dev = [
     "pytest>=8.0",

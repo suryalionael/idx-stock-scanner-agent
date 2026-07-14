@@ -14,6 +14,15 @@ NINEROUTER_API_KEY/_MODEL/_BASE_URL is unset this client raises
 immediately and loudly rather than guessing, the same fail-fast contract
 as the existing Learning Agent stub.
 
+`.env` (repo root, gitignored — see .gitignore's `.env`/`*.env` entries) is
+the single source of truth for local runs: `NineRouterClient.__init__`
+calls `load_dotenv()` before reading any NINEROUTER_* variable, so
+`scripts/run_ai_lab.py` (or any other caller) never needs to remember to
+`source .env` first. `load_dotenv()` never overrides a variable that's
+already set in the process environment (its default `override=False`), so
+real CI secrets (e.g. injected via GitHub Actions) still win over a stray
+local `.env` if both happen to be present.
+
 Never parses free-form text: every call must produce a JSON object that
 validates against a Pydantic schema (see schemas.py), or the call is
 retried and ultimately raised as NineRouterResponseError — there is no
@@ -26,6 +35,7 @@ import os
 from typing import TypeVar
 
 import httpx
+from dotenv import load_dotenv
 from loguru import logger
 from pydantic import BaseModel, ValidationError
 from tenacity import (
@@ -57,7 +67,10 @@ class NineRouterClient:
 
     Configuration (env vars only; `Do not hardcode the API key or model
     anywhere in the code` per project policy — this applies to base_url
-    too, since a wrong hardcoded host is a real credential-leak risk):
+    too, since a wrong hardcoded host is a real credential-leak risk).
+    `.env` at the repo root (gitignored) is loaded automatically via
+    load_dotenv() before these are read, so a local run needs nothing more
+    than a `.env` file with the three lines below — no `source .env` step:
         NINEROUTER_API_KEY   — required
         NINEROUTER_MODEL     — required
         NINEROUTER_BASE_URL  — required, e.g. "https://<host>/v1"
@@ -72,6 +85,12 @@ class NineRouterClient:
         max_retries: int = _DEFAULT_MAX_RETRIES,
         retry_wait_seconds: tuple[float, float] = (1.0, 10.0),
     ):
+        # .env is the single source of truth for local runs — load it before
+        # reading any NINEROUTER_* var. Never overrides a variable already
+        # set in the process environment (default override=False), so real
+        # CI secrets still win over a stray local .env.
+        load_dotenv()
+
         self.api_key = api_key or os.environ.get("NINEROUTER_API_KEY")
         self.model = model or os.environ.get("NINEROUTER_MODEL")
         self.base_url = (base_url or os.environ.get("NINEROUTER_BASE_URL") or "").rstrip("/")
@@ -112,7 +131,7 @@ class NineRouterClient:
                 reraise=True,
             ):
                 with attempt:
-                    raw_content = await self._call(prompt, system)
+                    raw_content = await self._call(prompt, response_model, system)
                     return self._parse(raw_content, response_model)
         except (httpx.HTTPError, NineRouterResponseError) as exc:
             last_error = exc
@@ -120,7 +139,7 @@ class NineRouterClient:
             f"9router call failed after {self.max_retries} attempt(s): {last_error}"
         ) from last_error
 
-    async def _call(self, prompt: str, system: str | None) -> str:
+    async def _call(self, prompt: str, response_model: type[T], system: str | None) -> str:
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -129,7 +148,20 @@ class NineRouterClient:
         payload = {
             "model": self.model,
             "messages": messages,
-            "response_format": {"type": "json_object"},
+            # json_schema, not json_object: at least one 9router-routed
+            # provider (Novita, serving tencent/hy3) rejects json_object
+            # with "does not support 'json_object' response format.
+            # Supported formats: json_schema" — verified against the live
+            # endpoint. json_schema is also the stricter, more portable
+            # OpenAI-compatible option, built directly from the Pydantic
+            # model so the two can never drift apart.
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": response_model.__name__,
+                    "schema": response_model.model_json_schema(),
+                },
+            },
         }
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -141,7 +173,20 @@ class NineRouterClient:
                 f"{self.base_url}/chat/completions", json=payload, headers=headers,
             )
             response.raise_for_status()
-            data = response.json()
+            # Not response.json(): verified live against this endpoint that
+            # a long/complex response body can contain a complete, valid
+            # top-level JSON object followed by trailing extra bytes (json
+            # raised "Extra data" at a later offset — a server/proxy-side
+            # quirk, not something this client can prevent). raw_decode
+            # parses only the first complete JSON value and deliberately
+            # ignores whatever comes after it, which is the correct
+            # response either way. A body that isn't valid JSON at all
+            # still raises — surfaced as NineRouterResponseError below,
+            # never propagated as an uncaught crash.
+            try:
+                data, _ = json.JSONDecoder().raw_decode(response.text)
+            except json.JSONDecodeError as exc:
+                raise NineRouterResponseError(f"9router response body was not valid JSON: {exc}") from exc
 
         try:
             return data["choices"][0]["message"]["content"]
