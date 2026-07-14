@@ -123,7 +123,9 @@ def _render_recommendations_section(df: pd.DataFrame, available_models: list[str
 
     display = filtered.copy()
     display["confidence"] = (display["confidence"] * 100).round(1).astype(str) + "%"
-    display["expected_return"] = (display["expected_return"] * 100).round(2).astype(str) + "%"
+    display["expected_return"] = display["expected_return"].apply(
+        lambda v: f"{v * 100:.2f}%" if v is not None and pd.notna(v) else "N/A (insufficient data)"
+    )
     display["generated_time"] = display["created_at"].dt.strftime("%Y-%m-%d %H:%M UTC")
     display_cols = {
         "rank": "Rank", "ticker": "Ticker", "score": "AI Score", "confidence": "Confidence",
@@ -149,7 +151,7 @@ def _render_detail(row: pd.Series) -> None:
     with col_why:
         st.markdown(f"**🤖 Why {row['ticker']} was selected ({row['ai_model']})**")
         st.markdown(f"> {reasoning.get('why', '—')}")
-        st.caption(f"Confidence: {row['confidence']:.0%} — {reasoning.get('confidence_explanation', '—')}")
+        st.caption(reasoning.get("reasoning_summary", "—"))
 
         strengths = reasoning.get("strengths") or []
         weaknesses = reasoning.get("weaknesses") or []
@@ -173,14 +175,78 @@ def _render_detail(row: pd.Series) -> None:
         stats = reasoning.get("statistical_evidence") or []
         patterns = reasoning.get("similar_patterns") or []
         if stats:
-            st.markdown("**Statistical evidence (validated knowledge_base patterns):**")
+            st.markdown("**Statistical evidence (validated knowledge_base patterns, exact matches):**")
             st.dataframe(pd.DataFrame(stats), use_container_width=True, hide_index=True)
         else:
-            st.caption("No matching validated pattern found for this ticker at generation time.")
+            st.caption("No exactly-matching validated pattern found for this ticker at generation time.")
         if patterns:
             st.caption("Similar historical patterns: " + "; ".join(patterns))
+        similarity = reasoning.get("best_pattern_similarity_pct")
+        if similarity is not None:
+            st.caption(f"Closest known pattern similarity (partial match, any pattern): {similarity:.1f}%")
 
-    st.caption(f"Reasoning summary: {reasoning.get('reasoning_summary', '—')}")
+    st.divider()
+    _render_decision_trace(row)
+    st.divider()
+    _render_historical_comparison(row)
+
+
+def _render_decision_trace(row: pd.Series) -> None:
+    """Section 1 of the explainability upgrade: the AI Score/confidence are
+    never shown as a single unexplained number — always alongside the
+    component scores they were computed from (see
+    stock_scanner.ai_lab.scoring)."""
+    trace = row.get("decision_trace") or {}
+    confidence = row.get("confidence_breakdown") or {}
+
+    st.markdown("**🔍 Decision Trace** — how the AI Score was derived")
+    if trace:
+        cols = st.columns(5)
+        cols[0].metric("Technical", f"{trace.get('technical_score', 0):.0f}")
+        cols[1].metric("Statistical", f"{trace.get('statistical_score', 0):.0f}")
+        cols[2].metric("Pattern Similarity", f"{trace.get('pattern_similarity_score', 0):.0f}")
+        cols[3].metric("Risk", f"{trace.get('risk_score', 0):.0f}")
+        cols[4].metric("Final Score", f"{trace.get('final_score', 0):.0f}")
+    else:
+        st.caption("No decision trace recorded for this recommendation.")
+
+    st.markdown("**Confidence Breakdown**")
+    if confidence:
+        cols = st.columns(5)
+        cols[0].metric("Technical", f"{confidence.get('technical', 0):.0%}")
+        cols[1].metric("Statistical", f"{confidence.get('statistical', 0):.0%}")
+        cols[2].metric("Pattern Similarity", f"{confidence.get('pattern_similarity', 0):.0%}")
+        cols[3].metric("Risk Adjustment", f"{confidence.get('risk_adjustment', 0):+.0%}")
+        cols[4].metric("Final Confidence", f"{confidence.get('final_confidence', 0):.0%}")
+        st.caption((row.get("reasoning") or {}).get("confidence_explanation", "—"))
+    else:
+        st.caption("No confidence breakdown recorded for this recommendation.")
+
+
+def _render_historical_comparison(row: pd.Series) -> None:
+    """Section 7 of the explainability upgrade: compare the current setup
+    against the closest validated historical pattern, code-computed stats
+    + an LLM explanation constrained to those exact numbers."""
+    comparison = row.get("historical_comparison") or {}
+    st.markdown("**📐 Historical Pattern Comparison**")
+    if not comparison or comparison.get("verdict") == "no_data" or comparison.get("sample_size") is None:
+        st.caption("No validated historical pattern matches this ticker's current setup.")
+        return
+
+    cols = st.columns(4)
+    cols[0].metric("Sample Size", comparison.get("sample_size"))
+    win_rate = comparison.get("win_rate")
+    cols[1].metric("Win Rate", f"{win_rate:.1%}" if win_rate is not None else "—")
+    ci_lower, ci_upper = comparison.get("ci_lower"), comparison.get("ci_upper")
+    cols[2].metric(
+        "95% CI",
+        f"{ci_lower:.1%}–{ci_upper:.1%}" if ci_lower is not None and ci_upper is not None else "—",
+    )
+    verdict_labels = {"stronger": "🟢 Stronger", "weaker": "🔴 Weaker", "similar": "🟡 Similar"}
+    cols[3].metric("Verdict", verdict_labels.get(comparison.get("verdict"), "—"))
+    if comparison.get("pattern_description"):
+        st.caption(f"Matched pattern: {comparison['pattern_description']}")
+    st.caption(comparison.get("explanation", "—"))
 
 
 # ---------------------------------------------------------------------------

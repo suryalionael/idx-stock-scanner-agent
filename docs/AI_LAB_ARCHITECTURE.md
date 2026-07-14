@@ -1,12 +1,58 @@
 # AI Lab — Architecture
 
-**Status:** storage + agents + client + dashboard scaffold implemented and tested.
-**Not yet done:** 9router's real base URL / auth scheme / request-response shape are
-unconfirmed (see "9router configuration status" below), and there is no scheduled
-GitHub Actions workflow — `scripts/run_ai_lab.py` is manual-only. Both are deliberate
-follow-ups, not oversights — see "What's phased for later."
+**Status:** storage + agents + client + dashboard implemented, tested, and verified
+end-to-end against the live 9router endpoint (base URL/auth/request format confirmed
+— see "9router configuration status"). Explainability upgrade (decision trace,
+confidence breakdown, historical comparison, rule-based recommendation levels — see
+"Explainability upgrade" below) is live.
+**Not yet done:** no scheduled GitHub Actions workflow — `scripts/run_ai_lab.py` is
+manual-only. A deliberate follow-up, not an oversight — see "What's phased for later."
 
 ---
+
+## Explainability upgrade
+
+The AI Score, confidence, recommendation level, risk level, and expected return are
+**never LLM-generated** — all computed deterministically in
+`stock_scanner/ai_lab/scoring.py` from Evidence before either LLM call happens. The
+LLM's role is narrowed to pure narrative: explaining, in prose, numbers it did not
+produce and cannot change. Same evidence in -> same numbers out, always.
+
+- **`DecisionTrace`** (`technical_score`, `statistical_score`,
+  `pattern_similarity_score`, `risk_score`, `final_score`, all 0-100): `technical_score`
+  reuses the production scanner's own `trend_score`/`momentum_score`/`breakout_score`/
+  `volume_score` (already computed and tuned in `signal_engine.py`) wherever a persona
+  has a direct equivalent — only `reversal_ai` gets a dedicated formula, since the
+  scanner has no reversal-setup concept. `statistical_score` is the mean
+  `win_rate_shrunk` of exactly-matched `knowledge_base` patterns (0, not a neutral 50,
+  when nothing matches). `risk_score` reuses `quality_filters.py`'s own `is_uma`/
+  `is_special_monitoring`/`quality_penalty_total` flags plus ATR volatility.
+  `final_score` is a documented weighted blend (technical 35%, statistical 35%,
+  pattern_similarity 15%, risk 15% as a penalty) — see `scoring.WEIGHTS`.
+- **`ConfidenceBreakdown`** — the same four components rescaled to 0-1, with
+  `risk_adjustment` always <= 0 (explicit penalty, never a bonus).
+- **`RecommendationLevel`** (`STRONG_BUY`/`BUY`/`WATCH`/`AVOID`, replacing the old
+  `BUY`/`WATCH`/`SELL`/`AVOID`) and **`RiskLevel`** are both rule-based threshold
+  classifiers over the trace/confidence (`scoring.classify_recommendation_level`/
+  `classify_risk_level`) — never an LLM judgment call, so reproducible by construction.
+- **`expected_return`** is always `null`: `knowledge_base` pattern stats carry win/loss
+  *rate*, not return *magnitude*, so any number here would be an estimate dressed up as
+  data. Kept as a field for a future evidence source that does carry magnitude data.
+- **`HistoricalComparison`** — sample_size/win_rate/CI/verdict (stronger/weaker/
+  similar/no_data) are code-computed; only the one-sentence `explanation` is an LLM
+  call constrained to those exact numbers.
+- **`generate_evidence_highlights()`** — a rule-based pool of grounded candidate
+  strengths/weaknesses/risks (e.g. "Strong ADX (50.4) confirms high trend strength").
+  The Hypothesis Agent may only select/rephrase from this pool, never invent; if it
+  returns an empty list, `decision_agent.assemble_recommendation` falls back to the
+  candidates directly, so the dashboard is never left with empty arrays when grounded
+  observations exist.
+
+Verified live: `docs/AI_LAB_ARCHITECTURE.md`'s claims above were checked against a real
+9router response (BAPA.JK/momentum_ai) — the reasoning text correctly cited the exact
+supplied numbers (ADX 50.4, win rate 13.04%, n=115) and explained *why* bullish
+technicals were being overridden by weak historical evidence into a conservative WATCH,
+matching the "Better Reasoning" requirement almost verbatim.
 
 ## Why this exists, and what it is not
 

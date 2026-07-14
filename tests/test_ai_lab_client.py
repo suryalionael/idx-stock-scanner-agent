@@ -19,12 +19,7 @@ from stock_scanner.ai_lab.client import (
     NineRouterConfigError,
     NineRouterResponseError,
 )
-from stock_scanner.ai_lab.schemas import (
-    DecisionOutput,
-    HypothesisOutput,
-    RecommendationAction,
-    RiskLevel,
-)
+from stock_scanner.ai_lab.schemas import DecisionOutput, HypothesisOutput
 
 _FAST_RETRY = (0.001, 0.005)  # keep test runtime negligible
 
@@ -39,8 +34,7 @@ def _client(**kwargs) -> NineRouterClient:
 
 def _valid_hypothesis_json() -> str:
     return json.dumps({
-        "why": "test", "confidence": 0.8, "confidence_explanation": "test",
-        "strengths": ["a"], "weaknesses": ["b"], "risks": ["c"],
+        "why": "test", "strengths": ["a"], "weaknesses": ["b"], "risks": ["c"],
     })
 
 
@@ -163,7 +157,7 @@ def test_complete_structured_success():
     client._call = AsyncMock(return_value=_valid_hypothesis_json())
     result = asyncio.run(client.complete_structured("prompt", HypothesisOutput))
     assert isinstance(result, HypothesisOutput)
-    assert result.confidence == 0.8
+    assert result.why == "test"
 
 
 def test_complete_structured_retries_on_bad_json_then_succeeds():
@@ -301,13 +295,13 @@ def test_mock_client_default_decision_output():
     client = MockNineRouterClient()
     result = asyncio.run(client.complete_structured("prompt", DecisionOutput))
     assert isinstance(result, DecisionOutput)
-    assert result.recommendation == RecommendationAction.WATCH
+    assert result.reasoning_summary
 
 
 def test_mock_client_custom_response():
     custom = DecisionOutput(
-        score=99.0, confidence=0.99, recommendation=RecommendationAction.BUY,
-        expected_return=0.2, risk_level=RiskLevel.LOW, reasoning_summary="custom",
+        reasoning_summary="custom", historical_comparison_explanation="custom",
+        confidence_explanation="custom",
     )
     client = MockNineRouterClient(responses={"DecisionOutput": custom})
     result = asyncio.run(client.complete_structured("prompt", DecisionOutput))

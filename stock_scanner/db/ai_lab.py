@@ -27,9 +27,11 @@ _EVENTS_MIRROR_PATH = Path(__file__).parent.parent.parent / "data" / "published"
 
 _REC_COLS = [
     "id", "ticker", "ai_model", "score", "confidence", "recommendation", "reasoning",
+    "decision_trace", "confidence_breakdown", "historical_comparison",
     "expected_return", "risk_level", "generated_date", "created_at", "updated_at",
     "status", "entry_price", "exit_price", "return_percentage", "model",
 ]
+_JSON_COLS = ("reasoning", "decision_trace", "confidence_breakdown", "historical_comparison")
 _EVENT_COLS = ["event_id", "ai_model", "event_type", "description", "metadata_json", "created_at"]
 
 VALID_STATUSES = {s.value for s in RecommendationStatus}
@@ -58,17 +60,23 @@ def upsert_recommendations(conn: sqlite3.Connection, recommendations: list[AIRec
         cur.execute(
             """INSERT INTO ai_recommendations
                (id, ticker, ai_model, score, confidence, recommendation, reasoning,
+                decision_trace, confidence_breakdown, historical_comparison,
                 expected_return, risk_level, generated_date, created_at, updated_at,
                 status, entry_price, exit_price, return_percentage, model)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                  score=excluded.score, confidence=excluded.confidence,
                  recommendation=excluded.recommendation, reasoning=excluded.reasoning,
+                 decision_trace=excluded.decision_trace,
+                 confidence_breakdown=excluded.confidence_breakdown,
+                 historical_comparison=excluded.historical_comparison,
                  expected_return=excluded.expected_return, risk_level=excluded.risk_level,
                  model=excluded.model, updated_at=excluded.updated_at""",
             (
                 rec.id, rec.ticker, rec.ai_model, rec.score, rec.confidence,
                 rec.recommendation.value, json.dumps(rec.reasoning),
+                rec.decision_trace.model_dump_json(), rec.confidence_breakdown.model_dump_json(),
+                rec.historical_comparison.model_dump_json(),
                 rec.expected_return, rec.risk_level.value if rec.risk_level else None,
                 rec.generated_date, now, now, rec.status.value,
                 rec.entry_price, rec.exit_price, rec.return_percentage, rec.model,
@@ -136,7 +144,8 @@ def export_ai_recommendations(conn: sqlite3.Connection, path: Path | None = None
         ).fetchall()
     ]
     for row in rows:
-        row["reasoning"] = json.loads(row["reasoning"]) if row["reasoning"] else {}
+        for col in _JSON_COLS:
+            row[col] = json.loads(row[col]) if row[col] else {}
 
     distinct_dates = sorted({row["generated_date"] for row in rows}, reverse=True)
     status_counts: dict[str, int] = {}
@@ -167,7 +176,8 @@ def import_ai_recommendations(conn: sqlite3.Connection, path: Path | None = None
     n = 0
     for row in data.get("rows", []):
         row = dict(row)
-        row["reasoning"] = json.dumps(row.get("reasoning") or {})
+        for col in _JSON_COLS:
+            row[col] = json.dumps(row.get(col) or {})
         cur.execute(
             f"""INSERT OR IGNORE INTO ai_recommendations ({",".join(_REC_COLS)})
                 VALUES ({",".join("?" * len(_REC_COLS))})""",

@@ -7,7 +7,11 @@ import pytest
 
 from stock_scanner.ai_lab.schemas import (
     AIRecommendation,
-    RecommendationAction,
+    ConfidenceBreakdown,
+    DecisionTrace,
+    HistoricalComparison,
+    HistoricalComparisonVerdict,
+    RecommendationLevel,
     RecommendationStatus,
     RiskLevel,
 )
@@ -31,12 +35,35 @@ def _conn() -> sqlite3.Connection:
     return conn
 
 
+def _trace(**overrides) -> DecisionTrace:
+    base = dict(technical_score=80.0, statistical_score=20.0, pattern_similarity_score=90.0,
+                risk_score=60.0, final_score=55.0)
+    base.update(overrides)
+    return DecisionTrace(**base)
+
+
+def _confidence(**overrides) -> ConfidenceBreakdown:
+    base = dict(technical=0.8, statistical=0.2, pattern_similarity=0.9,
+                risk_adjustment=-0.18, final_confidence=0.45)
+    base.update(overrides)
+    return ConfidenceBreakdown(**base)
+
+
+def _comparison(**overrides) -> HistoricalComparison:
+    base = dict(pattern_description="MA Alignment + ATR Breakout", sample_size=115, win_rate=0.13,
+                ci_lower=0.081, ci_upper=0.187, verdict=HistoricalComparisonVerdict.SIMILAR,
+                explanation="test")
+    base.update(overrides)
+    return HistoricalComparison(**base)
+
+
 def _rec(**overrides) -> AIRecommendation:
     base = dict(
-        id="rec1", ticker="BBCA.JK", ai_model="momentum_ai", score=90.0, confidence=0.85,
-        recommendation=RecommendationAction.BUY, reasoning={"why": "test"},
-        expected_return=0.1, risk_level=RiskLevel.MEDIUM, generated_date="2026-07-14",
-        status=RecommendationStatus.PENDING, model="deepseek-v4-flash-free",
+        id="rec1", ticker="BBCA.JK", ai_model="momentum_ai", score=55.0, confidence=0.45,
+        recommendation=RecommendationLevel.WATCH, reasoning={"why": "test"},
+        decision_trace=_trace(), confidence_breakdown=_confidence(), historical_comparison=_comparison(),
+        expected_return=None, risk_level=RiskLevel.MEDIUM, generated_date="2026-07-14",
+        status=RecommendationStatus.PENDING, model="oc/hy3-free",
     )
     base.update(overrides)
     return AIRecommendation(**base)
@@ -54,6 +81,7 @@ def test_upsert_inserts_row():
     assert len(df) == 1
     assert df.iloc[0]["ticker"] == "BBCA.JK"
     assert json.loads(df.iloc[0]["reasoning"]) == {"why": "test"}
+    assert json.loads(df.iloc[0]["decision_trace"])["final_score"] == 55.0
 
 
 def test_upsert_overwrites_content_not_duplicates():
@@ -137,7 +165,11 @@ def test_export_json_shape(tmp_path):
     assert payload["as_of_date"] == "2026-07-14"
     assert payload["summary"]["total_rows"] == 1
     assert payload["summary"]["by_status"] == {"PENDING": 1}
-    assert payload["rows"][0]["reasoning"] == {"why": "test"}
+    row = payload["rows"][0]
+    assert row["reasoning"] == {"why": "test"}
+    assert row["decision_trace"]["final_score"] == 55.0
+    assert row["confidence_breakdown"]["final_confidence"] == 0.45
+    assert row["historical_comparison"]["verdict"] == "similar"
 
 
 def test_export_import_round_trip(tmp_path):
@@ -148,7 +180,9 @@ def test_export_import_round_trip(tmp_path):
     fresh_conn = _conn()
     n = import_ai_recommendations(fresh_conn, path=path)
     assert n == 1
-    assert len(load_recommendations(fresh_conn)) == 1
+    df = load_recommendations(fresh_conn)
+    assert len(df) == 1
+    assert json.loads(df.iloc[0]["decision_trace"])["final_score"] == 55.0
 
 
 def test_import_does_not_overwrite_existing_rows(tmp_path):

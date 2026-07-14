@@ -39,6 +39,12 @@ from stock_scanner.ai_lab.agents.hypothesis_agent import (  # noqa: E402
 )
 from stock_scanner.ai_lab.client import MockNineRouterClient, NineRouterClient  # noqa: E402
 from stock_scanner.ai_lab.models import AI_MODEL_REGISTRY  # noqa: E402
+from stock_scanner.ai_lab.scoring import (  # noqa: E402
+    compute_confidence_breakdown,
+    compute_decision_trace,
+    compute_historical_comparison,
+    generate_evidence_highlights,
+)
 from stock_scanner.db.ai_lab import (  # noqa: E402
     export_ai_recommendations,
     export_learning_events,
@@ -66,13 +72,24 @@ def _load_latest_ranked(ranked_dir: Path) -> tuple[pd.DataFrame, str] | tuple[No
 async def _run_one(client, ticker: str, feature_row: pd.Series, kb_df: pd.DataFrame,
                     model_spec, generated_date: str, ninerouter_model: str):
     evidence = build_evidence(ticker, feature_row, kb_df, model_spec)
-    hypothesis = await generate_hypothesis(client, evidence, model_spec)
+
+    # Deterministic, code-computed — before either LLM call, and passed
+    # INTO both prompts as already-final context (see docs/AI_LAB_ARCHITECTURE.md).
+    trace = compute_decision_trace(model_spec, feature_row, evidence)
+    confidence = compute_confidence_breakdown(trace)
+    comparison = compute_historical_comparison(evidence, trace)
+    highlights = generate_evidence_highlights(feature_row, evidence, trace)
+
+    hypothesis = await generate_hypothesis(client, evidence, model_spec, highlights)
     if hypothesis is None:
         return None
-    decision = await generate_decision(client, evidence, hypothesis, model_spec)
+    decision = await generate_decision(client, evidence, hypothesis, model_spec, trace, confidence, comparison)
     if decision is None:
         return None
-    return assemble_recommendation(evidence, hypothesis, decision, model_spec, generated_date, ninerouter_model)
+    return assemble_recommendation(
+        evidence, hypothesis, decision, model_spec, generated_date, ninerouter_model,
+        trace, confidence, comparison, highlights,
+    )
 
 
 async def main(top_n: int, model_keys: list[str], use_mock: bool, ranked_dir: Path) -> None:
