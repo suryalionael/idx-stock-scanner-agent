@@ -42,6 +42,7 @@ import pandas as pd
 from loguru import logger
 
 from stock_scanner.db.init_db import get_connection
+from stock_scanner.pipeline.challenger_score import compute_rule_score as rule_score
 
 _LABEL_THRESHOLD_PCT = 10.0
 _LABEL_HORIZON = "next_session"
@@ -110,17 +111,6 @@ def select_vol_ratio_threshold(train: pd.DataFrame) -> float:
         if lift >= _VOL_RATIO_MIN_LIFT:
             return thr
     return _VOL_RATIO_CANDIDATES[-1]
-
-
-def rule_score(df: pd.DataFrame, vol_thresh: float) -> pd.Series:
-    def b(col):
-        return df[col].map({True: True, False: False, "True": True, "False": False}).fillna(False).astype(bool)
-    return (
-        b("atr_breakout").astype(int)
-        + b("vol_spike").astype(int)
-        + (df["vol_ratio_20d"] > vol_thresh).fillna(False).astype(int)
-        - 2 * b("squeeze_on").astype(int)
-    )
 
 
 def bucket_metrics(df: pd.DataFrame, score_col: str, min_score: int) -> dict:
