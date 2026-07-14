@@ -37,6 +37,16 @@ _REMOTE_DATA_URL: str = os.environ.get(
 # File lokal fallback — tersedia di Streamlit Cloud karena repo di-clone ke /mount/src/
 _LOCAL_PUBLISHED_PATH = Path(__file__).parent.parent / "data" / "published" / "latest_scan.json"
 
+# Learning Agent knowledge_base mirror — read-only research view. Never read
+# from SQLite (data/db/signals.db is gitignored, absent on Streamlit Cloud) —
+# only the committed JSON mirror stock_scanner.db.knowledge_base.export_knowledge_base()
+# writes. See docs/KNOWLEDGE_BASE_POLICY.md.
+_REMOTE_KNOWLEDGE_BASE_URL = os.environ.get(
+    "REMOTE_KNOWLEDGE_BASE_URL",
+    "https://raw.githubusercontent.com/suryalionael/idx-stock-scanner-agent/main/data/published/knowledge_base.json",
+)
+_LOCAL_KNOWLEDGE_BASE_PATH = Path(__file__).parent.parent / "data" / "published" / "knowledge_base.json"
+
 # Marker string yang menandakan URL belum dikonfigurasi dengan benar
 _URL_PLACEHOLDERS = ("PLACEHOLDER_USER", "PLACEHOLDER_REPO", "<username>", "<user>", "<repo>")
 
@@ -695,6 +705,56 @@ def fetch_broker_range(
     return df, None
 
 
+def classify_indexalpha_error(err_msg: str) -> tuple[str, str]:
+    """Pure classification of an IndexAlpha failure message into (level, message)
+    — level is "error" | "warning" | "info", matching st.error/st.warning/st.info.
+    No Streamlit dependency (unlike dashboard/app.py, this module is safely
+    importable standalone), so this is unit-testable directly. See
+    dashboard/app.py::_classify_indexalpha_error for the rendering wrapper, and
+    stock_scanner/pipeline/fetch_indexalpha.py for the exact messages this
+    matches against (PermissionError for 401/403, RuntimeError for other 4xx/5xx).
+
+    This function previously had no 403 branch at all — a 403 (expired/invalid
+    key with no endpoint access) silently fell through to a generic "click
+    Refresh to load it" message, which is actively bad advice for a permission
+    failure since retrying just repeats the same failure and burns another
+    quota unit. Both branches now say clearly that retrying won't help.
+    """
+    err_msg = err_msg or ""
+    low = err_msg.lower()
+    if "401" in err_msg or "unauthorized" in low:
+        return "error", (
+            "❌ **Autentikasi Index Alpha gagal (401).** API key salah, kosong, atau sudah "
+            "kadaluarsa. Periksa `INDEX_ALPHA_API_KEY` di Streamlit secrets panel — klik "
+            "Refresh tidak akan membantu sampai key diperbaiki."
+        )
+    if "403" in err_msg or "forbidden" in low:
+        return "error", (
+            "❌ **Index Alpha menolak akses (403).** API key terbaca tapi tidak punya izin "
+            "untuk endpoint ini — biasanya berarti key sudah kadaluarsa atau dicabut. Periksa "
+            "status key di dashboard Index Alpha; klik Refresh tidak akan membantu sampai key "
+            "diperbaiki."
+        )
+    if "429" in err_msg or "rate" in low or "kuota" in low:
+        return "warning", (
+            "⚠️ **Kuota Index Alpha habis** — free plan 5 req/hari. Coba lagi besok atau "
+            "upgrade plan. Data broker dari cache masih ditampilkan bila ada."
+        )
+    if "timeout" in low:
+        return "warning", (
+            "⚠️ **Index Alpha timeout** — server lambat. Coba lagi nanti. Data dari cache "
+            "masih ditampilkan bila ada."
+        )
+    if "key tidak diset" in low or "key belum" in low:
+        return "info", (
+            "📊 `INDEX_ALPHA_API_KEY` belum diset — data broker tidak tersedia. Set environment "
+            "variable atau Streamlit secret untuk mengaktifkan fitur ini."
+        )
+    if err_msg:
+        return "info", f"📊 Broker Summary belum dimuat.\n\n_{err_msg}_"
+    return "info", "📊 Broker Summary belum dimuat untuk sesi/periode ini."
+
+
 def fetch_broker_latest(
     ticker: str,
     investor: str = "all",
@@ -1058,6 +1118,71 @@ def _load_local_published() -> dict:
     except Exception as exc:
         print(f"[data_loader] ERROR: Gagal baca file lokal: {exc}", file=sys.stderr)
         return {}
+
+
+def load_knowledge_base_payload(url: str | None = None) -> dict:
+    """Load the Learning Agent's knowledge_base mirror — read-only, research
+    only. Same remote-then-local pattern as load_published_payload(): try
+    the committed GitHub raw file first, fall back to the local repo copy
+    (present on Streamlit Cloud since the repo is cloned to /mount/src/).
+    Never opens data/db/signals.db directly — that file is gitignored and
+    won't exist on a deployed instance. Returns {"knowledge_base": []} (not
+    an exception) if neither source is available — the pipeline may simply
+    never have been run yet, which is a normal state, not an error.
+    """
+    import json
+    import sys
+    import urllib.request
+
+    target_url = url or _REMOTE_KNOWLEDGE_BASE_URL
+
+    if any(p in target_url for p in _URL_PLACEHOLDERS):
+        return _load_local_knowledge_base()
+
+    try:
+        with urllib.request.urlopen(target_url, timeout=10) as resp:
+            raw = resp.read().decode("utf-8")
+        payload = json.loads(raw)
+        print(
+            f"[data_loader] INFO: Remote knowledge_base loaded dari {target_url} "
+            f"({len(payload.get('knowledge_base', []))} rows)",
+            file=sys.stderr,
+        )
+        return payload
+    except Exception as exc:
+        print(
+            f"[data_loader] WARNING: Gagal load remote knowledge_base dari {target_url}: {exc} "
+            f"— mencoba file lokal.",
+            file=sys.stderr,
+        )
+
+    return _load_local_knowledge_base()
+
+
+def _load_local_knowledge_base() -> dict:
+    import json
+    import sys
+
+    if not _LOCAL_KNOWLEDGE_BASE_PATH.exists():
+        print(
+            f"[data_loader] INFO: knowledge_base.json tidak ditemukan secara lokal "
+            f"({_LOCAL_KNOWLEDGE_BASE_PATH}) — Learning Agent mungkin belum pernah dijalankan.",
+            file=sys.stderr,
+        )
+        return {"knowledge_base": []}
+
+    try:
+        with open(_LOCAL_KNOWLEDGE_BASE_PATH, encoding="utf-8") as f:
+            payload = json.load(f)
+        print(
+            f"[data_loader] INFO: Local knowledge_base loaded "
+            f"({len(payload.get('knowledge_base', []))} rows)",
+            file=sys.stderr,
+        )
+        return payload
+    except Exception as exc:
+        print(f"[data_loader] ERROR: Gagal baca knowledge_base lokal: {exc}", file=sys.stderr)
+        return {"knowledge_base": []}
 
 
 def df_from_published_payload(payload: dict) -> pd.DataFrame:
