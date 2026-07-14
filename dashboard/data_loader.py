@@ -57,6 +57,22 @@ _REMOTE_DAILY_MOVERS_URL = os.environ.get(
 )
 _LOCAL_DAILY_MOVERS_PATH = Path(__file__).parent.parent / "data" / "published" / "daily_movers.json"
 
+# AI Lab — experimental, standalone recommendation engine. Same
+# remote-then-local pattern; the dashboard NEVER calls stock_scanner.ai_lab
+# directly (no live 9router calls from the dashboard) — only reads these
+# committed mirrors. See stock_scanner/ai_lab/, scripts/run_ai_lab.py.
+_REMOTE_AI_RECOMMENDATIONS_URL = os.environ.get(
+    "REMOTE_AI_RECOMMENDATIONS_URL",
+    "https://raw.githubusercontent.com/suryalionael/idx-stock-scanner-agent/main/data/published/ai_recommendations.json",
+)
+_LOCAL_AI_RECOMMENDATIONS_PATH = Path(__file__).parent.parent / "data" / "published" / "ai_recommendations.json"
+
+_REMOTE_AI_LEARNING_EVENTS_URL = os.environ.get(
+    "REMOTE_AI_LEARNING_EVENTS_URL",
+    "https://raw.githubusercontent.com/suryalionael/idx-stock-scanner-agent/main/data/published/ai_learning_events.json",
+)
+_LOCAL_AI_LEARNING_EVENTS_PATH = Path(__file__).parent.parent / "data" / "published" / "ai_learning_events.json"
+
 # Marker string yang menandakan URL belum dikonfigurasi dengan benar
 _URL_PLACEHOLDERS = ("PLACEHOLDER_USER", "PLACEHOLDER_REPO", "<username>", "<user>", "<repo>")
 
@@ -1253,6 +1269,115 @@ def _load_local_daily_movers() -> dict:
     except Exception as exc:
         print(f"[data_loader] ERROR: Gagal baca daily_movers lokal: {exc}", file=sys.stderr)
         return {"rows": [], "summary": {}}
+
+
+def load_ai_recommendations_payload(url: str | None = None) -> dict:
+    """Load AI Lab's recommendations mirror — read-only, experimental
+    feature. Same remote-then-local pattern as load_daily_movers_payload().
+    Returns {"rows": [], "summary": {}} (not an exception) if AI Lab hasn't
+    been run yet — a normal state, not an error."""
+    import json
+    import sys
+    import urllib.request
+
+    target_url = url or _REMOTE_AI_RECOMMENDATIONS_URL
+    if any(p in target_url for p in _URL_PLACEHOLDERS):
+        return _load_local_ai_recommendations()
+
+    try:
+        with urllib.request.urlopen(target_url, timeout=10) as resp:
+            raw = resp.read().decode("utf-8")
+        payload = json.loads(raw)
+        print(
+            f"[data_loader] INFO: Remote ai_recommendations loaded dari {target_url} "
+            f"({len(payload.get('rows', []))} rows)",
+            file=sys.stderr,
+        )
+        return payload
+    except Exception as exc:
+        print(
+            f"[data_loader] WARNING: Gagal load remote ai_recommendations dari {target_url}: {exc} "
+            f"— mencoba file lokal.",
+            file=sys.stderr,
+        )
+
+    return _load_local_ai_recommendations()
+
+
+def _load_local_ai_recommendations() -> dict:
+    import json
+    import sys
+
+    if not _LOCAL_AI_RECOMMENDATIONS_PATH.exists():
+        print(
+            f"[data_loader] INFO: ai_recommendations.json tidak ditemukan secara lokal "
+            f"({_LOCAL_AI_RECOMMENDATIONS_PATH}) — scripts/run_ai_lab.py mungkin belum pernah dijalankan.",
+            file=sys.stderr,
+        )
+        return {"rows": [], "summary": {}}
+
+    try:
+        with open(_LOCAL_AI_RECOMMENDATIONS_PATH, encoding="utf-8") as f:
+            payload = json.load(f)
+        print(
+            f"[data_loader] INFO: Local ai_recommendations loaded ({len(payload.get('rows', []))} rows)",
+            file=sys.stderr,
+        )
+        return payload
+    except Exception as exc:
+        print(f"[data_loader] ERROR: Gagal baca ai_recommendations lokal: {exc}", file=sys.stderr)
+        return {"rows": [], "summary": {}}
+
+
+def load_ai_learning_events_payload(url: str | None = None) -> dict:
+    """Load AI Lab's learning-timeline mirror — same remote-then-local
+    pattern. Returns {"events": []} if AI Lab hasn't been run yet."""
+    import json
+    import sys
+    import urllib.request
+
+    target_url = url or _REMOTE_AI_LEARNING_EVENTS_URL
+    if any(p in target_url for p in _URL_PLACEHOLDERS):
+        return _load_local_ai_learning_events()
+
+    try:
+        with urllib.request.urlopen(target_url, timeout=10) as resp:
+            raw = resp.read().decode("utf-8")
+        payload = json.loads(raw)
+        print(
+            f"[data_loader] INFO: Remote ai_learning_events loaded dari {target_url} "
+            f"({len(payload.get('events', []))} events)",
+            file=sys.stderr,
+        )
+        return payload
+    except Exception as exc:
+        print(
+            f"[data_loader] WARNING: Gagal load remote ai_learning_events dari {target_url}: {exc} "
+            f"— mencoba file lokal.",
+            file=sys.stderr,
+        )
+
+    return _load_local_ai_learning_events()
+
+
+def _load_local_ai_learning_events() -> dict:
+    import json
+    import sys
+
+    if not _LOCAL_AI_LEARNING_EVENTS_PATH.exists():
+        return {"events": []}
+
+    try:
+        with open(_LOCAL_AI_LEARNING_EVENTS_PATH, encoding="utf-8") as f:
+            payload = json.load(f)
+        print(
+            f"[data_loader] INFO: Local ai_learning_events loaded ({len(payload.get('events', []))} events)",
+            file=sys.stderr,
+        )
+        return payload
+    except Exception as exc:
+        print(f"[data_loader] ERROR: Gagal baca ai_learning_events lokal: {exc}", file=sys.stderr)
+        return {"events": []}
 
 
 def df_from_published_payload(payload: dict) -> pd.DataFrame:

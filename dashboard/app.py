@@ -61,6 +61,7 @@ from dashboard.data_loader import (
     get_ihsg_session,
 )
 from dashboard.explain import explain_signal_llm
+from dashboard.ai_lab_view import render_ai_lab_tab
 from dashboard.daily_movers_view import render_daily_movers_tab
 from dashboard.knowledge_base_view import render_knowledge_base_tab
 from dashboard.search import (
@@ -2682,10 +2683,10 @@ with _hc_right:
 # MAIN TABS
 # ---------------------------------------------------------------------------
 (tab_scalping, tab_swing, tab_longterm, tab_smart, tab_streak,
- tab_perf, tab_search, tab_history, tab_knowledge_base, tab_daily_movers) = st.tabs(
+ tab_perf, tab_search, tab_history, tab_knowledge_base, tab_daily_movers, tab_ai_lab) = st.tabs(
     ["📈 Scalping", "🔄 Swing Trading", "📊 Long Term", "🎯 Smart Money",
      "🔁 Naik/Turun Beruntun", "📋 Signal Performance", "🔍 Search Emiten", "🕐 History",
-     "🧠 Learning Agent", "🚀 Daily Movers >10%"]
+     "🧠 Learning Agent", "🚀 Daily Movers >10%", "🧪 AI Lab"]
 )
 
 
@@ -3053,3 +3054,10 @@ with tab_knowledge_base:
 # ===========================================================================
 with tab_daily_movers:
     render_daily_movers_tab()
+
+
+# ===========================================================================
+# TAB — AI LAB (experimental, read-only)
+# ===========================================================================
+with tab_ai_lab:
+    render_ai_lab_tab()

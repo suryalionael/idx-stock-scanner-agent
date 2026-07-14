@@ -227,3 +227,58 @@ CREATE TABLE IF NOT EXISTS knowledge_base (
     source_run_id            TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_knowledge_base_status ON knowledge_base(status);
+
+-- ---------------------------------------------------------------------------
+-- AI Lab (experimental — see stock_scanner/ai_lab/, docs/AI_LAB_ARCHITECTURE.md)
+--
+-- Completely separate recommendation engine, isolated from the Production
+-- Scanner: nothing in stock_scanner/pipeline/ or stock_scanner/alerts/
+-- reads these tables, and nothing here writes to signals/outcomes/
+-- knowledge_base/model_registry. AI Lab consumes Learning Agent Phase 1's
+-- already-validated statistics (knowledge_base rows) as evidence, but is a
+-- distinct output: a ranked, lifecycle-tracked recommendation, not a
+-- research narrative. No auto-promotion path exists yet — see the "Future
+-- Ready" section of docs/AI_LAB_ARCHITECTURE.md for the architecture a
+-- later Auto Promotion Engine would plug into (this schema's per-ai_model
+-- grouping + status/return_percentage columns are exactly what it would
+-- read; nothing further is implemented now).
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS ai_recommendations (
+    id                   TEXT PRIMARY KEY,   -- sha1(ticker|ai_model|generated_date)[:16] — deterministic, one row per ticker/model/day
+    ticker               TEXT NOT NULL,
+    ai_model             TEXT NOT NULL,       -- 'momentum_ai' | 'breakout_ai' | 'reversal_ai' | 'volume_ai' | ... (plug-and-play, see ai_lab/models.py)
+    score                REAL NOT NULL,        -- 0..100
+    confidence           REAL NOT NULL,        -- 0..1
+    recommendation       TEXT NOT NULL,        -- 'BUY' | 'WATCH' | 'SELL' | 'AVOID'
+    reasoning            TEXT NOT NULL,        -- JSON: {why, technical_indicators, statistical_evidence,
+                                                --        similar_patterns, confidence_explanation, risks, weaknesses}
+    expected_return       REAL,
+    risk_level            TEXT,                -- 'LOW' | 'MEDIUM' | 'HIGH'
+    generated_date        DATE NOT NULL,
+    created_at             TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status                  TEXT NOT NULL DEFAULT 'PENDING',  -- 'PENDING' | 'ACTIVE' | 'CLOSED' | 'EXPIRED'
+    entry_price              REAL,
+    exit_price                REAL,
+    return_percentage          REAL,
+    model                       TEXT NOT NULL      -- 9router model string used for this recommendation (e.g. 'deepseek-v4-flash-free'); NEVER hardcoded, always the configured NINEROUTER_MODEL at generation time
+);
+CREATE INDEX IF NOT EXISTS idx_ai_recommendations_date       ON ai_recommendations(generated_date);
+CREATE INDEX IF NOT EXISTS idx_ai_recommendations_ai_model   ON ai_recommendations(ai_model);
+CREATE INDEX IF NOT EXISTS idx_ai_recommendations_status     ON ai_recommendations(status);
+
+-- AI Learning Timeline (dashboard section 5) — append-only log of
+-- observable AI Lab events (a hypothesis was generated, a model's
+-- confidence shifted, accuracy improved after a performance recompute).
+-- Purely descriptive/informational; nothing reads this table to make a
+-- decision — it exists only to render the timeline.
+CREATE TABLE IF NOT EXISTS ai_learning_events (
+    event_id       TEXT PRIMARY KEY,   -- sha1(ai_model|event_type|description|created_at)[:16]
+    ai_model       TEXT,
+    event_type     TEXT NOT NULL,       -- 'pattern_learned' | 'confidence_updated' | 'hypothesis_generated' | 'accuracy_improved'
+    description    TEXT NOT NULL,
+    metadata_json  TEXT,
+    created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_ai_learning_events_created_at ON ai_learning_events(created_at);
