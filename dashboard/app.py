@@ -61,6 +61,7 @@ from dashboard.data_loader import (
     get_ihsg_session,
 )
 from dashboard.explain import explain_signal_llm
+from dashboard.daily_movers_view import render_daily_movers_tab
 from dashboard.knowledge_base_view import render_knowledge_base_tab
 from dashboard.search import (
     format_ticker_option,
@@ -2681,10 +2682,10 @@ with _hc_right:
 # MAIN TABS
 # ---------------------------------------------------------------------------
 (tab_scalping, tab_swing, tab_longterm, tab_smart, tab_streak,
- tab_perf, tab_search, tab_history, tab_knowledge_base) = st.tabs(
+ tab_perf, tab_search, tab_history, tab_knowledge_base, tab_daily_movers) = st.tabs(
     ["📈 Scalping", "🔄 Swing Trading", "📊 Long Term", "🎯 Smart Money",
      "🔁 Naik/Turun Beruntun", "📋 Signal Performance", "🔍 Search Emiten", "🕐 History",
-     "🧠 Learning Agent"]
+     "🧠 Learning Agent", "🚀 Daily Movers >10%"]
 )
 
 
@@ -3045,3 +3046,10 @@ with tab_history:
 # ===========================================================================
 with tab_knowledge_base:
     render_knowledge_base_tab()
+
+
+# ===========================================================================
+# TAB — DAILY MOVERS >10% (read-only)
+# ===========================================================================
+with tab_daily_movers:
+    render_daily_movers_tab()

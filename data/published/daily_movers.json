@@ -1,0 +1,12 @@
+{
+  "as_of_date": null,
+  "source": "yfinance",
+  "generated_at": "2026-07-14T04:39:07.424788+00:00",
+  "summary": {
+    "total_rows": 0,
+    "distinct_dates": 0,
+    "hit_10pct_close_count": 0,
+    "hit_10pct_intraday_count": 0
+  },
+  "rows": []
+}

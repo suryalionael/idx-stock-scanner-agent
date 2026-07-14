@@ -84,6 +84,34 @@ CREATE TABLE IF NOT EXISTS broker_context (
 );
 
 -- ---------------------------------------------------------------------------
+-- Daily movers >10% (non-production, standalone feature — see
+-- stock_scanner/pipeline/daily_movers.py, scripts/build_daily_movers.py).
+-- Not read by signal_engine.py, ml_ranker.py, or any promotion path. Rows
+-- are stored only for (trade_date, ticker) pairs that actually hit one of
+-- the two >10% definitions.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS daily_movers (
+    trade_date          DATE NOT NULL,
+    ticker              TEXT NOT NULL,
+    prev_close          REAL,
+    open                REAL,
+    high                REAL,
+    low                 REAL,
+    close               REAL,
+    volume              REAL,
+    pct_change_close    REAL,
+    pct_change_high     REAL,
+    hit_10pct_close     INTEGER NOT NULL DEFAULT 0,
+    hit_10pct_intraday  INTEGER NOT NULL DEFAULT 0,
+    source              TEXT,
+    inserted_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (trade_date, ticker)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_movers_date ON daily_movers(trade_date);
+
+-- ---------------------------------------------------------------------------
 -- Model lifecycle
 -- ---------------------------------------------------------------------------
 
