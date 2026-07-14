@@ -243,8 +243,24 @@ expands it into a DataFrame at read time (`pd.json_normalize`) — same shape as
 
 ### Morning (extends `scan.yml`, ~05:00 WIB)
 
-1. Fetch OHLCV, build features, score with **the currently-promoted model** (registry lookup by
-   `model_type` + `status='promoted'` — not a hardcoded `models/ranker.pkl` path).
+1. Fetch OHLCV, build features, run `signal_engine.compute_signal()` (rules, unchanged) and
+   `ml_ranker.score_candidates()` (existing XGBoost track, unchanged) exactly as today.
+   **IMPLEMENTED 2026-07-13, narrower than originally scoped here:** a new Step 6c
+   (`run_daily_scan._apply_promoted_challenger_score()`) looks up the currently-promoted
+   `rule_score` model — `stock_scanner/db/model_lookup.get_promoted_model("rule_score")`, which reads
+   the **committed JSON registry mirror** (`data/published/model_registry.json`), never SQLite, so
+   `scan.yml` gains no DB dependency — and, if one exists, computes `promoted_rule_score` via the
+   shared `stock_scanner/pipeline/challenger_score.compute_rule_score()` (same formula
+   `train_challenger.py`/`promote_challenger.py` use). This is **ranking-only**: it adds a tie-breaker
+   column consumed by `_save_ranked()`'s sort order (between `quality_adjusted_score` and `ml_prob`)
+   plus audit columns (`promoted_model_id`, `promoted_model_type`, `promoted_threshold_used`,
+   `promoted_at`, `ranking_source`) for tracing a ranked file back to the promotion decision that
+   produced it. It never touches `compute_signal()`'s BREAKOUT/PRE_MARKUP/WATCH/AVOID classification
+   or the hard liquidity/zero-volume gates (§6's "ML/score never overrides a hard risk gate" still
+   holds exactly). Today this is a no-op in production — no `rule_score` model has been promoted yet
+   (both trained candidates are `needs_more_data`, see `model_registry`) — behavior is byte-identical
+   until the first real promotion happens. `xgboost_ranker` is not wired to this lookup yet; that
+   track has no DB-trained candidate (see §0).
 2. Write `data/signals/{date}.parquet` as today (dashboard keeps reading this — no breaking change).
 3. **NEW:** insert rows into `signals` + `feature_snapshots`, keyed by `signal_id`. Idempotent
    (`INSERT OR IGNORE` on the unique constraint) — safe to re-run the workflow without duplicating.

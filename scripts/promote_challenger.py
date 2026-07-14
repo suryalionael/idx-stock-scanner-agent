@@ -32,7 +32,8 @@ import pandas as pd
 from loguru import logger
 
 from stock_scanner.db.init_db import get_connection
-from scripts.train_challenger import load_training_examples, rule_score, bucket_metrics, _MIN_SCORE_FOR_SELECTION
+from stock_scanner.pipeline.challenger_score import compute_rule_score as rule_score
+from scripts.train_challenger import load_training_examples, bucket_metrics, _MIN_SCORE_FOR_SELECTION
 
 # --- Promotion criteria (see docs/SELF_IMPROVING_ARCHITECTURE.md §5) -------
 _MIN_TEST_POSITIVES = 30          # below this -> 'needs_more_data', no promotion either way

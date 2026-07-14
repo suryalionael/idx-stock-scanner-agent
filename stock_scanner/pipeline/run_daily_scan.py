@@ -12,6 +12,7 @@ Pipeline:
     → explain (opsional) → simpan output → log ringkasan
 """
 import argparse
+import json
 from datetime import date
 from pathlib import Path
 
@@ -239,6 +240,13 @@ def main(config_path: Path = _DEFAULT_CONFIG, force_holiday: bool = False) -> No
         f"{excluded_count} excluded, {insuff_count} insufficient_data"
     )
 
+    # --- Step 6c: Promoted challenger score (DB-driven closed loop, optional) ---
+    # Ranking-only enrichment — see docs/SELF_IMPROVING_ARCHITECTURE.md. Never
+    # touches signal classification (already fixed above in compute_signal /
+    # quality filters) and never touches SQLite (reads the committed JSON
+    # registry mirror only). No-op when no model is currently promoted.
+    signals_df = _apply_promoted_challenger_score(signals_df)
+
     # --- Step 7: ML ranking (opsional) ---
     model_config = _load_model_config(config_path.parent / "model_config.yaml")
     if model_path.exists():
@@ -320,6 +328,52 @@ def main(config_path: Path = _DEFAULT_CONFIG, force_holiday: bool = False) -> No
         logger.warning("Performance tracking skipped: {}", exc)
 
     logger.info(f"=== Scan selesai: {scan_date} ===")
+
+
+def _apply_promoted_challenger_score(df: pd.DataFrame) -> pd.DataFrame:
+    """Apply the currently-promoted 'rule_score' challenger (if any) as an
+    additional ranking signal — see docs/SELF_IMPROVING_ARCHITECTURE.md.
+
+    Reads only the committed data/published/model_registry.json (no SQLite
+    dependency in the morning scan). Purely additive: adds
+    promoted_rule_score (used as a ranking tie-breaker by _save_ranked) plus
+    audit-trail columns (promoted_model_id, promoted_model_type,
+    promoted_threshold_used, promoted_at, ranking_source) so a ranked file
+    can be traced back to the exact promotion decision that produced it,
+    months later. Never touches signal classification or hard gates.
+    Best-effort: any failure here is logged and the scan continues with
+    today's (pre-existing) behavior — a promoted-model lookup must never
+    break the daily scan.
+    """
+    from stock_scanner.db.model_lookup import get_promoted_model
+    from stock_scanner.pipeline.challenger_score import compute_rule_score
+
+    model_row = get_promoted_model("rule_score")
+    if model_row is None:
+        logger.info("No promoted rule_score challenger yet — skip")
+        return df
+
+    try:
+        metrics_json = model_row.get("test_metrics_json") or model_row.get("train_metrics_json") or "{}"
+        metrics = json.loads(metrics_json)
+        thresh = metrics.get("vol_ratio_20d_threshold", 2.0)
+
+        df = df.copy()
+        df["promoted_rule_score"] = compute_rule_score(df, thresh)
+        df["promoted_model_id"] = model_row.get("model_version_id")
+        df["promoted_model_type"] = model_row.get("model_type")
+        df["promoted_threshold_used"] = thresh
+        df["promoted_at"] = model_row.get("promoted_at")
+        df["ranking_source"] = "promoted_challenger"
+        logger.info(
+            f"Promoted challenger applied: model={model_row.get('model_version_id')} "
+            f"threshold={thresh}"
+        )
+    except Exception as e:  # noqa: BLE001 — a lookup/scoring failure must never break the scan
+        logger.warning(f"Promoted challenger score failed (skip, non-fatal): {e}")
+        return df
+
+    return df
 
 
 def _prewarm_financials(signals_df: pd.DataFrame, max_tickers: int = 60) -> None:
@@ -411,11 +465,21 @@ def _save_ranked(
         if excluded_n:
             logger.info(f"Ranked: removed {excluded_n} tickers with excluded_* status")
 
-    # Sort within each tier: quality_adjusted_score > ml_prob > total_score
+    # Sort within each tier: quality_adjusted_score > promoted_rule_score >
+    # ml_prob > total_score. promoted_rule_score (from the currently-promoted
+    # DB-driven challenger, see _apply_promoted_challenger_score) ranks ahead
+    # of ml_prob because it's validated against the exact live signal
+    # population/label — ml_prob's XGBoost track is trained on a broader,
+    # mismatched population (see docs/SELF_IMPROVING_ARCHITECTURE.md §0).
+    # Absent columns fall through unchanged — no promoted model means this
+    # behaves exactly as before.
     sort_cols = ["signal"]
     asc = [True]
     if "quality_adjusted_score" in ranked.columns:
         sort_cols.append("quality_adjusted_score")
+        asc.append(False)
+    elif "promoted_rule_score" in ranked.columns:
+        sort_cols.append("promoted_rule_score")
         asc.append(False)
     elif "ml_prob" in ranked.columns:
         sort_cols.append("ml_prob")
