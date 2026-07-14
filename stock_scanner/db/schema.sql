@@ -248,13 +248,18 @@ CREATE TABLE IF NOT EXISTS ai_recommendations (
     id                   TEXT PRIMARY KEY,   -- sha1(ticker|ai_model|generated_date)[:16] — deterministic, one row per ticker/model/day
     ticker               TEXT NOT NULL,
     ai_model             TEXT NOT NULL,       -- 'momentum_ai' | 'breakout_ai' | 'reversal_ai' | 'volume_ai' | ... (plug-and-play, see ai_lab/models.py)
-    score                REAL NOT NULL,        -- 0..100
-    confidence           REAL NOT NULL,        -- 0..1
-    recommendation       TEXT NOT NULL,        -- 'BUY' | 'WATCH' | 'SELL' | 'AVOID'
+    score                REAL NOT NULL,        -- 0..100, always == decision_trace_json.final_score (see stock_scanner/ai_lab/scoring.py)
+    confidence           REAL NOT NULL,        -- 0..1, always == confidence_breakdown_json.final_confidence
+    recommendation       TEXT NOT NULL,        -- 'STRONG_BUY' | 'BUY' | 'WATCH' | 'AVOID' — rule-based, see scoring.classify_recommendation_level
     reasoning            TEXT NOT NULL,        -- JSON: {why, technical_indicators, statistical_evidence,
-                                                --        similar_patterns, confidence_explanation, risks, weaknesses}
-    expected_return       REAL,
-    risk_level            TEXT,                -- 'LOW' | 'MEDIUM' | 'HIGH'
+                                                --        similar_patterns, best_pattern_similarity_pct,
+                                                --        strengths, weaknesses, risks, reasoning_summary,
+                                                --        historical_comparison_explanation, confidence_explanation}
+    decision_trace        TEXT NOT NULL,        -- JSON: {technical_score, statistical_score, pattern_similarity_score, risk_score, final_score} — explainability upgrade
+    confidence_breakdown  TEXT NOT NULL,        -- JSON: {technical, statistical, pattern_similarity, risk_adjustment, final_confidence}
+    historical_comparison TEXT NOT NULL,        -- JSON: {pattern_description, sample_size, win_rate, ci_lower, ci_upper, verdict, explanation}
+    expected_return       REAL,                 -- always NULL currently — see scoring.compute_expected_return's docstring for why
+    risk_level            TEXT,                -- 'LOW' | 'MEDIUM' | 'HIGH' — rule-based, see scoring.classify_risk_level
     generated_date        DATE NOT NULL,
     created_at             TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
