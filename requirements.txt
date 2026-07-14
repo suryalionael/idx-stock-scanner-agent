@@ -4,9 +4,20 @@
 # Scanner pipeline (yfinance, ta, xgboost, scikit-learn) diinstall terpisah
 # di lokal dengan: pip install -e ".[scanner]"
 #
-# Streamlit Cloud otomatis juga menjalankan `pip install .` karena ada
-# pyproject.toml — dependency [project.dependencies] sudah dibuat minimal
-# (pandas, numpy, pyarrow, loguru, pyyaml, requests) agar tidak bentrok.
+# THIS FILE WINS on Streamlit Community Cloud — verified against Streamlit's
+# own docs (docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/
+# app-dependencies): Cloud's dependency-file priority is
+#   uv.lock > Pipfile > environment.yml > requirements.txt > pyproject.toml
+# requirements.txt is found first, so THIS file installs streamlit/plotly/
+# yfinance/openpyxl for the deployed app — pyproject.toml's dependency list is
+# never used for that purpose. Separately (and additionally), Streamlit Cloud
+# also runs `pip install .` because pyproject.toml has a [build-system] table —
+# that is a DIFFERENT mechanism (it registers this repo as an importable
+# package so `import stock_scanner...` resolves), not a competing requirements
+# source. Its [project.dependencies] (pandas/numpy/pyarrow/loguru/pyyaml/
+# requests) is a deliberate subset of what's below — kept version-identical to
+# this file's equivalent lines (enforced by tests/test_dependency_consistency.py)
+# so the two independent install steps can never disagree.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Dashboard

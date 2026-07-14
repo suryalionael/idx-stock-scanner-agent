@@ -40,6 +40,7 @@ from dashboard.theme import (
 from dashboard.data_loader import (
     available_dates,
     available_dates_unified,
+    classify_indexalpha_error,
     fetch_broker_latest,
     fetch_broker_range,
     broker_range_bounds,
@@ -60,6 +61,7 @@ from dashboard.data_loader import (
     get_ihsg_session,
 )
 from dashboard.explain import explain_signal_llm
+from dashboard.knowledge_base_view import render_knowledge_base_tab
 from dashboard.search import (
     format_ticker_option,
     get_search_universe,
@@ -709,49 +711,88 @@ def _render_broker_summary_body(df: pd.DataFrame, key_suffix: str, period_label:
                    "tidak tersedia di cache ini. Klik **🔄 Refresh** untuk mengambil versi lengkap.")
 
 
+def _classify_indexalpha_error(err_msg: str) -> str:
+    """Rendering wrapper — shared by both Latest and Historical modes so
+    they can't drift out of sync again (Historical previously didn't
+    classify at all; Latest was missing a 403 branch entirely, silently
+    falling through to "click Refresh" — actively bad advice for a
+    permission/expired-key failure). The actual classification logic is
+    pure and unit-tested in dashboard.data_loader.classify_indexalpha_error
+    (this module has real top-level UI code and can't be imported outside a
+    live Streamlit context, so the testable logic lives there instead).
+
+    Returns the level ("error"/"warning"/"info") so callers can decide
+    whether to lock out further retries — "error" (401/403) is the only
+    level that means "retrying will just fail again," per
+    fetch_indexalpha.py's own non-retryable-client-error classification."""
+    level, message = classify_indexalpha_error(err_msg)
+    {"error": st.error, "warning": st.warning, "info": st.info}[level](message)
+    return level
+
+
 def _render_broker_latest(ticker: str, scan_date: str, key_prefix: str = "") -> None:
-    """Latest mode: last completed trading session, fresh-first (cache-safe)."""
+    """Latest mode: last completed trading session, fresh-first (cache-safe).
+
+    Loads ONLY on explicit user request (button), never automatically.
+    IndexAlpha's free plan is quota-limited (5 req/day); render_broker_section
+    is called from ~6 tabs, some inside st.expander (which still executes its
+    body when collapsed — expanders are a visibility toggle, not a lazy-
+    execution boundary) or inside a per-ticker loop (Naik/Turun Beruntun, up
+    to `topn` tickers) — and Streamlit's st.tabs() executes every tab's body
+    on every rerun regardless of which tab is visually active. An eager fetch
+    here previously burned the entire daily quota on a single page load
+    before any user ever asked for broker data. The load state persists per
+    (key_prefix, ticker, scan_date) in session_state for the rest of the
+    session once a user opts in, so it isn't re-prompted on every rerun.
+
+    A confirmed 401/403 additionally sets a permanent-failure flag (fail_key)
+    that disables the Refresh button and skips calling the API again on
+    every future rerun for this (ticker, scan_date, key_prefix) — retrying a
+    permission failure can only fail again and burns another quota unit, so
+    this is a real stop, not just advisory copy next to a still-clickable
+    button."""
+    load_key = f"brk_loaded_{key_prefix}_{ticker}_{scan_date}"
+    fail_key = f"brk_permfail_{key_prefix}_{ticker}_{scan_date}"
+
     top = st.columns([3, 1])
     with top[1]:
-        if st.button("🔄 Refresh", key=f"brk_lat_refresh_{key_prefix}_{ticker}_{scan_date}",
-                     help="Ambil ulang sesi terbaru dari Index Alpha (memakai 1 kuota)."):
+        if st.session_state.get(fail_key):
+            st.button("🔒 Refresh dinonaktifkan",
+                     key=f"brk_lat_refresh_{key_prefix}_{ticker}_{scan_date}", disabled=True,
+                     help="API key ditolak (401/403) — retry dinonaktifkan sampai key diperbaiki di secrets panel.")
+        elif st.button("🔄 Refresh", key=f"brk_lat_refresh_{key_prefix}_{ticker}_{scan_date}",
+                       help="Ambil ulang sesi terbaru dari Index Alpha (memakai 1 kuota)."):
             _cached_broker_latest.clear()
+            st.session_state[load_key] = True
+
+    if st.session_state.get(fail_key):
+        # Permanent failure already confirmed this session — re-show the last
+        # known error WITHOUT calling the API again.
+        _classify_indexalpha_error(st.session_state.get(f"{fail_key}_msg", ""))
+        return
+
+    if not st.session_state.get(load_key):
+        st.info(
+            f"📊 **Broker Summary belum dimuat** untuk {ticker.replace('.JK','')} sesi ini.\n\n"
+            "Data Index Alpha memiliki kuota harian terbatas (5 req/hari pada free plan), "
+            "sehingga tidak dimuat otomatis. Harga, volume, tren, dan fundamental saham ini "
+            "tetap lengkap di tab lain — klik tombol di bawah untuk memuat rincian "
+            "**kepemilikan & serapan broker** (memakai 1 kuota)."
+        )
+        if not st.button("📊 Muat Broker Summary",
+                         key=f"brk_lat_load_{key_prefix}_{ticker}_{scan_date}"):
+            return
+        st.session_state[load_key] = True
 
     with st.spinner("Memuat sesi terbaru…"):
         df, note, info = _cached_broker_latest(ticker)
 
     if df is None or df.empty:
         err_msg = note or "Data broker belum tersedia."
-        if "401" in err_msg or "Unauthorized" in err_msg or "auth" in err_msg.lower():
-            st.error(
-                f"❌ **Autentikasi Index Alpha gagal** — API key mungkin salah/habis masa berlaku. "
-                f"Periksa INDEX_ALPHA_API_KEY di Streamlit secrets panel."
-            )
-        elif "429" in err_msg or "rate" in err_msg.lower() or "kuota" in err_msg:
-            st.warning(
-                f"⚠️ **Kuota Index Alpha habis** — free plan 5 req/hari. "
-                f"Coba lagi besok atau upgrade plan. Data broker dari cache masih ada."
-            )
-        elif "timeout" in err_msg.lower():
-            st.warning(
-                f"⚠️ **Index Alpha timeout** — server lambat. Coba lagi nanti. "
-                f"Data dari cache masih ditampilkan."
-            )
-        elif "key tidak diset" in err_msg.lower() or "key belum" in err_msg.lower() or "404" in err_msg:
-            st.info(
-                f"📊 **Broker Summary belum dimuat** untuk {ticker.replace('.JK','')} sesi ini.\n\n"
-                f"_{err_msg}_\n\n"
-                "Harga, volume, tren, dan fundamental saham ini tetap lengkap di tab lain."
-            )
-        else:
-            st.info(
-                f"📊 **Broker Summary belum dimuat** untuk {ticker.replace('.JK','')} sesi ini.\n\n"
-                "Harga, volume, tren, dan fundamental saham ini tetap lengkap di tab lain — "
-                "yang belum ada hanya rincian **kepemilikan & serapan broker** (sumber Index Alpha). "
-                "Klik **🔄 Refresh** di atas untuk memuatnya."
-            )
-            if note:
-                st.caption(f"_{note}_")
+        level = _classify_indexalpha_error(err_msg)
+        if level == "error":
+            st.session_state[fail_key] = True
+            st.session_state[f"{fail_key}_msg"] = err_msg
         return
 
     src = info.get("source")
@@ -768,7 +809,15 @@ def _render_broker_latest(ticker: str, scan_date: str, key_prefix: str = "") -> 
 
 
 def _render_broker_historical(ticker: str, scan_date: str, key_prefix: str = "") -> None:
-    """Historical mode: period-aggregated broker summary (1W…1Y / custom)."""
+    """Historical mode: period-aggregated broker summary (1W…1Y / custom).
+
+    Reached only after a user explicitly switches the Latest/Historical
+    radio — that click is itself the "explicit user action" gate, so no
+    additional load-button is needed here (unlike _render_broker_latest,
+    which is the default mode and therefore needed one). A confirmed 401/403
+    still disables further Refresh clicks for this (ticker, scan_date,
+    key_prefix, range) for the same reason as Latest mode: retrying a
+    permission failure can only fail again."""
     from datetime import date as _date
 
     sel = st.radio(
@@ -792,24 +841,33 @@ def _render_broker_historical(ticker: str, scan_date: str, key_prefix: str = "")
     else:
         from_date, to_date = broker_range_bounds(sel)
 
+    hist_fail_key = f"brk_hist_permfail_{key_prefix}_{ticker}_{scan_date}_{sel}"
+
     cap, ref = st.columns([3, 1])
     with cap:
         st.caption(f"Periode: **{from_date} → {to_date}** · agregat Index Alpha (RG sejak Jun 2025)")
     with ref:
-        if st.button("🔄 Refresh", key=f"brk_hist_refresh_{key_prefix}_{ticker}_{scan_date}",
-                     help="Ambil ulang periode ini dari Index Alpha (memakai 1 kuota)."):
+        if st.session_state.get(hist_fail_key):
+            st.button("🔒 Refresh dinonaktifkan",
+                     key=f"brk_hist_refresh_{key_prefix}_{ticker}_{scan_date}", disabled=True,
+                     help="API key ditolak (401/403) — retry dinonaktifkan sampai key diperbaiki di secrets panel.")
+        elif st.button("🔄 Refresh", key=f"brk_hist_refresh_{key_prefix}_{ticker}_{scan_date}",
+                       help="Ambil ulang periode ini dari Index Alpha (memakai 1 kuota)."):
             _cached_broker_range.clear()
+
+    if st.session_state.get(hist_fail_key):
+        _classify_indexalpha_error(st.session_state.get(f"{hist_fail_key}_msg", ""))
+        return
 
     with st.spinner("Memuat broker summary historical…"):
         df, err = _cached_broker_range(ticker, from_date, to_date, "all", "RG")
 
     if df is None or df.empty:
-        st.info(
-            f"📊 **Belum ada Broker Summary** untuk {ticker.replace('.JK','')} pada periode ini.\n\n"
-            "Klik **🔄 Refresh** untuk mengambil agregat periode dari Index Alpha."
-        )
-        if err:
-            st.caption(f"_{err}_")
+        err_msg = err or f"Belum ada Broker Summary untuk {ticker.replace('.JK','')} pada periode ini."
+        level = _classify_indexalpha_error(err_msg)
+        if level == "error":
+            st.session_state[hist_fail_key] = True
+            st.session_state[f"{hist_fail_key}_msg"] = err_msg
         return
     if err:
         st.warning(f"⚠️ {err}")
@@ -2623,9 +2681,10 @@ with _hc_right:
 # MAIN TABS
 # ---------------------------------------------------------------------------
 (tab_scalping, tab_swing, tab_longterm, tab_smart, tab_streak,
- tab_perf, tab_search, tab_history) = st.tabs(
+ tab_perf, tab_search, tab_history, tab_knowledge_base) = st.tabs(
     ["📈 Scalping", "🔄 Swing Trading", "📊 Long Term", "🎯 Smart Money",
-     "🔁 Naik/Turun Beruntun", "📋 Signal Performance", "🔍 Search Emiten", "🕐 History"]
+     "🔁 Naik/Turun Beruntun", "📋 Signal Performance", "🔍 Search Emiten", "🕐 History",
+     "🧠 Learning Agent"]
 )
 
 
@@ -2979,3 +3038,10 @@ with tab_history:
                 "pct_from_52w_high": st.column_config.TextColumn("52w High%",     width="small"),
             },
         )
+
+
+# ===========================================================================
+# TAB — LEARNING AGENT (read-only knowledge_base view)
+# ===========================================================================
+with tab_knowledge_base:
+    render_knowledge_base_tab()
