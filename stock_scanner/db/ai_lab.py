@@ -29,7 +29,9 @@ _REC_COLS = [
     "id", "ticker", "ai_model", "score", "confidence", "recommendation", "reasoning",
     "decision_trace", "confidence_breakdown", "historical_comparison",
     "expected_return", "risk_level", "generated_date", "created_at", "updated_at",
-    "status", "entry_price", "exit_price", "return_percentage", "model",
+    "status", "entry_price", "exit_price", "return_percentage",
+    "highest_price", "lowest_price", "max_runup_pct", "max_drawdown_pct",
+    "holding_days", "trade_outcome", "model",
 ]
 _JSON_COLS = ("reasoning", "decision_trace", "confidence_breakdown", "historical_comparison")
 _EVENT_COLS = ["event_id", "ai_model", "event_type", "description", "metadata_json", "created_at"]
@@ -46,8 +48,10 @@ def upsert_recommendations(conn: sqlite3.Connection, recommendations: list[AIRec
     re-running the pipeline for the same (ticker, ai_model, generated_date)
     overwrites the score/reasoning/etc in place rather than duplicating,
     but never touches `status`/`entry_price`/`exit_price`/`return_percentage`
-    on conflict — those are lifecycle fields owned exclusively by
-    update_recommendation_status(), never by a re-run of the generation
+    or the tracking fields (`highest_price`/`lowest_price`/`max_runup_pct`/
+    `max_drawdown_pct`/`holding_days`/`trade_outcome`) on conflict — those
+    are lifecycle fields owned exclusively by update_recommendation_status()
+    / stock_scanner.ai_lab.resolver, never by a re-run of the generation
     pipeline. This is what makes "never overwrite history" true: a
     recommendation's content can be regenerated the same day, but its
     lifecycle progress never gets silently reset."""
@@ -62,8 +66,10 @@ def upsert_recommendations(conn: sqlite3.Connection, recommendations: list[AIRec
                (id, ticker, ai_model, score, confidence, recommendation, reasoning,
                 decision_trace, confidence_breakdown, historical_comparison,
                 expected_return, risk_level, generated_date, created_at, updated_at,
-                status, entry_price, exit_price, return_percentage, model)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                status, entry_price, exit_price, return_percentage,
+                highest_price, lowest_price, max_runup_pct, max_drawdown_pct,
+                holding_days, trade_outcome, model)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                  score=excluded.score, confidence=excluded.confidence,
                  recommendation=excluded.recommendation, reasoning=excluded.reasoning,
@@ -79,7 +85,9 @@ def upsert_recommendations(conn: sqlite3.Connection, recommendations: list[AIRec
                 rec.historical_comparison.model_dump_json(),
                 rec.expected_return, rec.risk_level.value if rec.risk_level else None,
                 rec.generated_date, now, now, rec.status.value,
-                rec.entry_price, rec.exit_price, rec.return_percentage, rec.model,
+                rec.entry_price, rec.exit_price, rec.return_percentage,
+                rec.highest_price, rec.lowest_price, rec.max_runup_pct, rec.max_drawdown_pct,
+                rec.holding_days, rec.trade_outcome.value if rec.trade_outcome else None, rec.model,
             ),
         )
         n += 1
@@ -94,9 +102,20 @@ def update_recommendation_status(
     entry_price: float | None = None,
     exit_price: float | None = None,
     return_percentage: float | None = None,
+    highest_price: float | None = None,
+    lowest_price: float | None = None,
+    max_runup_pct: float | None = None,
+    max_drawdown_pct: float | None = None,
+    holding_days: int | None = None,
+    trade_outcome: str | None = None,
 ) -> int:
-    """Advance one recommendation's lifecycle. Returns the number of rows
-    updated (0 if recommendation_id doesn't exist) — an UPDATE with no
+    """Advance one recommendation's lifecycle, or refresh its tracking
+    fields in place (pass the row's current status as `new_status` to
+    update highest_price/lowest_price/max_runup_pct/max_drawdown_pct/
+    holding_days without a real transition — see
+    stock_scanner.ai_lab.resolver, which calls this every run for each
+    ACTIVE row whether or not it resolves this time). Returns the number of
+    rows updated (0 if recommendation_id doesn't exist) — an UPDATE with no
     matching WHERE row is not a SQL error, so callers must check this
     rather than assume success (same guardrail as
     stock_scanner.db.knowledge_base.update_status)."""
@@ -108,9 +127,19 @@ def update_recommendation_status(
            SET status = ?, entry_price = COALESCE(?, entry_price),
                exit_price = COALESCE(?, exit_price),
                return_percentage = COALESCE(?, return_percentage),
+               highest_price = COALESCE(?, highest_price),
+               lowest_price = COALESCE(?, lowest_price),
+               max_runup_pct = COALESCE(?, max_runup_pct),
+               max_drawdown_pct = COALESCE(?, max_drawdown_pct),
+               holding_days = COALESCE(?, holding_days),
+               trade_outcome = COALESCE(?, trade_outcome),
                updated_at = ?
            WHERE id = ?""",
-        (new_status, entry_price, exit_price, return_percentage, now, recommendation_id),
+        (
+            new_status, entry_price, exit_price, return_percentage,
+            highest_price, lowest_price, max_runup_pct, max_drawdown_pct,
+            holding_days, trade_outcome, now, recommendation_id,
+        ),
     )
     conn.commit()
     return cur.rowcount

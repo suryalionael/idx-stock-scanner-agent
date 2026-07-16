@@ -11,6 +11,7 @@ Pipeline:
     → enrich shareholder → signal (rules) → ML ranking (opsional)
     → explain (opsional) → simpan output → log ringkasan
 """
+
 import argparse
 import json
 from datetime import date
@@ -26,6 +27,7 @@ from stock_scanner.pipeline.feature_builder import build_features, save_features
 from stock_scanner.pipeline.fetch_yfinance import YFinanceFetcher, incremental_update
 from stock_scanner.pipeline.foreign_flow import PlaceholderForeignFetcher, enrich_with_foreign
 from stock_scanner.pipeline.fundamental import enrich_with_fundamentals
+from stock_scanner.pipeline.knowledge_application import apply_knowledge_ranking
 from stock_scanner.pipeline.ml_ranker import load_ranker, score_candidates
 from stock_scanner.pipeline.news_sentiment import enrich_with_news
 from stock_scanner.pipeline.quality_filters import (
@@ -53,7 +55,7 @@ def main(config_path: Path = _DEFAULT_CONFIG, force_holiday: bool = False) -> No
     # scan_date akan diperbarui dari data aktual setelah feature build.
     from stock_scanner.utils.trading_calendar import is_trading_day, last_trading_day
 
-    execution_date     = date.today()
+    execution_date = date.today()
     execution_date_str = execution_date.strftime("%Y-%m-%d")
 
     if not is_trading_day(execution_date):
@@ -77,21 +79,29 @@ def main(config_path: Path = _DEFAULT_CONFIG, force_holiday: bool = False) -> No
 
     # --- Paths dari config ---
     base_dir = Path(config.get("base_dir", "."))
-    raw_dir       = base_dir / config.get("data_dir",       "data/raw")
-    features_dir  = base_dir / config.get("features_dir",   "data/features")
-    signals_dir   = base_dir / config.get("signals_dir",    "data/signals")
-    ranked_dir    = base_dir / config.get("ranked_dir",     "data/ranked")
-    news_dir         = base_dir / config.get("news_dir",          "data/news")
-    foreign_dir      = base_dir / config.get("foreign_dir",       "data/foreign")
-    broker_dir       = base_dir / config.get("broker_dir",        "data/broker")
-    shareholder_dir  = base_dir / config.get("shareholder_dir",   "data/shareholders")
-    fundamentals_dir = base_dir / config.get("fundamentals_dir",  "data/fundamentals")
-    model_path       = base_dir / config.get("model_path",        "models/ranker.pkl")
-    universe_path    = base_dir / config.get("universe_path",     "stock_scanner/configs/idx_universe.csv")
+    raw_dir = base_dir / config.get("data_dir", "data/raw")
+    features_dir = base_dir / config.get("features_dir", "data/features")
+    signals_dir = base_dir / config.get("signals_dir", "data/signals")
+    ranked_dir = base_dir / config.get("ranked_dir", "data/ranked")
+    news_dir = base_dir / config.get("news_dir", "data/news")
+    foreign_dir = base_dir / config.get("foreign_dir", "data/foreign")
+    broker_dir = base_dir / config.get("broker_dir", "data/broker")
+    shareholder_dir = base_dir / config.get("shareholder_dir", "data/shareholders")
+    fundamentals_dir = base_dir / config.get("fundamentals_dir", "data/fundamentals")
+    model_path = base_dir / config.get("model_path", "models/ranker.pkl")
+    universe_path = base_dir / config.get("universe_path", "stock_scanner/configs/idx_universe.csv")
 
     risk_dir = base_dir / config.get("risk_dir", "data/risk")
 
-    for d in [ranked_dir, news_dir, foreign_dir, broker_dir, shareholder_dir, fundamentals_dir, risk_dir]:
+    for d in [
+        ranked_dir,
+        news_dir,
+        foreign_dir,
+        broker_dir,
+        shareholder_dir,
+        fundamentals_dir,
+        risk_dir,
+    ]:
         d.mkdir(parents=True, exist_ok=True)
 
     # --- Step 1: Load ticker universe ---
@@ -104,7 +114,7 @@ def main(config_path: Path = _DEFAULT_CONFIG, force_holiday: bool = False) -> No
     # --- Step 2 & 3: Incremental update + validate ---
     fetcher = YFinanceFetcher(batch_size=config.get("batch_size", 20))
     lookback = config.get("lookback_years", 3)
-    max_gap  = config.get("max_gap_fill_days", 2)
+    max_gap = config.get("max_gap_fill_days", 2)
 
     all_latest_features: list[pd.DataFrame] = []
     skipped = 0
@@ -175,7 +185,7 @@ def main(config_path: Path = _DEFAULT_CONFIG, force_holiday: bool = False) -> No
             )
         scan_date = market_date_str
 
-    is_live_scan: bool = (scan_date == execution_date_str)
+    is_live_scan: bool = scan_date == execution_date_str
     if not is_live_scan:
         logger.info(
             f"⚠ Non-live scan: execution={execution_date_str}, "
@@ -191,8 +201,11 @@ def main(config_path: Path = _DEFAULT_CONFIG, force_holiday: bool = False) -> No
     if enrich_cfg.get("news", {}).get("enabled", True):
         news_days = enrich_cfg.get("news", {}).get("days", 3)
         feature_df = enrich_with_news(
-            feature_df, news_dir=news_dir, news_days=news_days,
-            save=True, scan_date=scan_date,
+            feature_df,
+            news_dir=news_dir,
+            news_days=news_days,
+            save=True,
+            scan_date=scan_date,
         )
 
     if enrich_cfg.get("foreign", {}).get("enabled", True):
@@ -231,10 +244,10 @@ def main(config_path: Path = _DEFAULT_CONFIG, force_holiday: bool = False) -> No
 
     # --- Step 6b: Quality filters (hard exclusion + risk flags) ---
     signals_df = enrich_df_with_quality_filters(signals_df, config, risk_overrides)
-    eligible_count   = (signals_df["final_status"] == "eligible").sum()
-    watch_count      = (signals_df["final_status"] == "watch_with_risk").sum()
-    excluded_count   = signals_df["final_status"].isin(EXCLUDED_STATUSES).sum()
-    insuff_count     = (signals_df["final_status"] == "insufficient_data").sum()
+    eligible_count = (signals_df["final_status"] == "eligible").sum()
+    watch_count = (signals_df["final_status"] == "watch_with_risk").sum()
+    excluded_count = signals_df["final_status"].isin(EXCLUDED_STATUSES).sum()
+    insuff_count = (signals_df["final_status"] == "insufficient_data").sum()
     logger.info(
         f"Quality filter: {eligible_count} eligible, {watch_count} watch_with_risk, "
         f"{excluded_count} excluded, {insuff_count} insufficient_data"
@@ -259,28 +272,43 @@ def main(config_path: Path = _DEFAULT_CONFIG, force_holiday: bool = False) -> No
     else:
         logger.info(f"Model belum ada ({model_path}) — skip ML ranking")
 
+    # --- Step 7b: Knowledge Application (opsional, ranking-only, deterministic) ---
+    # Rules First (Step 6/6b) → ML Second (Step 7) → Knowledge Third (here).
+    # Never touches signal/final_status — see stock_scanner/pipeline/knowledge_application.py.
+    signals_df = _apply_knowledge_ranking(signals_df, config)
+
     # --- Step 8: Explain agent (opsional) ---
     explain_cfg = config.get("explain", {})
     if explain_cfg.get("enabled", False):
         max_explain = explain_cfg.get("max_tickers", 10)
-        signals_df = explain_batch(signals_df, model_info=model_config,
-                                   config=config, max_explain=max_explain)
+        signals_df = explain_batch(
+            signals_df, model_info=model_config, config=config, max_explain=max_explain
+        )
     else:
         logger.info("Explain agent dinonaktifkan")
 
     # --- Step 8b: Scalping scores ---
     signals_df = enrich_df_with_scalping(signals_df)
-    scalp_high = (signals_df.get("scalping_label") == "SCALPING_HIGH").sum() \
-                 if "scalping_label" in signals_df.columns else 0
+    scalp_high = (
+        (signals_df.get("scalping_label") == "SCALPING_HIGH").sum()
+        if "scalping_label" in signals_df.columns
+        else 0
+    )
     logger.info(f"Scalping: {scalp_high} SCALPING_HIGH candidates")
 
     # --- Step 8c: Trading levels (entry / TP / cutloss) with R:R validation ---
     min_rr = config.get("min_rr", 1.5)
     signals_df = enrich_df_with_levels(signals_df, min_rr=min_rr)
-    active_count = (signals_df.get("trade_setup_status") == "active").sum() \
-                   if "trade_setup_status" in signals_df.columns else 0
-    low_rr_count = (signals_df.get("trade_setup_status") == "low_rr").sum() \
-                   if "trade_setup_status" in signals_df.columns else 0
+    active_count = (
+        (signals_df.get("trade_setup_status") == "active").sum()
+        if "trade_setup_status" in signals_df.columns
+        else 0
+    )
+    low_rr_count = (
+        (signals_df.get("trade_setup_status") == "low_rr").sum()
+        if "trade_setup_status" in signals_df.columns
+        else 0
+    )
     logger.info(f"Trading levels: {active_count} active, {low_rr_count} low_rr (R:R < {min_rr})")
 
     # --- Step 9: Simpan output ---
@@ -295,7 +323,9 @@ def main(config_path: Path = _DEFAULT_CONFIG, force_holiday: bool = False) -> No
 
     # --- Step 10: Publish payload untuk dashboard online (non-fatal) ---
     _publish_dashboard_data(
-        signals_df, scan_date, base_dir,
+        signals_df,
+        scan_date,
+        base_dir,
         execution_date=execution_date_str,
         is_live_scan=is_live_scan,
     )
@@ -306,6 +336,7 @@ def main(config_path: Path = _DEFAULT_CONFIG, force_holiday: bool = False) -> No
     try:
         from stock_scanner.pipeline.publisher import export_recent_ohlc
         from stock_scanner.pipeline.suspension import filter_active
+
         _pub_tickers = filter_active(signals_df)["ticker"].astype(str).tolist()
         export_recent_ohlc(_pub_tickers, raw_dir, sessions=250)
     except Exception as exc:  # noqa: BLE001
@@ -314,6 +345,7 @@ def main(config_path: Path = _DEFAULT_CONFIG, force_holiday: bool = False) -> No
     # --- Step 10c: IHSG (composite index) bundle for the benchmark panel ---
     try:
         from stock_scanner.pipeline.publisher import export_ihsg_bundle
+
         export_ihsg_bundle(sessions=250)
     except Exception as exc:  # noqa: BLE001
         logger.warning("IHSG bundle export skipped: {}", exc)
@@ -323,6 +355,7 @@ def main(config_path: Path = _DEFAULT_CONFIG, force_holiday: bool = False) -> No
     # signals against this freshly-scanned session's OHLC. Writes CSV + Excel.
     try:
         from stock_scanner.pipeline.performance import run_performance
+
         run_performance()
     except Exception as exc:  # noqa: BLE001
         logger.warning("Performance tracking skipped: {}", exc)
@@ -354,7 +387,9 @@ def _apply_promoted_challenger_score(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     try:
-        metrics_json = model_row.get("test_metrics_json") or model_row.get("train_metrics_json") or "{}"
+        metrics_json = (
+            model_row.get("test_metrics_json") or model_row.get("train_metrics_json") or "{}"
+        )
         metrics = json.loads(metrics_json)
         thresh = metrics.get("vol_ratio_20d_threshold", 2.0)
 
@@ -376,6 +411,24 @@ def _apply_promoted_challenger_score(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _apply_knowledge_ranking(df: pd.DataFrame, config: dict) -> pd.DataFrame:
+    """Apply curated AI Lab knowledge (data/published/knowledge_report.json)
+    as a bounded ranking adjustment — see stock_scanner/pipeline/
+    knowledge_application.py. Reads only the committed JSON mirror (no
+    SQLite dependency in the morning scan, same rule as the promoted
+    challenger step above). Purely additive: adds knowledge_bonus/
+    knowledge_adjusted_score/knowledge_matched_ids/knowledge_applied_rules
+    audit columns. Never touches signal classification or hard gates.
+    Best-effort: any failure here is logged and the scan continues with
+    today's (pre-existing) behavior — a knowledge lookup must never break
+    the daily scan."""
+    try:
+        return apply_knowledge_ranking(df, config=config.get("knowledge_application", {}))
+    except Exception as e:  # noqa: BLE001 — a knowledge lookup/scoring failure must never break the scan
+        logger.warning(f"Knowledge application failed (skip, non-fatal): {e}")
+        return df
+
+
 def _prewarm_financials(signals_df: pd.DataFrame, max_tickers: int = 60) -> None:
     """Fetch + persist multi-period financials for ranked candidates.
 
@@ -387,6 +440,7 @@ def _prewarm_financials(signals_df: pd.DataFrame, max_tickers: int = 60) -> None
         if signals_df is None or signals_df.empty or "signal" not in signals_df.columns:
             return
         from stock_scanner.pipeline.long_term import compare_financial_statements
+
         cand = signals_df[signals_df["signal"].isin(["BREAKOUT", "PRE_MARKUP", "WATCH"])]
         tickers = cand["ticker"].astype(str).head(max_tickers).tolist()
         ok = 0
@@ -405,6 +459,7 @@ def _prewarm_financials(signals_df: pd.DataFrame, max_tickers: int = 60) -> None
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _load_config(path: Path) -> dict:
     if not path.exists():
@@ -448,9 +503,9 @@ def _save_ranked(
     """
     caps_cfg = (config or {}).get("signal_caps", {})
     caps = {
-        "BREAKOUT":   caps_cfg.get("breakout",   15),
-        "PRE_MARKUP": caps_cfg.get("pre_markup",  30),
-        "WATCH":      caps_cfg.get("watch",       50),
+        "BREAKOUT": caps_cfg.get("breakout", 15),
+        "PRE_MARKUP": caps_cfg.get("pre_markup", 30),
+        "WATCH": caps_cfg.get("watch", 50),
     }
 
     priority = ["BREAKOUT", "PRE_MARKUP", "WATCH"]
@@ -459,23 +514,32 @@ def _save_ranked(
     # Exclude hard-excluded tickers (leave insufficient_data tickers in, flagged)
     if "final_status" in ranked.columns:
         from stock_scanner.pipeline.quality_filters import EXCLUDED_STATUSES
+
         before = len(ranked)
         ranked = ranked[~ranked["final_status"].isin(EXCLUDED_STATUSES)]
         excluded_n = before - len(ranked)
         if excluded_n:
             logger.info(f"Ranked: removed {excluded_n} tickers with excluded_* status")
 
-    # Sort within each tier: quality_adjusted_score > promoted_rule_score >
-    # ml_prob > total_score. promoted_rule_score (from the currently-promoted
-    # DB-driven challenger, see _apply_promoted_challenger_score) ranks ahead
-    # of ml_prob because it's validated against the exact live signal
-    # population/label — ml_prob's XGBoost track is trained on a broader,
-    # mismatched population (see docs/SELF_IMPROVING_ARCHITECTURE.md §0).
-    # Absent columns fall through unchanged — no promoted model means this
-    # behaves exactly as before.
+    # Sort within each tier: knowledge_adjusted_score > quality_adjusted_score
+    # > promoted_rule_score > ml_prob > total_score. knowledge_adjusted_score
+    # (Rules First, ML Second, Knowledge Third — see
+    # stock_scanner/pipeline/knowledge_application.py) is `<whichever of the
+    # other three would otherwise be used> + knowledge_bonus`, so when no
+    # applicable knowledge exists (knowledge_bonus == 0 everywhere, or the
+    # column is entirely absent) this cascade sorts identically to before —
+    # byte-identical output is a property of the column's definition, not a
+    # separate check here. promoted_rule_score ranks ahead of ml_prob because
+    # it's validated against the exact live signal population/label —
+    # ml_prob's XGBoost track is trained on a broader, mismatched population
+    # (see docs/SELF_IMPROVING_ARCHITECTURE.md §0). Absent columns fall
+    # through unchanged.
     sort_cols = ["signal"]
     asc = [True]
-    if "quality_adjusted_score" in ranked.columns:
+    if "knowledge_adjusted_score" in ranked.columns:
+        sort_cols.append("knowledge_adjusted_score")
+        asc.append(False)
+    elif "quality_adjusted_score" in ranked.columns:
         sort_cols.append("quality_adjusted_score")
         asc.append(False)
     elif "promoted_rule_score" in ranked.columns:
@@ -508,8 +572,12 @@ def _save_ranked(
     ranked.to_csv(path, index=False)
 
     sig_counts = ranked["signal"].value_counts().to_dict()
-    status_counts = ranked["final_status"].value_counts().to_dict() if "final_status" in ranked.columns else {}
-    logger.info(f"Ranked output → {path} ({len(ranked)} tickers) | signals={sig_counts} | status={status_counts}")
+    status_counts = (
+        ranked["final_status"].value_counts().to_dict() if "final_status" in ranked.columns else {}
+    )
+    logger.info(
+        f"Ranked output → {path} ({len(ranked)} tickers) | signals={sig_counts} | status={status_counts}"
+    )
 
 
 def _publish_dashboard_data(
@@ -531,7 +599,7 @@ def _publish_dashboard_data(
         export_latest_dashboard_data(
             signals_df=signals_df,
             scan_date=scan_date,
-            ai_summary=None,   # daily_report summary akan di-attach oleh runner.py
+            ai_summary=None,  # daily_report summary akan di-attach oleh runner.py
             output_path=output_path,
             execution_date=execution_date,
             is_live_scan=is_live_scan,
@@ -548,9 +616,19 @@ def _print_summary(df: pd.DataFrame, scan_date: str) -> None:
 
     top = df[df["signal"].isin(["BREAKOUT", "PRE_MARKUP"])].head(5)
     for _, row in top.iterrows():
-        enh = f" enh={row.get('enhanced_total_score', 0):.1f}" if "enhanced_total_score" in row else ""
-        prob = f" ml={row.get('ml_prob', float('nan')):.3f}" if "ml_prob" in row and pd.notna(row.get("ml_prob")) else ""
-        logger.info(f"  {row.get('ticker')} | {row.get('signal')} | score={row.get('total_score', 0):.1f}{enh}{prob}")
+        enh = (
+            f" enh={row.get('enhanced_total_score', 0):.1f}"
+            if "enhanced_total_score" in row
+            else ""
+        )
+        prob = (
+            f" ml={row.get('ml_prob', float('nan')):.3f}"
+            if "ml_prob" in row and pd.notna(row.get("ml_prob"))
+            else ""
+        )
+        logger.info(
+            f"  {row.get('ticker')} | {row.get('signal')} | score={row.get('total_score', 0):.1f}{enh}{prob}"
+        )
 
 
 if __name__ == "__main__":

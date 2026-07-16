@@ -11,9 +11,13 @@ from stock_scanner.ai_lab.schemas import (
     HistoricalComparison,
     HistoricalComparisonVerdict,
     HypothesisOutput,
+    KnowledgeEntry,
+    KnowledgeLifecycleStatus,
+    KnowledgePromotionStatus,
     RecommendationLevel,
     RecommendationStatus,
     RiskLevel,
+    is_entry_promoted,
 )
 
 
@@ -109,6 +113,58 @@ def test_ai_recommendation_full_round_trip():
     dumped = rec.model_dump()
     restored = AIRecommendation.model_validate(dumped)
     assert restored == rec
+
+
+def _knowledge_entry(**overrides) -> KnowledgeEntry:
+    base = dict(
+        knowledge_id="k1", created_at="2026-07-15T00:00:00+00:00", title="t", description="d",
+        conditions=[["vol_spike", "True"]], evidence_count=1, cumulative_sample_size=10,
+        cumulative_successes=8, cumulative_failures=2, average_win_rate=0.8, shrunk_win_rate=0.75,
+        confidence_interval=[0.5, 0.9], first_seen="2026-07-01T00:00:00+00:00",
+        last_confirmed="2026-07-15T00:00:00+00:00", confirmation_count=1, contradiction_count=0,
+        lifecycle_status=KnowledgeLifecycleStatus.STRONG,
+    )
+    base.update(overrides)
+    return KnowledgeEntry(**base)
+
+
+# ---------------------------------------------------------------------------
+# promotion_status — is_entry_promoted() / KnowledgeEntry.is_promoted()
+# ---------------------------------------------------------------------------
+
+def test_knowledge_entry_defaults_to_candidate_promotion_status():
+    entry = _knowledge_entry()
+    assert entry.promotion_status == KnowledgePromotionStatus.CANDIDATE
+    assert entry.is_promoted() is False
+
+
+def test_knowledge_entry_is_promoted_true_only_when_status_is_promoted():
+    entry = _knowledge_entry(promotion_status=KnowledgePromotionStatus.PROMOTED)
+    assert entry.is_promoted() is True
+    for status in (KnowledgePromotionStatus.CANDIDATE, KnowledgePromotionStatus.REJECTED,
+                   KnowledgePromotionStatus.ARCHIVED):
+        assert _knowledge_entry(promotion_status=status).is_promoted() is False
+
+
+def test_knowledge_entry_rejects_invalid_promotion_status_value():
+    with pytest.raises(ValidationError):
+        _knowledge_entry(promotion_status="approved")
+
+
+def test_is_entry_promoted_matches_knowledge_entry_is_promoted():
+    # The dict-based (raw JSON) and typed (validated object) checks must
+    # agree for every valid status — one reusable rule, two input shapes.
+    for status in KnowledgePromotionStatus:
+        entry = _knowledge_entry(promotion_status=status)
+        as_dict = {"promotion_status": status.value}
+        assert is_entry_promoted(as_dict) == entry.is_promoted()
+
+
+def test_is_entry_promoted_fail_closed_on_missing_null_and_unrecognized():
+    assert is_entry_promoted({}) is False
+    assert is_entry_promoted({"promotion_status": None}) is False
+    assert is_entry_promoted({"promotion_status": "PROMOTED"}) is False  # wrong case
+    assert is_entry_promoted({"promotion_status": "approved"}) is False  # not a real value
 
 
 def test_ai_recommendation_expected_return_can_be_null():

@@ -73,6 +73,44 @@ _REMOTE_AI_LEARNING_EVENTS_URL = os.environ.get(
 )
 _LOCAL_AI_LEARNING_EVENTS_PATH = Path(__file__).parent.parent / "data" / "published" / "ai_learning_events.json"
 
+# Reflection Engine — same standalone, read-only, remote-then-local
+# pattern. The dashboard NEVER imports stock_scanner.ai_lab.reflection_engine
+# or agents (no LLM/stats call from the dashboard) — only reads this
+# committed mirror. See stock_scanner/ai_lab/reflection_engine.py,
+# scripts/run_reflection_engine.py.
+_REMOTE_REFLECTION_REPORT_URL = os.environ.get(
+    "REMOTE_REFLECTION_REPORT_URL",
+    "https://raw.githubusercontent.com/suryalionael/idx-stock-scanner-agent/main/data/published/reflection_report.json",
+)
+_LOCAL_REFLECTION_REPORT_PATH = Path(__file__).parent.parent / "data" / "published" / "reflection_report.json"
+
+# Hypothesis Generator + Statistical Validation — same standalone,
+# read-only, remote-then-local pattern. The dashboard NEVER imports
+# stock_scanner.ai_lab.hypothesis_engine / statistical_validation / client
+# / agents — only reads this committed mirror. See
+# stock_scanner/ai_lab/hypothesis_engine.py, statistical_validation.py,
+# scripts/run_hypothesis_engine.py.
+_REMOTE_HYPOTHESES_REPORT_URL = os.environ.get(
+    "REMOTE_HYPOTHESES_REPORT_URL",
+    "https://raw.githubusercontent.com/suryalionael/idx-stock-scanner-agent/main/data/published/hypotheses_report.json",
+)
+_LOCAL_HYPOTHESES_REPORT_PATH = Path(__file__).parent.parent / "data" / "published" / "hypotheses_report.json"
+
+# Knowledge Base Engine — same standalone, read-only, remote-then-local
+# pattern. Deliberately load_knowledge_REPORT_payload, not
+# load_knowledge_base_payload — that name already serves the unrelated
+# production knowledge_base table (see load_knowledge_base_payload below
+# in this file). The dashboard NEVER imports
+# stock_scanner.ai_lab.knowledge_base_engine / client / agents — only
+# reads this committed mirror. See
+# stock_scanner/ai_lab/knowledge_base_engine.py,
+# scripts/run_knowledge_base_engine.py.
+_REMOTE_KNOWLEDGE_REPORT_URL = os.environ.get(
+    "REMOTE_KNOWLEDGE_REPORT_URL",
+    "https://raw.githubusercontent.com/suryalionael/idx-stock-scanner-agent/main/data/published/knowledge_report.json",
+)
+_LOCAL_KNOWLEDGE_REPORT_PATH = Path(__file__).parent.parent / "data" / "published" / "knowledge_report.json"
+
 # Marker string yang menandakan URL belum dikonfigurasi dengan benar
 _URL_PLACEHOLDERS = ("PLACEHOLDER_USER", "PLACEHOLDER_REPO", "<username>", "<user>", "<repo>")
 
@@ -1378,6 +1416,188 @@ def _load_local_ai_learning_events() -> dict:
     except Exception as exc:
         print(f"[data_loader] ERROR: Gagal baca ai_learning_events lokal: {exc}", file=sys.stderr)
         return {"events": []}
+
+
+def load_reflection_report_payload(url: str | None = None) -> dict:
+    """Load Reflection Engine's report mirror — same remote-then-local
+    pattern as load_ai_recommendations_payload(). Returns
+    {"observations": [], "summary": {}, "narrative": None} (not an
+    exception) if the Reflection Engine hasn't been run yet, or if it ran
+    but found no statistically gated observations — both are normal
+    states, not errors."""
+    import json
+    import sys
+    import urllib.request
+
+    target_url = url or _REMOTE_REFLECTION_REPORT_URL
+    if any(p in target_url for p in _URL_PLACEHOLDERS):
+        return _load_local_reflection_report()
+
+    try:
+        with urllib.request.urlopen(target_url, timeout=10) as resp:
+            raw = resp.read().decode("utf-8")
+        payload = json.loads(raw)
+        print(
+            f"[data_loader] INFO: Remote reflection_report loaded dari {target_url} "
+            f"({len(payload.get('observations', []))} observations)",
+            file=sys.stderr,
+        )
+        return payload
+    except Exception as exc:
+        print(
+            f"[data_loader] WARNING: Gagal load remote reflection_report dari {target_url}: {exc} "
+            f"— mencoba file lokal.",
+            file=sys.stderr,
+        )
+
+    return _load_local_reflection_report()
+
+
+def _load_local_reflection_report() -> dict:
+    import json
+    import sys
+
+    if not _LOCAL_REFLECTION_REPORT_PATH.exists():
+        print(
+            f"[data_loader] INFO: reflection_report.json tidak ditemukan secara lokal "
+            f"({_LOCAL_REFLECTION_REPORT_PATH}) — scripts/run_reflection_engine.py mungkin belum pernah dijalankan.",
+            file=sys.stderr,
+        )
+        return {"observations": [], "summary": {}, "narrative": None}
+
+    try:
+        with open(_LOCAL_REFLECTION_REPORT_PATH, encoding="utf-8") as f:
+            payload = json.load(f)
+        print(
+            f"[data_loader] INFO: Local reflection_report loaded ({len(payload.get('observations', []))} observations)",
+            file=sys.stderr,
+        )
+        return payload
+    except Exception as exc:
+        print(f"[data_loader] ERROR: Gagal baca reflection_report lokal: {exc}", file=sys.stderr)
+        return {"observations": [], "summary": {}, "narrative": None}
+
+
+def load_hypotheses_report_payload(url: str | None = None) -> dict:
+    """Load Hypothesis Generator's report mirror — same remote-then-local
+    pattern as load_reflection_report_payload(). Returns
+    {"hypotheses": [], "summary": {}, "narrative": None} (not an
+    exception) if the pipeline hasn't been run yet, or if it ran but found
+    no reflection observations to seed candidate hypotheses from — both
+    are normal states, not errors."""
+    import json
+    import sys
+    import urllib.request
+
+    target_url = url or _REMOTE_HYPOTHESES_REPORT_URL
+    if any(p in target_url for p in _URL_PLACEHOLDERS):
+        return _load_local_hypotheses_report()
+
+    try:
+        with urllib.request.urlopen(target_url, timeout=10) as resp:
+            raw = resp.read().decode("utf-8")
+        payload = json.loads(raw)
+        print(
+            f"[data_loader] INFO: Remote hypotheses_report loaded dari {target_url} "
+            f"({len(payload.get('hypotheses', []))} hypotheses)",
+            file=sys.stderr,
+        )
+        return payload
+    except Exception as exc:
+        print(
+            f"[data_loader] WARNING: Gagal load remote hypotheses_report dari {target_url}: {exc} "
+            f"— mencoba file lokal.",
+            file=sys.stderr,
+        )
+
+    return _load_local_hypotheses_report()
+
+
+def _load_local_hypotheses_report() -> dict:
+    import json
+    import sys
+
+    if not _LOCAL_HYPOTHESES_REPORT_PATH.exists():
+        print(
+            f"[data_loader] INFO: hypotheses_report.json tidak ditemukan secara lokal "
+            f"({_LOCAL_HYPOTHESES_REPORT_PATH}) — scripts/run_hypothesis_engine.py mungkin belum pernah dijalankan.",
+            file=sys.stderr,
+        )
+        return {"hypotheses": [], "summary": {}, "narrative": None}
+
+    try:
+        with open(_LOCAL_HYPOTHESES_REPORT_PATH, encoding="utf-8") as f:
+            payload = json.load(f)
+        print(
+            f"[data_loader] INFO: Local hypotheses_report loaded ({len(payload.get('hypotheses', []))} hypotheses)",
+            file=sys.stderr,
+        )
+        return payload
+    except Exception as exc:
+        print(f"[data_loader] ERROR: Gagal baca hypotheses_report lokal: {exc}", file=sys.stderr)
+        return {"hypotheses": [], "summary": {}, "narrative": None}
+
+
+def load_knowledge_report_payload(url: str | None = None) -> dict:
+    """Load Knowledge Base Engine's report mirror — same remote-then-local
+    pattern as load_hypotheses_report_payload(). Returns
+    {"entries": [], "summary": {}, "narrative": None} (not an exception)
+    if the pipeline hasn't been run yet, or if no validated_hypotheses
+    have accumulated enough independent confirmation yet — both are
+    normal states, not errors. Unrelated to load_knowledge_base_payload()
+    below, which serves the pre-existing production knowledge_base
+    table."""
+    import json
+    import sys
+    import urllib.request
+
+    target_url = url or _REMOTE_KNOWLEDGE_REPORT_URL
+    if any(p in target_url for p in _URL_PLACEHOLDERS):
+        return _load_local_knowledge_report()
+
+    try:
+        with urllib.request.urlopen(target_url, timeout=10) as resp:
+            raw = resp.read().decode("utf-8")
+        payload = json.loads(raw)
+        print(
+            f"[data_loader] INFO: Remote knowledge_report loaded dari {target_url} "
+            f"({len(payload.get('entries', []))} entries)",
+            file=sys.stderr,
+        )
+        return payload
+    except Exception as exc:
+        print(
+            f"[data_loader] WARNING: Gagal load remote knowledge_report dari {target_url}: {exc} "
+            f"— mencoba file lokal.",
+            file=sys.stderr,
+        )
+
+    return _load_local_knowledge_report()
+
+
+def _load_local_knowledge_report() -> dict:
+    import json
+    import sys
+
+    if not _LOCAL_KNOWLEDGE_REPORT_PATH.exists():
+        print(
+            f"[data_loader] INFO: knowledge_report.json tidak ditemukan secara lokal "
+            f"({_LOCAL_KNOWLEDGE_REPORT_PATH}) — scripts/run_knowledge_base_engine.py mungkin belum pernah dijalankan.",
+            file=sys.stderr,
+        )
+        return {"entries": [], "summary": {}, "narrative": None}
+
+    try:
+        with open(_LOCAL_KNOWLEDGE_REPORT_PATH, encoding="utf-8") as f:
+            payload = json.load(f)
+        print(
+            f"[data_loader] INFO: Local knowledge_report loaded ({len(payload.get('entries', []))} entries)",
+            file=sys.stderr,
+        )
+        return payload
+    except Exception as exc:
+        print(f"[data_loader] ERROR: Gagal baca knowledge_report lokal: {exc}", file=sys.stderr)
+        return {"entries": [], "summary": {}, "narrative": None}
 
 
 def df_from_published_payload(payload: dict) -> pd.DataFrame:

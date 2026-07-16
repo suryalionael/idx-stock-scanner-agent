@@ -21,6 +21,7 @@ cluster if EITHER measure clears its threshold.
 Read-only, research-only: no LLM, no database access. See
 docs/LEARNING_AGENT_ARCHITECTURE.md.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -51,6 +52,7 @@ _DEFAULT_OVERLAP_THRESHOLD = 0.8
 # Similarity primitives
 # ---------------------------------------------------------------------------
 
+
 def jaccard(a: frozenset, b: frozenset) -> float:
     if not a and not b:
         return 1.0
@@ -70,7 +72,8 @@ def overlap_coefficient(a: frozenset, b: frozenset) -> float:
 
 
 def are_duplicates(
-    a: frozenset, b: frozenset,
+    a: frozenset,
+    b: frozenset,
     jaccard_threshold: float = _DEFAULT_JACCARD_THRESHOLD,
     overlap_threshold: float = _DEFAULT_OVERLAP_THRESHOLD,
 ) -> bool:
@@ -81,12 +84,13 @@ def are_duplicates(
 # Clustered pattern
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ClusteredPattern:
     cluster_id: str
     representative: PatternCandidate
     member_count: int
-    members: list = field(default_factory=list)   # list[PatternCandidate] — full traceability
+    members: list = field(default_factory=list)  # list[PatternCandidate] — full traceability
 
     def to_dict(self) -> dict:
         return {
@@ -107,6 +111,7 @@ def _cluster_id(members: list[PatternCandidate]) -> str:
 # ---------------------------------------------------------------------------
 # Public entrypoint
 # ---------------------------------------------------------------------------
+
 
 def cluster_patterns(
     candidates: list[PatternCandidate],
@@ -130,16 +135,25 @@ def cluster_patterns(
 
     order = sorted(
         range(n),
-        key=lambda i: (candidates[i].p_value_adjusted if candidates[i].p_value_adjusted is not None else 1.0,
-                       -candidates[i].n_success),
+        key=lambda i: (
+            candidates[i].p_value_adjusted if candidates[i].p_value_adjusted is not None else 1.0,
+            -candidates[i].n_success,
+        ),
     )
 
     clusters_idx: list[list[int]] = []
     for i in order:
         placed = False
         for cluster in clusters_idx:
-            if all(are_duplicates(candidates[i].signal_ids, candidates[m].signal_ids,
-                                   jaccard_threshold, overlap_threshold) for m in cluster):
+            if all(
+                are_duplicates(
+                    candidates[i].signal_ids,
+                    candidates[m].signal_ids,
+                    jaccard_threshold,
+                    overlap_threshold,
+                )
+                for m in cluster
+            ):
                 cluster.append(i)
                 placed = True
                 break
@@ -149,19 +163,33 @@ def cluster_patterns(
     clusters: list[ClusteredPattern] = []
     for indices in clusters_idx:
         members = [candidates[i] for i in indices]
-        representative = members[0]   # first = most significant, by construction (see `order` above)
-        clusters.append(ClusteredPattern(
-            cluster_id=_cluster_id(members), representative=representative,
-            member_count=len(members), members=members,
-        ))
+        representative = members[0]  # first = most significant, by construction (see `order` above)
+        clusters.append(
+            ClusteredPattern(
+                cluster_id=_cluster_id(members),
+                representative=representative,
+                member_count=len(members),
+                members=members,
+            )
+        )
 
-    clusters.sort(key=lambda c: c.representative.p_value_adjusted if c.representative.p_value_adjusted is not None else 1.0)
-    logger.info(f"pattern_dedup: {n} candidates -> {len(clusters)} clusters "
-                f"(complete-linkage, jaccard>={jaccard_threshold} or overlap>={overlap_threshold})")
+    clusters.sort(
+        key=lambda c: (
+            c.representative.p_value_adjusted
+            if c.representative.p_value_adjusted is not None
+            else 1.0
+        )
+    )
+    logger.info(
+        f"pattern_dedup: {n} candidates -> {len(clusters)} clusters "
+        f"(complete-linkage, jaccard>={jaccard_threshold} or overlap>={overlap_threshold})"
+    )
     return clusters
 
 
-def load_candidates_from_report(json_path: Path, order: int = 2, passed_only: bool = True) -> list[PatternCandidate]:
+def load_candidates_from_report(
+    json_path: Path, order: int = 2, passed_only: bool = True
+) -> list[PatternCandidate]:
     """Reconstruct PatternCandidate objects from a pattern_miner_{date}.json
     report — lets dedup run standalone against a committed report without
     re-running the miner."""

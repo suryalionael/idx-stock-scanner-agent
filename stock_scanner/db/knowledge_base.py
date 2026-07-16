@@ -2,6 +2,7 @@
 stock_scanner/learning/ ever writes to. See
 docs/LEARNING_AGENT_ARCHITECTURE.md and stock_scanner/db/schema.sql.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -14,11 +15,23 @@ import pandas as pd
 
 from stock_scanner.learning.hypothesis_agent import Hypothesis
 
-_DEFAULT_MIRROR_PATH = Path(__file__).parent.parent.parent / "data" / "published" / "knowledge_base.json"
+_DEFAULT_MIRROR_PATH = (
+    Path(__file__).parent.parent.parent / "data" / "published" / "knowledge_base.json"
+)
 _COLS = [
-    "hypothesis_id", "generated_at", "hypothesis", "confidence", "supporting_trades",
-    "affected_sector", "affected_dimension", "pattern_json", "expected_effect", "status",
-    "reviewed_by", "linked_model_version_id", "source_run_id",
+    "hypothesis_id",
+    "generated_at",
+    "hypothesis",
+    "confidence",
+    "supporting_trades",
+    "affected_sector",
+    "affected_dimension",
+    "pattern_json",
+    "expected_effect",
+    "status",
+    "reviewed_by",
+    "linked_model_version_id",
+    "source_run_id",
 ]
 
 
@@ -54,8 +67,18 @@ def write_hypotheses(
                (hypothesis_id, generated_at, hypothesis, confidence, supporting_trades,
                 affected_sector, pattern_json, expected_effect, status, source_run_id)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (hid, generated_at, h.hypothesis, h.confidence, h.supporting_trades, h.affected_sector,
-             pattern_json, h.expected_effect, h.status, source_run_id),
+            (
+                hid,
+                generated_at,
+                h.hypothesis,
+                h.confidence,
+                h.supporting_trades,
+                h.affected_sector,
+                pattern_json,
+                h.expected_effect,
+                h.status,
+                source_run_id,
+            ),
         )
         inserted += cur.rowcount
     conn.commit()
@@ -72,13 +95,22 @@ def load_knowledge_base(conn: sqlite3.Connection, status: str | None = None) -> 
 
 
 VALID_STATUSES = {
-    "candidate", "reviewed", "testing", "tested_passed", "tested_failed", "promoted", "archived",
+    "candidate",
+    "reviewed",
+    "testing",
+    "tested_passed",
+    "tested_failed",
+    "promoted",
+    "archived",
 }
 
 
 def update_status(
-    conn: sqlite3.Connection, hypothesis_id: str, new_status: str,
-    reviewed_by: str | None = None, linked_model_version_id: str | None = None,
+    conn: sqlite3.Connection,
+    hypothesis_id: str,
+    new_status: str,
+    reviewed_by: str | None = None,
+    linked_model_version_id: str | None = None,
 ) -> int:
     """Record a human review decision. `linked_model_version_id`, if given,
     must reference a real model_registry row — the DB's own foreign-key
@@ -114,7 +146,10 @@ def export_knowledge_base(conn: sqlite3.Connection, path: Path | None = None) ->
     path = path or _DEFAULT_MIRROR_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     cur = conn.cursor()
-    rows = [dict(zip(_COLS, row)) for row in cur.execute(f"SELECT {','.join(_COLS)} FROM knowledge_base").fetchall()]
+    rows = [
+        dict(zip(_COLS, row))
+        for row in cur.execute(f"SELECT {','.join(_COLS)} FROM knowledge_base").fetchall()
+    ]
     path.write_text(json.dumps({"knowledge_base": rows}, indent=2, default=str))
     return path
 
@@ -130,8 +165,8 @@ def import_knowledge_base(conn: sqlite3.Connection, path: Path | None = None) ->
     n = 0
     for row in data.get("knowledge_base", []):
         cur.execute(
-            f"""INSERT OR IGNORE INTO knowledge_base ({','.join(_COLS)})
-                VALUES ({','.join('?' * len(_COLS))})""",
+            f"""INSERT OR IGNORE INTO knowledge_base ({",".join(_COLS)})
+                VALUES ({",".join("?" * len(_COLS))})""",
             tuple(row.get(c) for c in _COLS),
         )
         n += cur.rowcount

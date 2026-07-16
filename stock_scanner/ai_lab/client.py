@@ -237,7 +237,13 @@ class MockNineRouterClient:
 
 
 def _default_mock_instance(response_model: type[T]) -> T:
-    from stock_scanner.ai_lab.schemas import DecisionOutput, HypothesisOutput
+    from stock_scanner.ai_lab.schemas import (
+        DecisionOutput,
+        HypothesisNarrativeOutput,
+        HypothesisOutput,
+        KnowledgeNarrativeOutput,
+        ReflectionNarrativeOutput,
+    )
 
     if response_model is HypothesisOutput:
         return HypothesisOutput(  # type: ignore[return-value]
@@ -249,5 +255,20 @@ def _default_mock_instance(response_model: type[T]) -> T:
             reasoning_summary="Mock decision — replace with a real 9router response.",
             historical_comparison_explanation="Mock historical comparison explanation.",
             confidence_explanation="Mock confidence explanation.",
+        )
+    if response_model is ReflectionNarrativeOutput:
+        return ReflectionNarrativeOutput(  # type: ignore[return-value]
+            overall_summary="Mock reflection summary — replace with a real 9router response.",
+            prioritized_observation_ids=[], observation_notes=[],
+        )
+    if response_model is HypothesisNarrativeOutput:
+        return HypothesisNarrativeOutput(  # type: ignore[return-value]
+            overall_summary="Mock hypothesis review summary — replace with a real 9router response.",
+            prioritized_hypothesis_ids=[], hypothesis_notes=[], clusters=[],
+        )
+    if response_model is KnowledgeNarrativeOutput:
+        return KnowledgeNarrativeOutput(  # type: ignore[return-value]
+            overall_summary="Mock knowledge review summary — replace with a real 9router response.",
+            knowledge_notes=[], organized_groups=[], highlighted_changes=[],
         )
     raise NotImplementedError(f"MockNineRouterClient has no default for {response_model.__name__}")
