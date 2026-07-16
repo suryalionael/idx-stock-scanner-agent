@@ -11,10 +11,13 @@ CI durability (model_registry/promotion_decisions survive ephemeral
 runners) doubles as this lookup's read path — no new infrastructure, no new
 dependency in the scan job.
 """
+
 import json
 from pathlib import Path
 
-_DEFAULT_REGISTRY_PATH = Path(__file__).parent.parent.parent / "data" / "published" / "model_registry.json"
+_DEFAULT_REGISTRY_PATH = (
+    Path(__file__).parent.parent.parent / "data" / "published" / "model_registry.json"
+)
 
 
 def get_promoted_model(model_type: str, registry_path: Path | None = None) -> dict | None:

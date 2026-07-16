@@ -8,7 +8,12 @@ path into signal_engine.py / scanner_config.yaml / model promotion. Only
 reads the committed data/published/ai_recommendations.json and
 data/published/ai_learning_events.json mirrors via dashboard.data_loader —
 never opens data/db/signals.db (gitignored, absent on a deployed instance)
-and never imports stock_scanner.ai_lab.client / agents.
+and never imports stock_scanner.ai_lab.client / agents. Section 6
+(Reflection) delegates to dashboard/reflection_view.py, section 7
+(Hypothesis Generator) delegates to dashboard/hypothesis_view.py, and
+section 8 (Knowledge Base) delegates to dashboard/knowledge_entries_view.py
+— same isolation contract, each its own committed
+data/published/{reflection,hypotheses,knowledge}_report.json mirror.
 """
 from __future__ import annotations
 
@@ -16,6 +21,9 @@ import pandas as pd
 import streamlit as st
 
 from dashboard.data_loader import load_ai_learning_events_payload, load_ai_recommendations_payload
+from dashboard.hypothesis_view import render_hypothesis_section
+from dashboard.knowledge_entries_view import render_knowledge_entries_section
+from dashboard.reflection_view import render_reflection_section
 from stock_scanner.ai_lab.performance import compute_performance
 
 _EVENT_ICONS = {
@@ -23,6 +31,10 @@ _EVENT_ICONS = {
     "confidence_updated": "📈",
     "hypothesis_generated": "💡",
     "accuracy_improved": "🎯",
+    "outcome_resolved": "📊",
+    "reflection_generated": "🪞",
+    "hypothesis_validated": "🔬",
+    "knowledge_base_updated": "📚",
 }
 
 
@@ -66,16 +78,22 @@ def render_ai_lab_tab() -> None:
             "📭 No AI Lab recommendations yet. `scripts/run_ai_lab.py` is run manually — "
             "see docs/AI_LAB_ARCHITECTURE.md for the runbook."
         )
-        return
+    else:
+        available_models = sorted(df["ai_model"].unique())
+        _render_recommendations_section(df, available_models)
+        st.divider()
+        _render_performance_section(df, available_models)
+        st.divider()
+        _render_history_section(df)
+        st.divider()
+        _render_learning_timeline_section()
 
-    available_models = sorted(df["ai_model"].unique())
-    _render_recommendations_section(df, available_models)
     st.divider()
-    _render_performance_section(df, available_models)
+    render_reflection_section()
     st.divider()
-    _render_history_section(df)
+    render_hypothesis_section()
     st.divider()
-    _render_learning_timeline_section()
+    render_knowledge_entries_section()
 
 
 # ---------------------------------------------------------------------------

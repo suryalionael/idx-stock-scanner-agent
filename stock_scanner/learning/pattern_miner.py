@@ -15,6 +15,7 @@ market_context, evaluated rows only) — that function has three other
 consumers already and stays exactly as they need it; this module adds its
 own sector_reference join on top rather than modifying a shared dependency.
 """
+
 from __future__ import annotations
 
 import itertools
@@ -35,17 +36,35 @@ from scipy.stats import fisher_exact
 # ---------------------------------------------------------------------------
 
 NUMERIC_FEATURES = [
-    "rsi14", "macd_histogram", "roc5", "roc20", "vol_ratio_20d", "atr_pct",
-    "bb_width", "hist_vol_20d", "pct_from_52w_high", "price_vs_ma200",
-    "slope_ma20", "stoch_rsi_k", "adx", "price_vs_vwap",
+    "rsi14",
+    "macd_histogram",
+    "roc5",
+    "roc20",
+    "vol_ratio_20d",
+    "atr_pct",
+    "bb_width",
+    "hist_vol_20d",
+    "pct_from_52w_high",
+    "price_vs_ma200",
+    "slope_ma20",
+    "stoch_rsi_k",
+    "adx",
+    "price_vs_vwap",
 ]
 BOOLEAN_FEATURES = [
-    "ma_full_alignment", "ma_partial_alignment", "golden_cross", "atr_breakout",
-    "vol_spike", "obv_trend", "supertrend_bullish", "squeeze_on", "squeeze_release",
+    "ma_full_alignment",
+    "ma_partial_alignment",
+    "golden_cross",
+    "atr_breakout",
+    "vol_spike",
+    "obv_trend",
+    "supertrend_bullish",
+    "squeeze_on",
+    "squeeze_release",
 ]
 CATEGORICAL_FEATURES = ["sector", "regime", "strategy", "signal_label"]
 
-_MIN_SLICE_N = 5          # skip trivially tiny slices before spending a stats call on them
+_MIN_SLICE_N = 5  # skip trivially tiny slices before spending a stats call on them
 _TIME_SPLIT_MIN_HALF_N_SUCCESS = 3  # below this in either half, direction check is inconclusive
 _TICKER_CONCENTRATION_FLAG_THRESHOLD = 0.40
 
@@ -54,6 +73,7 @@ _TICKER_CONCENTRATION_FLAG_THRESHOLD = 0.40
 # Stats primitives — hand-implemented (no new dependency beyond the scipy
 # already used elsewhere in this repo's ML stack).
 # ---------------------------------------------------------------------------
+
 
 def wilson_ci(n_success: int, n: int, confidence: float = 0.95) -> tuple[float, float]:
     """Wilson score interval — appropriate for the small-n, low-base-rate
@@ -88,7 +108,9 @@ def benjamini_hochberg(p_values: list[float]) -> list[float]:
     return q
 
 
-def shrunk_win_rate(n_success: int, n: int, baseline_rate: float, prior_strength: float = 20.0) -> float:
+def shrunk_win_rate(
+    n_success: int, n: int, baseline_rate: float, prior_strength: float = 20.0
+) -> float:
     """Beta-Binomial posterior mean under a weak prior centered on the
     global baseline — prevents a 2/2 slice from displaying as a misleading
     '100% win rate' in the report."""
@@ -108,6 +130,7 @@ def _coerce_bool(series: pd.Series) -> pd.Series:
 # Candidate pattern
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class PatternCandidate:
     dimensions: tuple[str, ...]
@@ -124,9 +147,11 @@ class PatternCandidate:
     p_value_adjusted: float | None = None
     ticker_concentration: float | None = None
     ticker_concentration_flag: bool = False
-    time_split_stable: bool | None = None   # None = inconclusive (too few positives per half)
+    time_split_stable: bool | None = None  # None = inconclusive (too few positives per half)
     passed_gate: bool = False
-    signal_ids: frozenset = field(default_factory=frozenset)  # positive-example ids behind n_success — used by pattern_dedup.py's Jaccard/overlap clustering, never read by hypothesis_agent.py's prompt builder
+    signal_ids: frozenset = field(
+        default_factory=frozenset
+    )  # positive-example ids behind n_success — used by pattern_dedup.py's Jaccard/overlap clustering, never read by hypothesis_agent.py's prompt builder
 
     def to_dict(self) -> dict:
         return {
@@ -152,14 +177,22 @@ class PatternCandidate:
     @classmethod
     def from_dict(cls, d: dict) -> "PatternCandidate":
         return cls(
-            dimensions=tuple(d["dimensions"]), slice_definition=d["slice_definition"],
-            interaction_order=d["interaction_order"], n=d["n"], n_success=d["n_success"],
-            win_rate=d["win_rate"], win_rate_shrunk=d["win_rate_shrunk"],
-            baseline_win_rate=d["baseline_win_rate"], ci_lower=d["ci_lower"], ci_upper=d["ci_upper"],
-            p_value=d["p_value"], p_value_adjusted=d.get("p_value_adjusted"),
+            dimensions=tuple(d["dimensions"]),
+            slice_definition=d["slice_definition"],
+            interaction_order=d["interaction_order"],
+            n=d["n"],
+            n_success=d["n_success"],
+            win_rate=d["win_rate"],
+            win_rate_shrunk=d["win_rate_shrunk"],
+            baseline_win_rate=d["baseline_win_rate"],
+            ci_lower=d["ci_lower"],
+            ci_upper=d["ci_upper"],
+            p_value=d["p_value"],
+            p_value_adjusted=d.get("p_value_adjusted"),
             ticker_concentration=d.get("ticker_concentration"),
             ticker_concentration_flag=d.get("ticker_concentration_flag", False),
-            time_split_stable=d.get("time_split_stable"), passed_gate=d.get("passed_gate", False),
+            time_split_stable=d.get("time_split_stable"),
+            passed_gate=d.get("passed_gate", False),
             signal_ids=frozenset(d.get("signal_ids", [])),
         )
 
@@ -176,7 +209,10 @@ class MiningResult:
 # Dimension preparation
 # ---------------------------------------------------------------------------
 
-def _prepare_dimensions(df: pd.DataFrame, sector_df: pd.DataFrame | None) -> tuple[pd.DataFrame, list[str]]:
+
+def _prepare_dimensions(
+    df: pd.DataFrame, sector_df: pd.DataFrame | None
+) -> tuple[pd.DataFrame, list[str]]:
     """Return (bucketed_df, dimension_names). bucketed_df has one column per
     searchable dimension: numeric features replaced by quintile-bucket
     labels, boolean features coerced to real bool, categoricals as-is."""
@@ -187,7 +223,9 @@ def _prepare_dimensions(df: pd.DataFrame, sector_df: pd.DataFrame | None) -> tup
         if col not in out.columns:
             continue
         try:
-            bucketed = pd.qcut(out[col], q=5, labels=["Q1", "Q2", "Q3", "Q4", "Q5"], duplicates="drop")
+            bucketed = pd.qcut(
+                out[col], q=5, labels=["Q1", "Q2", "Q3", "Q4", "Q5"], duplicates="drop"
+            )
         except (ValueError, IndexError) as e:
             logger.debug(f"pattern_miner: skipping numeric dimension {col} (qcut failed: {e})")
             continue
@@ -205,7 +243,8 @@ def _prepare_dimensions(df: pd.DataFrame, sector_df: pd.DataFrame | None) -> tup
 
     if "ihsg_pct_change_eval" in out.columns:
         out["regime"] = np.where(
-            out["ihsg_pct_change_eval"].isna(), np.nan,
+            out["ihsg_pct_change_eval"].isna(),
+            np.nan,
             np.where(out["ihsg_pct_change_eval"] > 0, "up", "down"),
         )
         dims.append("regime")
@@ -224,6 +263,7 @@ def _prepare_dimensions(df: pd.DataFrame, sector_df: pd.DataFrame | None) -> tup
 # ---------------------------------------------------------------------------
 # Slice enumeration + scoring
 # ---------------------------------------------------------------------------
+
 
 def _enumerate_slices(bucketed: pd.DataFrame, combo: tuple[str, ...]):
     grouped = bucketed.groupby(list(combo), dropna=True, observed=True)
@@ -251,8 +291,13 @@ def _time_split_stability(grp: pd.DataFrame, baseline_rate: float) -> bool | Non
 
 
 def _score_slice(
-    slice_def: dict, grp: pd.DataFrame, combo: tuple[str, ...], order: int,
-    baseline_rate: float, total_n: int, total_success: int,
+    slice_def: dict,
+    grp: pd.DataFrame,
+    combo: tuple[str, ...],
+    order: int,
+    baseline_rate: float,
+    total_n: int,
+    total_success: int,
 ) -> PatternCandidate:
     n = len(grp)
     n_success = int(grp["label_success"].sum())
@@ -279,11 +324,20 @@ def _score_slice(
     time_stable = _time_split_stability(grp, baseline_rate)
 
     return PatternCandidate(
-        dimensions=combo, slice_definition=slice_def, interaction_order=order,
-        n=n, n_success=n_success, win_rate=win_rate, win_rate_shrunk=win_rate_shrunk,
-        baseline_win_rate=baseline_rate, ci_lower=ci_lower, ci_upper=ci_upper,
-        p_value=float(p_value), ticker_concentration=ticker_concentration,
-        ticker_concentration_flag=ticker_flag, time_split_stable=time_stable,
+        dimensions=combo,
+        slice_definition=slice_def,
+        interaction_order=order,
+        n=n,
+        n_success=n_success,
+        win_rate=win_rate,
+        win_rate_shrunk=win_rate_shrunk,
+        baseline_win_rate=baseline_rate,
+        ci_lower=ci_lower,
+        ci_upper=ci_upper,
+        p_value=float(p_value),
+        ticker_concentration=ticker_concentration,
+        ticker_concentration_flag=ticker_flag,
+        time_split_stable=time_stable,
         signal_ids=signal_ids,
     )
 
@@ -291,6 +345,7 @@ def _score_slice(
 # ---------------------------------------------------------------------------
 # Public entrypoint
 # ---------------------------------------------------------------------------
+
 
 def mine_patterns(
     df: pd.DataFrame,
@@ -311,14 +366,21 @@ def mine_patterns(
     docs/LEARNING_AGENT_ARCHITECTURE.md).
     """
     if "label_success" not in df.columns or df.empty:
-        return MiningResult(total_n=0, total_success=0, baseline_win_rate=0.0, candidates_by_order={1: [], 2: [], 3: []})
+        return MiningResult(
+            total_n=0,
+            total_success=0,
+            baseline_win_rate=0.0,
+            candidates_by_order={1: [], 2: [], 3: []},
+        )
 
     total_n = len(df)
     total_success = int(df["label_success"].sum())
     baseline_rate = total_success / total_n if total_n else 0.0
 
     bucketed, dims = _prepare_dimensions(df, sector_df)
-    logger.info(f"pattern_miner: {len(dims)} dimensions, {total_n} rows, {total_success} positives (baseline={baseline_rate:.4f})")
+    logger.info(
+        f"pattern_miner: {len(dims)} dimensions, {total_n} rows, {total_success} positives (baseline={baseline_rate:.4f})"
+    )
 
     candidates_by_order: dict[int, list[PatternCandidate]] = {}
     for order in range(1, max_order + 1):
@@ -329,15 +391,15 @@ def mine_patterns(
                 logger.info(f"pattern_miner: order={order} combo {combo_i}/{len(combos)}...")
             for slice_def, grp in _enumerate_slices(bucketed, combo):
                 order_candidates.append(
-                    _score_slice(slice_def, grp, combo, order, baseline_rate, total_n, total_success)
+                    _score_slice(
+                        slice_def, grp, combo, order, baseline_rate, total_n, total_success
+                    )
                 )
         q_values = benjamini_hochberg([c.p_value for c in order_candidates])
         for c, q in zip(order_candidates, q_values):
             c.p_value_adjusted = q
             c.passed_gate = (
-                c.n_success >= min_n_success
-                and q < alpha
-                and c.ci_lower > c.baseline_win_rate
+                c.n_success >= min_n_success and q < alpha and c.ci_lower > c.baseline_win_rate
             )
         candidates_by_order[order] = order_candidates
         logger.info(
@@ -346,6 +408,8 @@ def mine_patterns(
         )
 
     return MiningResult(
-        total_n=total_n, total_success=total_success, baseline_win_rate=baseline_rate,
+        total_n=total_n,
+        total_success=total_success,
+        baseline_win_rate=baseline_rate,
         candidates_by_order=candidates_by_order,
     )

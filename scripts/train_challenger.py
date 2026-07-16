@@ -53,6 +53,22 @@ _VOL_RATIO_MIN_LIFT = 1.5
 _VOL_RATIO_MIN_N_FRAC = 0.25
 _MIN_SCORE_FOR_SELECTION = 3
 
+# Minimum dataset guard — a missing/insufficient training dataset is an
+# expected production state during early deployment (fresh install, empty
+# DB, not enough resolved outcomes yet), not an error. chronological_split()
+# indexes into `dates[int(n * frac) - 1]`, which IndexErrors on an empty
+# `dates` list (n=0) and can produce a degenerate split for very small n —
+# these guards run before that call so the script exits cleanly (skip,
+# exit code 0) instead of crashing. Thresholds are deliberately generous,
+# not tuned: 30 unique trading days is enough for the default 60/20/20
+# chronological split to give every partition several distinct dates, and
+# for sensitivity_battery()'s own internal 50/50 time-split of TRAIN+VAL to
+# have dates on both sides — the guards only need to guarantee training CAN
+# run without crashing, not that it will pass the sensitivity battery
+# (that pass/fail decision is untouched).
+_MIN_ROWS = 50
+_MIN_UNIQUE_DATES = 30
+
 
 # ---------------------------------------------------------------------------
 # Data loading — the actual fix: read the live-labeled population from the DB
@@ -83,7 +99,13 @@ def load_training_examples(conn) -> pd.DataFrame:
 
 def chronological_split(df: pd.DataFrame, train_frac: float, val_frac: float):
     """Split by whole signal_date (never split a single date across sets) —
-    same discipline as validate_safe_score_oos.py, generalized to 3 sets."""
+    same discipline as validate_safe_score_oos.py, generalized to 3 sets.
+
+    Callers must check _dataset_feasible(df) first — this function indexes
+    into `dates[int(n * train_frac) - 1]`, which raises IndexError if
+    `dates` is empty. It is not this function's job to guard against that;
+    keeping it a pure, unguarded split keeps its own logic (and tests)
+    unchanged from before this hardening pass."""
     dates = sorted(df["signal_date"].unique())
     n = len(dates)
     train_end = dates[int(n * train_frac) - 1]
@@ -92,6 +114,42 @@ def chronological_split(df: pd.DataFrame, train_frac: float, val_frac: float):
     val = df[(df["signal_date"] > train_end) & (df["signal_date"] <= val_end)]
     test = df[df["signal_date"] > val_end]
     return train, val, test
+
+
+# ---------------------------------------------------------------------------
+# Feasibility guards — pure functions, no DB/network I/O, return a
+# human-readable skip reason (or None if training may proceed). Never raise.
+# ---------------------------------------------------------------------------
+
+def _dataset_feasible(df: pd.DataFrame) -> str | None:
+    """Checked immediately after load_training_examples(), before any
+    feature engineering or chronological_split() call. An empty or
+    undersized dataset is an expected state (fresh deployment, not enough
+    resolved outcomes yet) — this returns a reason to skip, never raises."""
+    if df.empty:
+        return "No training examples available (0 rows from signals/outcomes join)."
+    if len(df) < _MIN_ROWS:
+        return f"Only {len(df)} training rows available. Minimum required: {_MIN_ROWS}."
+    n_dates = df["signal_date"].nunique()
+    if n_dates < _MIN_UNIQUE_DATES:
+        return f"Only {n_dates} unique trading days available. Minimum required: {_MIN_UNIQUE_DATES}."
+    return None
+
+
+def _split_feasible(train: pd.DataFrame, val: pd.DataFrame, test: pd.DataFrame) -> str | None:
+    """Checked immediately after chronological_split(). Defense in depth:
+    _dataset_feasible()'s date-count check is what prevents
+    chronological_split()'s IndexError in practice, but a small/skewed
+    date distribution — or a non-default --train-frac/--val-frac — could
+    still produce an empty partition even when the aggregate counts look
+    fine. Never raises."""
+    if train.empty:
+        return "Chronological split produced an empty TRAIN set."
+    if val.empty:
+        return "Chronological split produced an empty VAL set."
+    if test.empty:
+        return "Chronological split produced an empty TEST set."
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -231,10 +289,24 @@ def register_model(conn, train, val, test, vol_thresh: float,
 def main(train_frac: float = 0.6, val_frac: float = 0.2) -> None:
     conn = get_connection()
     df = load_training_examples(conn)
+
+    skip_reason = _dataset_feasible(df)
+    if skip_reason:
+        logger.warning("Training skipped: {}", skip_reason)
+        conn.close()
+        return
+
     logger.info("training_examples loaded from DB: {} rows, {} positive ({:.2f}%)",
                 len(df), df["label_success"].sum(), df["label_success"].mean() * 100)
 
     train, val, test = chronological_split(df, train_frac, val_frac)
+
+    skip_reason = _split_feasible(train, val, test)
+    if skip_reason:
+        logger.warning("Training skipped: {}", skip_reason)
+        conn.close()
+        return
+
     logger.info("TRAIN n={} ({} -> {})  VAL n={} ({} -> {})  TEST n={} ({} -> {})",
                 len(train), train["signal_date"].min().date(), train["signal_date"].max().date(),
                 len(val), val["signal_date"].min().date() if len(val) else "-", val["signal_date"].max().date() if len(val) else "-",

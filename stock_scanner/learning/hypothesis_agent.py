@@ -18,6 +18,7 @@ Guardrails enforced here, not just documented:
   - A malformed/unparseable response is logged and skipped — never
     retried into a looser shape, never raised past the batch.
 """
+
 from __future__ import annotations
 
 import json
@@ -35,10 +36,10 @@ _REQUIRED_KEYS = {"hypothesis", "confidence", "affected_sector", "expected_effec
 # LLM client interface
 # ---------------------------------------------------------------------------
 
+
 class LLMClient(ABC):
     @abstractmethod
-    def complete(self, prompt: str) -> str:
-        ...
+    def complete(self, prompt: str) -> str: ...
 
 
 class NineRouterClient(LLMClient):
@@ -70,17 +71,20 @@ class MockLLMClient(LLMClient):
     def complete(self, prompt: str) -> str:
         if self._response is not None:
             return self._response
-        return json.dumps({
-            "hypothesis": "Mock hypothesis — replace with a real LLM response.",
-            "confidence": 0.5,
-            "affected_sector": None,
-            "expected_effect": "Higher win rate (mock)",
-        })
+        return json.dumps(
+            {
+                "hypothesis": "Mock hypothesis — replace with a real LLM response.",
+                "confidence": 0.5,
+                "affected_sector": None,
+                "expected_effect": "Higher win rate (mock)",
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
 # Hypothesis
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class Hypothesis:
@@ -107,6 +111,7 @@ class Hypothesis:
 # ---------------------------------------------------------------------------
 # Prompt construction — aggregated stats only, see module docstring
 # ---------------------------------------------------------------------------
+
 
 def _build_prompt(cluster: ClusteredPattern) -> str:
     r = cluster.representative
@@ -142,30 +147,41 @@ you were not given any."""
 # Response parsing — strict, code-enforced fields, never trusts the model
 # ---------------------------------------------------------------------------
 
+
 def _parse_response(raw: str, cluster: ClusteredPattern) -> Hypothesis | None:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as e:
-        logger.warning(f"hypothesis_agent: unparseable response for cluster {cluster.cluster_id} (skip): {e}")
+        logger.warning(
+            f"hypothesis_agent: unparseable response for cluster {cluster.cluster_id} (skip): {e}"
+        )
         return None
 
     if not isinstance(data, dict) or not _REQUIRED_KEYS.issubset(data.keys()):
-        logger.warning(f"hypothesis_agent: response missing required keys for cluster {cluster.cluster_id} (skip)")
+        logger.warning(
+            f"hypothesis_agent: response missing required keys for cluster {cluster.cluster_id} (skip)"
+        )
         return None
 
     try:
         confidence = float(data["confidence"])
     except (TypeError, ValueError):
-        logger.warning(f"hypothesis_agent: non-numeric confidence for cluster {cluster.cluster_id} (skip)")
+        logger.warning(
+            f"hypothesis_agent: non-numeric confidence for cluster {cluster.cluster_id} (skip)"
+        )
         return None
     if not (0.0 <= confidence <= 1.0):
-        logger.warning(f"hypothesis_agent: confidence {confidence} out of [0,1] for cluster {cluster.cluster_id} (skip)")
+        logger.warning(
+            f"hypothesis_agent: confidence {confidence} out of [0,1] for cluster {cluster.cluster_id} (skip)"
+        )
         return None
 
     hypothesis_text = data.get("hypothesis")
     expected_effect = data.get("expected_effect")
     if not isinstance(hypothesis_text, str) or not hypothesis_text.strip():
-        logger.warning(f"hypothesis_agent: empty/invalid hypothesis text for cluster {cluster.cluster_id} (skip)")
+        logger.warning(
+            f"hypothesis_agent: empty/invalid hypothesis text for cluster {cluster.cluster_id} (skip)"
+        )
         return None
 
     affected_sector = data.get("affected_sector")
@@ -188,6 +204,7 @@ def _parse_response(raw: str, cluster: ClusteredPattern) -> Hypothesis | None:
 # Public entrypoint
 # ---------------------------------------------------------------------------
 
+
 def generate_hypotheses(clusters: list[ClusteredPattern], client: LLMClient) -> list[Hypothesis]:
     """One LLM call per cluster. A single bad RESPONSE (malformed JSON,
     missing keys, out-of-range confidence) is logged and skipped — never
@@ -204,10 +221,14 @@ def generate_hypotheses(clusters: list[ClusteredPattern], client: LLMClient) -> 
         except NotImplementedError:
             raise
         except Exception as e:  # noqa: BLE001 — a transient per-call failure must not abort the batch
-            logger.warning(f"hypothesis_agent: LLM call failed for cluster {cluster.cluster_id} (skip): {e}")
+            logger.warning(
+                f"hypothesis_agent: LLM call failed for cluster {cluster.cluster_id} (skip): {e}"
+            )
             continue
         hyp = _parse_response(raw, cluster)
         if hyp is not None:
             hypotheses.append(hyp)
-    logger.info(f"hypothesis_agent: {len(hypotheses)}/{len(clusters)} clusters produced a valid hypothesis")
+    logger.info(
+        f"hypothesis_agent: {len(hypotheses)}/{len(clusters)} clusters produced a valid hypothesis"
+    )
     return hypotheses

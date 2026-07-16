@@ -125,5 +125,18 @@ quality_filters:
   penalty_uma: 1.0                  # is_uma → -1.0
   penalty_data_missing: 0.5         # fundamental_status missing → -0.5
 
+# ---------------------------------------------------------------------------
+# KNOWLEDGE APPLICATION — bounded ranking adjustment from curated AI Lab
+# knowledge (data/published/knowledge_report.json). See
+# stock_scanner/pipeline/knowledge_application.py. Read-only, no LLM, no
+# SQLite at scan time. Only applies within an existing signal tier — never
+# changes signal/final_status. No-op (byte-identical output) if the file
+# is missing/empty or nothing applicable matches.
+# ---------------------------------------------------------------------------
+knowledge_application:
+  enabled: true
+  bonus_scale: 1.0        # scale of (shrunk_win_rate - 0.5) per matched entry, before lifecycle weighting
+  max_total_bonus: 0.5    # hard cap on the summed bonus per candidate (0-10 total_score scale)
+
 # --- Logging ---
 log_level: "INFO"
