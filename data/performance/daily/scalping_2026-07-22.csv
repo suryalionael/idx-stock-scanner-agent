@@ -159,3 +159,4 @@ signal_date,eval_date,strategy,ticker,signal,prev,close,high,pct_high,pct_close,
 2026-07-21,2026-07-22,scalping,KETR.JK,SCALPING_HIGH,580.0,570.0,595.0,2.59,-1.72,L,evaluated
 2026-07-21,2026-07-22,scalping,UFOE.JK,SCALPING_HIGH,145.0,137.0,142.0,-2.07,-5.52,L,evaluated
 2026-07-21,2026-07-22,scalping,AGRO.JK,SCALPING_HIGH,154.0,153.0,155.0,0.65,-0.65,L,evaluated
+2026-07-21,2026-07-22,scalping,LUCK.JK,SCALPING_HIGH,103.0,119.0,132.0,28.16,15.53,W,evaluated
