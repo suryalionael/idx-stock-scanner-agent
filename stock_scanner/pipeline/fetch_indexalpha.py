@@ -35,6 +35,8 @@ from typing import Any
 import pandas as pd
 from loguru import logger
 
+from stock_scanner.pipeline.broker_analytics import get_broker_name
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -48,37 +50,12 @@ _MAX_BACKOFF     = 30.0     # seconds — cap exponential backoff
 # Status codes yang aman di-retry (transient)
 _RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 
-# Known IDX broker codes → names (subset; extend sesuai kebutuhan)
-IDX_BROKER_NAMES: dict[str, str] = {
-    "YP": "Indo Premier Sekuritas",
-    "CC": "Mandiri Sekuritas",
-    "ZP": "Macquarie Sekuritas",
-    "AK": "UBS Securities Indonesia",
-    "BQ": "BNI Sekuritas",
-    "ML": "Merrill Lynch / BofA",
-    "MS": "Morgan Stanley Sekuritas",
-    "JP": "JPMorgan Securities",
-    "DB": "Deutsche Bank",
-    "YU": "CLSA Securities Indonesia",
-    "CS": "Credit Suisse / UBS",
-    "RB": "CGS-CIMB Securities",
-    "GS": "Goldman Sachs",
-    "QA": "Citigroup Securities",
-    "DP": "DBS Vickers Securities",
-    "SB": "Nomura Securities",
-    "PD": "Indo Premier Online",
-    "CP": "Valbury Asia Securities",
-    "FZ": "Waterfront Sekuritas",
-    "OD": "Mirae Asset Sekuritas",
-    "DR": "OSO Sekuritas",
-    "LG": "Trimegah Sekuritas",
-    "MQ": "Ciptadana Sekuritas",
-    "IN": "Investindo Nusantara",
-    "KI": "Ciptadana Sekuritas Asia",
-    "NI": "BCA Sekuritas",
-    "HD": "HD Capital",
-    "MU": "Minna Padi Investama",
-}
+# Broker names come from stock_scanner/configs/broker_config.yaml — the
+# single source of truth, see get_broker_name() below and
+# docs/BROKER_CLASSIFICATION_AUDIT.md. There is no hardcoded name table in
+# this module anymore; a previous one (IDX_BROKER_NAMES) had drifted out of
+# sync with reality in several places (see the audit doc for specifics),
+# which is exactly the failure mode a single source of truth prevents.
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +185,7 @@ def _normalize_response(data: list[dict[str, Any]]) -> pd.DataFrame:
         rows.append({
             # ── backward-compat columns ──────────────────────────────────
             "broker_code":     code,
-            "broker_name":     IDX_BROKER_NAMES.get(code, "Unknown"),
+            "broker_name":     get_broker_name(code),
             "buy_lot":         buy_vol,
             "sell_lot":        sell_vol,
             "net_lot":         buy_vol - sell_vol,

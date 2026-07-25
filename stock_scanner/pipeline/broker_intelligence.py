@@ -32,57 +32,7 @@ from typing import Any
 
 import pandas as pd
 
-# ---------------------------------------------------------------------------
-# Broker classification tables (IDX 2-letter codes)
-# ---------------------------------------------------------------------------
-
-#: Foreign institutional brokers active on IDX
-FOREIGN_BROKER_CODES: frozenset[str] = frozenset({
-    "CS",   # Credit Suisse / UBS Securities (post-merger)
-    "ML",   # Merrill Lynch / BofA Securities
-    "MS",   # Morgan Stanley
-    "JP",   # JPMorgan Securities
-    "DB",   # Deutsche Bank
-    "YU",   # CLSA Securities Indonesia
-    "ZP",   # Macquarie Sekuritas
-    "RB",   # CGS-CIMB Securities
-    "GS",   # Goldman Sachs
-    "UX",   # UOB Kay Hian Securities
-    "AK",   # UBS Securities Indonesia
-    "DP",   # DBS Vickers Securities
-    "SB",   # Nomura Securities
-    "BK",   # JP Securities / Barclays
-    "QA",   # Citigroup Securities
-    "LS",   # Credit Suisse International
-    "MK",   # Daiwa Capital Markets
-    "KK",   # Maybank Securities
-    "OX",   # CIMB Securities
-    "SA",   # Societe Generale
-})
-
-#: Large domestic (local) brokers with significant market presence
-BIG_LOCAL_BROKER_CODES: frozenset[str] = frozenset({
-    "YP",   # Indo Premier Sekuritas / Mirae Asset
-    "OD",   # Mandiri Sekuritas
-    "DH",   # Bahana Sekuritas
-    "YJ",   # Trimegah Sekuritas
-    "ZH",   # CIMB Niaga Sekuritas
-    "BW",   # BNI Sekuritas
-    "DR",   # OSO Sekuritas
-    "CC",   # Mirae Asset Sekuritas
-    "ID",   # Sinarmas Sekuritas
-    "YB",   # Panin Sekuritas
-    "GI",   # BRI Danareksa Sekuritas
-    "LG",   # Phillip Sekuritas
-    "ZU",   # Danareksa Sekuritas
-    "HD",   # HD Capital Sekuritas
-    "PD",   # Henan Putihrai
-    "EP",   # MNC Sekuritas
-    "FZ",   # Manulife Sekuritas
-    "KI",   # Ciptadana Sekuritas
-    "AD",   # Phintraco Sekuritas
-    "NI",   # BCA Sekuritas
-})
+from stock_scanner.pipeline.broker_analytics import get_broker_legacy_type
 
 _LABEL_STRONG = "ACCUMULATION_STRONG"
 _LABEL_WATCH  = "ACCUMULATION_WATCH"
@@ -122,17 +72,19 @@ def classify_broker(broker_code: str) -> str:
         "big_local" — large domestic broker
         "local"     — other domestic broker
         "unknown"   — unrecognised code
-    """
-    code = str(broker_code).strip().upper()
-    if not code:
-        return "unknown"
-    if code in FOREIGN_BROKER_CODES:
-        return "foreign"
-    if code in BIG_LOCAL_BROKER_CODES:
-        return "big_local"
-    if len(code) == 2 and code.isalpha():
-        return "local"
-    return "unknown"
+
+    Sourced from stock_scanner/configs/broker_config.yaml (the single
+    source of truth for broker classification — see
+    docs/BROKER_CLASSIFICATION_AUDIT.md) via
+    broker_analytics.get_broker_legacy_type(), NOT a hardcoded table in
+    this module anymore. The four-value contract above is preserved
+    exactly as it was before the broker classification audit — verified
+    byte-for-byte against the old hardcoded code sets for every entry now
+    in broker_config.yaml — because compute_broker_intelligence() and
+    stock_scanner.pipeline.smart_money_screener depend on these exact
+    values. Use broker_analytics.get_broker_type() instead for the newer,
+    audited retail/institutional/foreign/mixed_unknown classification."""
+    return get_broker_legacy_type(broker_code)
 
 
 def compute_broker_intelligence(

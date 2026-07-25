@@ -99,7 +99,12 @@ def test_normalize_response_maps_fields_correctly():
     assert len(df) == 1
     row = df.iloc[0]
     assert row["broker_code"] == "YP"  # uppercased
-    assert row["broker_name"] == "Indo Premier Sekuritas"  # known-code lookup
+    # Sourced from stock_scanner/configs/broker_config.yaml (see
+    # docs/BROKER_CLASSIFICATION_AUDIT.md) — YP is Mirae Asset Sekuritas
+    # Indonesia, not "Indo Premier Sekuritas" (the old hardcoded
+    # IDX_BROKER_NAMES dict's mapping, corrected by the broker
+    # classification audit).
+    assert row["broker_name"] == "Mirae Asset Sekuritas Indonesia"
     assert row["buy_lot"] == 1000.0
     assert row["sell_lot"] == 400.0
     assert row["net_lot"] == 600.0

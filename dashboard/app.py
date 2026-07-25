@@ -38,6 +38,7 @@ from dashboard.theme import (
     style_table,
 )
 from dashboard.data_loader import (
+    apply_retail_filter,
     available_dates,
     available_dates_unified,
     classify_indexalpha_error,
@@ -2252,6 +2253,34 @@ with st.sidebar:
         _n_suspended = 0
     if _n_suspended:
         st.caption(f"🚫 {_n_suspended} saham suspend / baru dibuka disembunyikan dari kandidat")
+
+    # Global retail-accumulation filter — applied here, once, exactly like
+    # filter_active() above, so every tab (which all receive this same
+    # df_all) inherits it automatically. Default OFF: apply_retail_filter()
+    # returns df_all completely unchanged (same object, no broker parquet
+    # read) when the checkbox is off, so dashboard output stays
+    # byte-identical to before this feature existed. See
+    # dashboard/data_loader.py::apply_retail_filter — reuses the audited
+    # broker classification (stock_scanner/configs/broker_config.yaml via
+    # broker_analytics.py) and the existing top_buyer/top_seller broker
+    # parquet loop; hides only stocks positively determined to be
+    # retail-dominated, never ones with unknown/missing broker data.
+    hide_retail = st.checkbox(
+        "Hide Retail Accumulation",
+        value=False,
+        key="hide_retail_accumulation",
+        help="Sembunyikan saham yang akumulasinya didominasi broker ritel "
+             "(retail_ratio > threshold di broker_config.yaml). Saham tanpa "
+             "data broker tetap ditampilkan.",
+    )
+    try:
+        _n_before_retail = len(df_all)
+        df_all = apply_retail_filter(df_all, selected_date, hide_retail)
+        _n_retail_hidden = _n_before_retail - len(df_all)
+    except Exception:  # noqa: BLE001
+        _n_retail_hidden = 0
+    if hide_retail and _n_retail_hidden:
+        st.caption(f"🏪 {_n_retail_hidden} saham didominasi broker ritel disembunyikan")
 
     # Mini signal summary
     if "signal" in df_all.columns:

@@ -152,17 +152,20 @@ HISTORY_COLS = [
 # ---------------------------------------------------------------------------
 
 def load_broker_config() -> dict:
-    """Load broker_config.yaml untuk Broker Analytics modul.
+    """Load broker_config.yaml — thin wrapper around
+    stock_scanner.pipeline.broker_analytics.load_broker_config(), the single
+    source of truth for broker name/type classification (see
+    docs/BROKER_CLASSIFICATION_AUDIT.md). This module does not parse the
+    file itself anymore — only the dashboard-specific UserWarning-on-missing
+    behavior below lives here.
 
     Returns:
         dict dengan structure:
         {
-          'broker_groups': {
-            'foreign': {'codes': [...], 'description': ...},
-            'institution': {...},
-            'retail': {...},
-            'big_local': {...},
-            'local': {...}
+          'brokers': {
+            'YP': {'name': ..., 'type': 'retail'|'institutional'|'foreign'|'mixed_unknown',
+                   'legacy_type': ..., 'name_confidence': ..., 'type_confidence': ..., 'notes': ...},
+            ...
           },
           'metrics': {
             'far': {'thresholds': {...}, 'description': ...},
@@ -175,28 +178,22 @@ def load_broker_config() -> dict:
 
     Returns empty dict jika file tidak ditemukan atau gagal parse.
     """
-    if not _BROKER_CONFIG.exists():
+    from stock_scanner.pipeline.broker_analytics import load_broker_config as _load_broker_config
+
+    # No explicit path: both this wrapper and broker_analytics.py's own
+    # default resolve to the same stock_scanner/configs/broker_config.yaml,
+    # and omitting it lets every caller share one lru_cache entry instead
+    # of two (one per distinct Path object, even if they'd resolve equal).
+    config = _load_broker_config()
+    if not config:
         import warnings
         warnings.warn(
-            f"broker_config.yaml tidak ditemukan di {_BROKER_CONFIG}. "
+            f"broker_config.yaml tidak ditemukan atau gagal di-parse di {_BROKER_CONFIG}. "
             f"Broker Analytics tidak tersedia. Jalankan setup untuk membuat file ini.",
             UserWarning,
             stacklevel=2,
         )
-        return {}
-
-    try:
-        with open(_BROKER_CONFIG, "r") as f:
-            config = yaml.safe_load(f) or {}
-        return config
-    except Exception as e:
-        import warnings
-        warnings.warn(
-            f"Gagal load broker_config.yaml: {e}",
-            UserWarning,
-            stacklevel=2,
-        )
-        return {}
+    return config
 
 
 # ---------------------------------------------------------------------------
@@ -1731,6 +1728,7 @@ def enrich_df_with_top_brokers(
     df: pd.DataFrame,
     scan_date: str,
     broker_dir: Path | None = None,
+    compute_retail: bool = False,
 ) -> pd.DataFrame:
     """Enrich DataFrame dengan kolom top_buyer dan top_seller dari broker cache.
 
@@ -1743,26 +1741,60 @@ def enrich_df_with_top_brokers(
     dari broker data terakhir).
 
     Args:
-        df        : DataFrame utama (harus punya kolom 'ticker').
-        scan_date : "YYYY-MM-DD" — tanggal untuk lookup broker cache.
-        broker_dir: Path ke data/broker/. Default dari konstanta modul.
+        df             : DataFrame utama (harus punya kolom 'ticker').
+        scan_date      : "YYYY-MM-DD" — tanggal untuk lookup broker cache.
+        broker_dir     : Path ke data/broker/. Default dari konstanta modul.
+        compute_retail : False (default) — behavior identik dengan sebelum
+                         parameter ini ada; existing callers (mis. Swing tab
+                         via get_table_df) TIDAK terpengaruh. True — juga
+                         hitung retail_ratio/is_retail_dominated per ticker
+                         di DALAM loop yang sama (bukan pass file terpisah),
+                         reusing stock_scanner.pipeline.broker_analytics
+                         .classify_brokers_in_df()/calculate_retail_ratio()
+                         (single source of truth — see
+                         docs/BROKER_CLASSIFICATION_AUDIT.md; broker
+                         classification itself is frozen, not touched here)
+                         and broker_config.yaml's existing
+                         metrics.retail_ratio.thresholds.significant
+                         threshold — no new formula. Used by
+                         apply_retail_filter() below.
 
     Returns:
-        DataFrame dengan kolom top_buyer dan top_seller ditambahkan (di awal).
+        DataFrame dengan kolom top_buyer dan top_seller ditambahkan (di awal),
+        plus retail_ratio/is_retail_dominated jika compute_retail=True.
     """
     result = df.copy()
     bdir = broker_dir or _BROKER_DIR
 
-    if "top_buyer" in result.columns and "top_seller" in result.columns:
-        return result  # sudah ada, skip
+    needed_cols = ["top_buyer", "top_seller"]
+    if compute_retail:
+        needed_cols += ["retail_ratio", "is_retail_dominated"]
+    if all(c in result.columns for c in needed_cols):
+        return result  # sudah ada semua kolom yang diminta, skip — no re-read
 
     # Inisialisasi default
     result["top_buyer"] = "-"
     result["top_seller"] = "-"
+    if compute_retail:
+        # NaN, bukan False — "belum tahu" (tidak ada data broker) harus bisa
+        # dibedakan dari "tahu dan bukan retail-dominated". apply_retail_filter()
+        # bergantung pada perbedaan ini: fail open, never hide unknown rows.
+        result["retail_ratio"] = float("nan")
+        result["is_retail_dominated"] = None
 
     ticker_col = "ticker"
     if ticker_col not in result.columns:
         return result
+
+    broker_config = None
+    retail_threshold = 50.0
+    if compute_retail:
+        from stock_scanner.pipeline.broker_analytics import load_broker_config as _load_broker_config
+
+        broker_config = _load_broker_config()  # cached (lru_cache) — parsed at most once per process
+        retail_threshold = float(
+            broker_config.get("metrics", {}).get("retail_ratio", {}).get("thresholds", {}).get("significant", 50)
+        )
 
     for idx in result.index:
         ticker = str(result.at[idx, ticker_col])
@@ -1796,6 +1828,24 @@ def enrich_df_with_top_brokers(
             broker_df, "net_lot", ascending=True, n=3,
         )
 
+        if compute_retail:
+            from stock_scanner.pipeline.broker_analytics import (
+                calculate_retail_ratio,
+                classify_brokers_in_df,
+            )
+
+            classified = classify_brokers_in_df(broker_df, broker_config)
+            ratio = calculate_retail_ratio(classified, broker_config)
+            result.at[idx, "retail_ratio"] = ratio
+            # ratio is None when there's no positive net_lot to compute a
+            # ratio from at all — that's still "unknown", not "not retail".
+            # `ratio is not None and ratio > threshold` would silently
+            # collapse that case to False instead of preserving None/NaN —
+            # write it explicitly instead so "unknown" stays unknown.
+            result.at[idx, "is_retail_dominated"] = (
+                None if ratio is None else ratio > retail_threshold
+            )
+
     # Pindahkan kolom ke urutan: ticker, top_buyer, top_seller, [rest]
     cols = result.columns.tolist()
     for col in ("top_buyer", "top_seller"):
@@ -1806,6 +1856,46 @@ def enrich_df_with_top_brokers(
     result = result[["ticker", "top_buyer", "top_seller"] + cols]
 
     return result
+
+
+def apply_retail_filter(
+    df: pd.DataFrame,
+    scan_date: str,
+    hide_retail: bool,
+    broker_dir: Path | None = None,
+) -> pd.DataFrame:
+    """Hide stocks whose broker accumulation is dominated by retail brokers
+    — NOT "show only retail brokers". Global, single-application filter:
+    call this once on df_all right after
+    stock_scanner.pipeline.suspension.filter_active(df_all), before any tab
+    is dispatched (same pattern, same call site) — every tab inherits the
+    result automatically, no per-tab filtering needed.
+
+    hide_retail=False (checkbox off, the default): returns df completely
+    unchanged, same object — no broker parquet read happens at all. This is
+    what makes dashboard output byte-identical when the filter is off, and
+    is why this is a single gate rather than "always enrich, sometimes
+    filter": there is no cost to leaving the filter off.
+
+    hide_retail=True: enriches via enrich_df_with_top_brokers(...,
+    compute_retail=True) — the SAME per-ticker broker-parquet loop
+    top_buyer/top_seller already uses, not a second scan — then drops rows
+    where is_retail_dominated is True. Rows with no broker data at all
+    (is_retail_dominated is None, per enrich_df_with_top_brokers) are never
+    hidden: unknown != retail, fail open. retail_ratio/is_retail_dominated
+    are additive columns only; every existing column is untouched.
+    """
+    if not hide_retail:
+        return df
+    if df is None or df.empty or "ticker" not in df.columns:
+        return df
+
+    enriched = enrich_df_with_top_brokers(df, scan_date, broker_dir=broker_dir, compute_retail=True)
+    if "is_retail_dominated" not in enriched.columns:
+        return enriched
+
+    mask_dominated = (enriched["is_retail_dominated"] == True).fillna(False)  # noqa: E712
+    return enriched[~mask_dominated].reset_index(drop=True)
 
 
 def load_all_tickers_unified(

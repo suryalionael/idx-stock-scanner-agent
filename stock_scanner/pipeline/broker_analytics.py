@@ -23,33 +23,225 @@ Extended metrics (ditunda):
 
 from __future__ import annotations
 
+from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
+import yaml
 from loguru import logger
 
 # ---------------------------------------------------------------------------
 # CONSTANTS
 # ---------------------------------------------------------------------------
 
-# Kategori broker type yang valid
-VALID_BROKER_TYPES = {"foreign", "institution", "retail", "big_local", "local"}
+# Kategori broker type yang valid — see docs/BROKER_CLASSIFICATION_AUDIT.md.
+# "big_local" was dropped from this internal vocabulary: no formula below
+# ever treated it differently from "local" (both only mattered as "not
+# foreign/institution/retail"), so folding it into "local" is behavior-
+# preserving, not a change.
+VALID_BROKER_TYPES = {"foreign", "institution", "retail", "local"}
+
+_BROKER_CONFIG_PATH = Path(__file__).parent.parent / "configs" / "broker_config.yaml"
+
+# classify_brokers_in_df() maps the audited canonical `type` (see
+# broker_config.yaml's brokers: schema) onto the vocabulary this module's
+# metric formulas (calculate_far/calculate_retail_ratio/
+# calculate_smart_money_score) already expect. "mixed_unknown" — the
+# canonical "we don't have confident evidence" bucket — folds into "local",
+# the same "unclassified, don't treat as foreign/institution/retail"
+# fallback these formulas already used before the audit existed.
+_CANONICAL_TO_INTERNAL_TYPE = {
+    "retail": "retail",
+    "institutional": "institution",
+    "foreign": "foreign",
+    "mixed_unknown": "local",
+}
+
+# ---------------------------------------------------------------------------
+# Schema validation — see docs/BROKER_CLASSIFICATION_AUDIT.md's "Recommended
+# improvements" #1 (broker_config.yaml architecture review). Deliberately
+# scoped to ONLY enum validation, per that review's explicit instruction not
+# to over-engineer this pass. Everything else the review raised —
+# ownership_country, aliases, last_reviewed, conflicts_with/dispute_group,
+# nested classification blocks, splitting broker_config.yaml into separate
+# files, retail_score, any other new metadata — is intentionally deferred
+# and NOT implemented here. Do not add fields to satisfy this validator;
+# extend _ENUM_FIELDS only when the schema itself legitimately grows.
+# ---------------------------------------------------------------------------
+
+_VALID_TYPES = frozenset({"retail", "institutional", "foreign", "mixed_unknown"})
+_VALID_LEGACY_TYPES = frozenset({"foreign", "big_local", "local", "unknown"})
+_VALID_CONFIDENCE_LEVELS = frozenset({"high", "medium", "low", "none"})
+
+# field name -> set of values that field is allowed to hold. A missing key
+# (entry.get(field) returns None) is invalid the same as a typo'd string —
+# both fail the membership check below, no special-casing needed.
+_ENUM_FIELDS: dict[str, frozenset[str]] = {
+    "type": _VALID_TYPES,
+    "legacy_type": _VALID_LEGACY_TYPES,
+    "type_confidence": _VALID_CONFIDENCE_LEVELS,
+    "name_confidence": _VALID_CONFIDENCE_LEVELS,
+}
+
+
+def validate_broker_config(broker_config: dict) -> list[str]:
+    """Validate every enum field on every entry under `brokers:` against the
+    documented values (see broker_config.yaml's own header comment). Returns
+    a list of human-readable error strings — empty means valid. Never
+    raises: this is a pure check, not a parser: it's the caller's job to
+    decide whether errors are fatal (load_broker_config() logs and
+    continues; tests/test_broker_analytics.py asserts zero errors against
+    the real file, which is what actually makes a bad edit fail fast — at
+    test time, not by crashing production)."""
+    errors: list[str] = []
+    brokers = broker_config.get("brokers", {})
+    if not isinstance(brokers, dict):
+        return [f"'brokers' section is not a mapping (got {type(brokers).__name__})"]
+
+    for code, entry in brokers.items():
+        if not isinstance(entry, dict):
+            errors.append(f"{code}: entry is not a mapping (got {type(entry).__name__})")
+            continue
+        for field, valid_values in _ENUM_FIELDS.items():
+            value = entry.get(field)
+            if value not in valid_values:
+                errors.append(
+                    f"{code}.{field}: {value!r} is not one of {sorted(valid_values)}"
+                )
+    return errors
+
+
+# ---------------------------------------------------------------------------
+# Broker config — single source of truth (stock_scanner/configs/broker_config.yaml)
+# ---------------------------------------------------------------------------
+
+
+@lru_cache(maxsize=1)
+def load_broker_config(path: Path | None = None) -> dict:
+    """Load broker_config.yaml — the ONLY place broker name/type
+    classification is defined; see docs/BROKER_CLASSIFICATION_AUDIT.md for
+    the full evidence behind every entry. Never raises: a missing or
+    unparseable file just returns {} (same fail-open contract as every
+    other config loader in this repo) — a broker classification lookup
+    failure must never break analytics or data fetching. Cached since this
+    is a small file read on every broker row classified.
+
+    dashboard.data_loader.load_broker_config() delegates to this function —
+    do not maintain a second independent loader/parser of this file.
+
+    On every successful parse, validates every entry's enum fields
+    (validate_broker_config()) and logs a warning — never raises — if any
+    are invalid. This is the "fail fast" half of the schema validation
+    described in docs/BROKER_CLASSIFICATION_AUDIT.md's architecture
+    review: fast at test time (tests/test_broker_analytics.py asserts zero
+    errors against the real file, so a bad edit fails CI immediately), and
+    visible-but-non-fatal at runtime (a bad edit that somehow ships must
+    never crash the dashboard or the daily scan — same fail-open contract
+    every other config loader in this repo already follows)."""
+    path = path or _BROKER_CONFIG_PATH
+    if not path.exists():
+        logger.warning("broker_config.yaml tidak ditemukan di {}", path)
+        return {}
+    try:
+        with open(path) as f:
+            config = yaml.safe_load(f) or {}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Gagal load broker_config.yaml: {}", e)
+        return {}
+
+    errors = validate_broker_config(config)
+    if errors:
+        logger.warning(
+            "broker_config.yaml has {} invalid enum value(s) — see "
+            "docs/BROKER_CLASSIFICATION_AUDIT.md for the expected schema. "
+            "First few: {}",
+            len(errors), errors[:5],
+        )
+    return config
+
+
+def get_broker_name(code: str, broker_config: dict | None = None) -> str:
+    """Canonical broker name for a 2-letter IDX code, or "Unknown" if this
+    code has no recorded entry — see docs/BROKER_CLASSIFICATION_AUDIT.md.
+    Never guesses: an unrecorded code is "Unknown", not a fabricated name."""
+    config = broker_config if broker_config is not None else load_broker_config()
+    code = str(code).strip().upper()
+    entry = config.get("brokers", {}).get(code)
+    return entry.get("name", "Unknown") if entry else "Unknown"
+
+
+def get_broker_type(code: str, broker_config: dict | None = None) -> str:
+    """Audited canonical broker type: "retail" | "institutional" |
+    "foreign" | "mixed_unknown". A code with no recorded entry — or one
+    whose evidence didn't clear the confidence bar during the audit — is
+    "mixed_unknown" by design, never a guess. See
+    docs/BROKER_CLASSIFICATION_AUDIT.md for the evidence behind every
+    classified code.
+
+    Falls back to "mixed_unknown" for an entry whose stored `type` isn't
+    one of the four valid values too, not just a missing one —
+    load_broker_config() already logs a warning for this case
+    (validate_broker_config()), but a getter must never hand a caller a
+    value outside its documented contract just because the YAML has a
+    typo the warning went unnoticed."""
+    config = broker_config if broker_config is not None else load_broker_config()
+    code = str(code).strip().upper()
+    entry = config.get("brokers", {}).get(code)
+    value = entry.get("type") if entry else None
+    return value if value in _VALID_TYPES else "mixed_unknown"
+
+
+def get_broker_legacy_type(code: str, broker_config: dict | None = None) -> str:
+    """Backward-compatible type: "foreign" | "big_local" | "local" |
+    "unknown" — EXACTLY what stock_scanner.pipeline.broker_intelligence
+    .classify_broker() returned before the broker classification audit
+    (verified byte-for-byte against the old hardcoded
+    FOREIGN_BROKER_CODES/BIG_LOCAL_BROKER_CODES sets for every entry in
+    broker_config.yaml). Exists ONLY to keep that function's live output
+    (and everything downstream of it, e.g. smart_money_screener.py)
+    unchanged — new code should use get_broker_type() instead.
+
+    Falls back the same way get_broker_type() does for an invalid (not
+    just missing) stored value — see its docstring."""
+    config = broker_config if broker_config is not None else load_broker_config()
+    code = str(code).strip().upper()
+    entry = config.get("brokers", {}).get(code)
+    if entry is not None:
+        value = entry.get("legacy_type")
+        if value in _VALID_LEGACY_TYPES:
+            return value
+        # Present but invalid — same fallback as "no recorded entry" below,
+        # never propagate a typo'd value.
+    # No recorded (or invalid) entry — same fallback classify_broker()
+    # always applied to any code it had never heard of, before this config
+    # existed at all.
+    if not code:
+        return "unknown"
+    if len(code) == 2 and code.isalpha():
+        return "local"
+    return "unknown"
 
 
 # ---------------------------------------------------------------------------
 # MAIN FUNCTIONS
 # ---------------------------------------------------------------------------
 
+
 def classify_brokers_in_df(
     df_broker: pd.DataFrame,
     broker_config: dict,
 ) -> pd.DataFrame:
-    """Assign broker_type ke setiap row berdasarkan broker_code.
+    """Assign broker_type ke setiap row berdasarkan broker_code, sourced
+    from broker_config.yaml's audited `brokers:` mapping (see
+    get_broker_type()).
 
     Input DataFrame harus punya kolom: broker_code
 
     Output DataFrame berisi kolom baru: broker_type
-    Nilai: "foreign" | "institution" | "retail" | "big_local" | "local"
+    Nilai: "foreign" | "institution" | "retail" | "local"
+    ("mixed_unknown" — the canonical no-confident-evidence bucket — is
+    folded into "local" here; see _CANONICAL_TO_INTERNAL_TYPE.)
 
     Args:
         df_broker       : DataFrame dengan minimal kolom 'broker_code'
@@ -57,11 +249,6 @@ def classify_brokers_in_df(
 
     Returns:
         DataFrame original + kolom 'broker_type'
-
-    Logic:
-        1. Extract broker_groups dari config
-        2. Build lookup: broker_code → broker_type
-        3. Assign type ke setiap row (default "local" jika tidak match)
     """
     if df_broker is None or df_broker.empty:
         return df_broker.copy() if df_broker is not None else pd.DataFrame()
@@ -74,19 +261,11 @@ def classify_brokers_in_df(
         df["broker_type"] = "unknown"
         return df
 
-    # Build lookup dict: broker_code → broker_type
-    broker_groups: dict = broker_config.get("broker_groups", {})
-    code_to_type: dict[str, str] = {}
-
-    for broker_type, group_config in broker_groups.items():
-        codes = group_config.get("codes", [])
-        for code in codes:
-            code_to_type[str(code).upper()] = broker_type
-
-    # Assign type ke setiap row
-    def _classify(code: str) -> str:
-        code_upper = str(code).upper().strip() if pd.notna(code) else ""
-        return code_to_type.get(code_upper, "local")
+    def _classify(code) -> str:
+        if pd.isna(code):
+            return "local"
+        canonical = get_broker_type(str(code), broker_config)
+        return _CANONICAL_TO_INTERNAL_TYPE.get(canonical, "local")
 
     df["broker_type"] = df["broker_code"].apply(_classify)
 
@@ -290,6 +469,7 @@ def calculate_smart_money_score(
 # STUB FUNCTIONS (EXTENDED PHASE — JANGAN DIPAKAI MVP)
 # ---------------------------------------------------------------------------
 
+
 def calculate_ridr(
     df_broker: pd.DataFrame,
     broker_config: dict,
@@ -322,6 +502,7 @@ def calculate_ridr(
 # ---------------------------------------------------------------------------
 # HELPER FUNCTIONS
 # ---------------------------------------------------------------------------
+
 
 def get_broker_classification_label(
     broker_type: str,
@@ -364,7 +545,9 @@ def get_broker_classification_label(
             return "🔴 Weak Retail"
 
     elif metric_name == "smart_money_score":
-        categories = broker_config.get("metrics", {}).get("smart_money_score", {}).get("categories", {})
+        categories = (
+            broker_config.get("metrics", {}).get("smart_money_score", {}).get("categories", {})
+        )
         if metric_value >= categories.get("very_strong", [75, 100])[0]:
             return "🟢 Very Strong"
         elif metric_value >= categories.get("strong", [50, 75])[0]:
@@ -443,6 +626,7 @@ def get_top_brokers_by_metric(
 # ---------------------------------------------------------------------------
 # AGGREGATION FUNCTIONS (STEP 2)
 # ---------------------------------------------------------------------------
+
 
 def aggregate_broker_activity(
     df_broker: pd.DataFrame,
