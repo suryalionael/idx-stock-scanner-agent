@@ -1,6 +1,7 @@
 """Tests for stock_scanner.pipeline.fetch_indexalpha — proves the IndexAlpha
-integration is active and correctly handled, without spending any of the
-free-plan 5-requests/day quota. All HTTP is mocked; no network calls occur.
+integration is active and correctly handled, without spending any real
+quota (paid plan, 25,000 requests/month). All HTTP is mocked; no network
+calls occur.
 
 Covers:
   - ticker cleaning / cache path construction

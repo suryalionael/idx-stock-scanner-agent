@@ -735,25 +735,21 @@ def _classify_indexalpha_error(err_msg: str) -> str:
 def _render_broker_latest(ticker: str, scan_date: str, key_prefix: str = "") -> None:
     """Latest mode: last completed trading session, fresh-first (cache-safe).
 
-    Loads ONLY on explicit user request (button), never automatically.
-    IndexAlpha's free plan is quota-limited (5 req/day); render_broker_section
-    is called from ~6 tabs, some inside st.expander (which still executes its
-    body when collapsed — expanders are a visibility toggle, not a lazy-
-    execution boundary) or inside a per-ticker loop (Naik/Turun Beruntun, up
-    to `topn` tickers) — and Streamlit's st.tabs() executes every tab's body
-    on every rerun regardless of which tab is visually active. An eager fetch
-    here previously burned the entire daily quota on a single page load
-    before any user ever asked for broker data. The load state persists per
-    (key_prefix, ticker, scan_date) in session_state for the rest of the
-    session once a user opts in, so it isn't re-prompted on every rerun.
+    Loads automatically — Index Alpha is now on a paid plan (25,000 req/
+    month), so the old free-plan (5 req/day) manual-load gate that used to
+    sit here is gone. Quota protection now comes entirely from
+    _cached_broker_latest's own 30-minute st.cache_data TTL, which already
+    dedupes repeated calls for the same ticker across Streamlit reruns —
+    this is what actually made the manual button redundant for that
+    concern even before the plan upgrade, not something that needed to be
+    rebuilt to allow removing it.
 
-    A confirmed 401/403 additionally sets a permanent-failure flag (fail_key)
-    that disables the Refresh button and skips calling the API again on
-    every future rerun for this (ticker, scan_date, key_prefix) — retrying a
-    permission failure can only fail again and burns another quota unit, so
-    this is a real stop, not just advisory copy next to a still-clickable
-    button."""
-    load_key = f"brk_loaded_{key_prefix}_{ticker}_{scan_date}"
+    A confirmed 401/403 still sets a permanent-failure flag (fail_key) that
+    disables the Refresh button and skips calling the API again on every
+    future rerun for this (ticker, scan_date, key_prefix) — retrying a
+    permission failure can only fail again regardless of remaining quota,
+    so this stays a real stop, not just advisory copy next to a still-
+    clickable button."""
     fail_key = f"brk_permfail_{key_prefix}_{ticker}_{scan_date}"
 
     top = st.columns([3, 1])
@@ -765,26 +761,12 @@ def _render_broker_latest(ticker: str, scan_date: str, key_prefix: str = "") -> 
         elif st.button("🔄 Refresh", key=f"brk_lat_refresh_{key_prefix}_{ticker}_{scan_date}",
                        help="Ambil ulang sesi terbaru dari Index Alpha (memakai 1 kuota)."):
             _cached_broker_latest.clear()
-            st.session_state[load_key] = True
 
     if st.session_state.get(fail_key):
         # Permanent failure already confirmed this session — re-show the last
         # known error WITHOUT calling the API again.
         _classify_indexalpha_error(st.session_state.get(f"{fail_key}_msg", ""))
         return
-
-    if not st.session_state.get(load_key):
-        st.info(
-            f"📊 **Broker Summary belum dimuat** untuk {ticker.replace('.JK','')} sesi ini.\n\n"
-            "Data Index Alpha memiliki kuota harian terbatas (5 req/hari pada free plan), "
-            "sehingga tidak dimuat otomatis. Harga, volume, tren, dan fundamental saham ini "
-            "tetap lengkap di tab lain — klik tombol di bawah untuk memuat rincian "
-            "**kepemilikan & serapan broker** (memakai 1 kuota)."
-        )
-        if not st.button("📊 Muat Broker Summary",
-                         key=f"brk_lat_load_{key_prefix}_{ticker}_{scan_date}"):
-            return
-        st.session_state[load_key] = True
 
     with st.spinner("Memuat sesi terbaru…"):
         df, note, info = _cached_broker_latest(ticker)
@@ -942,8 +924,8 @@ def _render_indexalpha_integration_badge() -> None:
         return
     if last_error_type in ("rate_limit", "rate_limit_exhausted"):
         st.warning(
-            "⚠️ **IndexAlpha: Rate limit / kuota harian habis.** "
-            "Free plan hanya 5 req/hari. Tunggu reset atau upgrade plan. "
+            "⚠️ **IndexAlpha: Rate limit / kuota bulanan habis.** "
+            "Tunggu beberapa saat lalu coba lagi. "
             "Data cache masih tersedia untuk sesi yang sudah di-fetch sebelumnya."
         )
         return
