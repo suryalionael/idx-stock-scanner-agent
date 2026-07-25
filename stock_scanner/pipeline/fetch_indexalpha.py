@@ -14,7 +14,7 @@ Endpoint
 
   GET https://api.indexalpha.id/usage
 
-Free plan: 5 req/day, 10 req/minute → cache-first, retry cuma utk transient error.
+Paid plan: 25,000 req/month, 10 req/minute → cache-first, retry cuma utk transient error.
 
 Health state dicatat utk SETIAP percobaan (sukses & gagal), termasuk saat key
 tidak diset. Bedakan HTTP-level error vs logical error (JSON success: false).

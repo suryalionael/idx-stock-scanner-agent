@@ -568,7 +568,7 @@ def get_table_df(df: pd.DataFrame, scan_date: str | None = None) -> pd.DataFrame
 #   GET https://api.indexalpha.id/stocks/broker-summary
 #   params: ticker, from, to, investor (all|f|or|d), market (RG|NG|ALL)
 # Service layer: stock_scanner/pipeline/fetch_indexalpha.py (IndexAlphaFetcher)
-# Auth: env var INDEX_ALPHA_API_KEY (free plan = 5 requests/day → cache-first).
+# Auth: env var INDEX_ALPHA_API_KEY (paid plan = 25,000 requests/month; still cache-first).
 #
 # Cache: data/broker/{TICKER}.JK_{YYYY-MM-DD}.parquet
 # Normalized columns:
@@ -801,8 +801,8 @@ def classify_indexalpha_error(err_msg: str) -> tuple[str, str]:
         )
     if "429" in err_msg or "rate" in low or "kuota" in low:
         return "warning", (
-            "⚠️ **Kuota Index Alpha habis** — free plan 5 req/hari. Coba lagi besok atau "
-            "upgrade plan. Data broker dari cache masih ditampilkan bila ada."
+            "⚠️ **Kuota Index Alpha habis atau terkena rate limit.** Coba lagi dalam "
+            "beberapa saat. Data broker dari cache masih ditampilkan bila ada."
         )
     if "timeout" in low:
         return "warning", (
