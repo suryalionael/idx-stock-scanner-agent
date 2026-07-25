@@ -676,6 +676,18 @@ def fetch_broker_summary(
             "Kemungkinan: bukan hari bursa, ticker tidak aktif, "
             "atau Index Alpha belum memiliki data untuk sesi ini."
         )
+
+    # Render from the parquet fetch_with_cache just wrote, not the in-memory
+    # API response — this is what every other consumer (Retail Filter,
+    # Broker Intelligence, main table) reads too, so the panel is always
+    # showing exactly what's on disk. Fall back to the in-memory df only if
+    # the reload itself fails (e.g. transient disk issue) — we already know
+    # it's valid, non-empty data, no need to blank the panel over that.
+    if cache_path.exists():
+        try:
+            return pd.read_parquet(cache_path), None
+        except Exception:  # noqa: BLE001
+            pass
     return df, None
 
 
@@ -1702,11 +1714,21 @@ def _top_n_broker_codes(df: pd.DataFrame, column: str, ascending: bool, n: int =
     return ",".join(codes)
 
 
-def _newest_broker_date_for_ticker(ticker: str, bdir: Path) -> str | None:
+def _newest_broker_date_for_ticker(
+    ticker: str, bdir: Path, max_date: str | None = None,
+) -> str | None:
     """Cari tanggal broker cache paling baru untuk ticker tertentu.
 
     Scan data/broker/ untuk file {ticker}_{YYYY-MM-DD}.parquet dan
     {ticker}.JK_{YYYY-MM-DD}.parquet, return tanggal terbaru.
+
+    max_date: jika diberikan, hanya pertimbangkan tanggal cache <= max_date
+    (perbandingan string "YYYY-MM-DD" aman secara leksikografis). Tanpa batas
+    ini, sesi yang lebih baru dari scan_date yang sedang dilihat (mis. dari
+    fetch live "Latest" ticker lain) bisa "bocor" ke klasifikasi retail_ratio
+    scan_date yang lebih lama — look-ahead bias. Fallback aslinya hanya untuk
+    kasus scan_date LEBIH BARU dari data broker terakhir (data lagging), jadi
+    membatasi ke arah ini tidak mengubah perilaku untuk kasus itu.
     """
     clean = ticker.upper().replace(".JK", "").strip()
     from datetime import datetime as _dt
@@ -1717,10 +1739,12 @@ def _newest_broker_date_for_ticker(ticker: str, bdir: Path) -> str | None:
             if len(parts) == 2:
                 try:
                     _dt.strptime(parts[1], "%Y-%m-%d")
-                    if best is None or parts[1] > best:
-                        best = parts[1]
                 except ValueError:
                     continue
+                if max_date is not None and parts[1] > max_date:
+                    continue
+                if best is None or parts[1] > best:
+                    best = parts[1]
     return best
 
 
@@ -1803,7 +1827,7 @@ def enrich_df_with_top_brokers(
         # Coba exact scan_date dulu, lalu fallback ke newest cache
         cache_file = bdir / f"{clean}.JK_{scan_date}.parquet"
         if not cache_file.exists():
-            best_date = _newest_broker_date_for_ticker(ticker, bdir)
+            best_date = _newest_broker_date_for_ticker(ticker, bdir, max_date=scan_date)
             if best_date is None:
                 continue
             cache_file = bdir / f"{clean}.JK_{best_date}.parquet"
