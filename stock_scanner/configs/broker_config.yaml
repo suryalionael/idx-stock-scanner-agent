@@ -1,99 +1,295 @@
-# Broker Analytics Configuration
-# Konfigurasi terpusat untuk broker groups, metric thresholds, dan display preferences.
+# Broker Classification — Single Source of Truth
 #
-# Digunakan oleh:
-#   - stock_scanner/pipeline/broker_analytics.py (metric calculators)
-#   - dashboard/data_loader.py (load config)
-#   - dashboard/app.py (UI rendering)
+# Full audit + evidence for every entry below: docs/BROKER_CLASSIFICATION_AUDIT.md
 #
-# Updated: 2026-06-02
+# Every broker-related feature in this repo reads broker name/type from THIS
+# file via stock_scanner.pipeline.broker_analytics.load_broker_config() +
+# get_broker_name()/get_broker_type() — never maintain a second hardcoded
+# broker-code mapping elsewhere. dashboard/data_loader.py's load_broker_config()
+# is a thin re-export of the same function for backward compatibility.
+#
+# ---------------------------------------------------------------------------
+# Schema per broker code (under `brokers:`)
+# ---------------------------------------------------------------------------
+#   name             — canonical company name, best-supported per the audit.
+#   name_confidence  — high | medium | low | none (none = no usable evidence)
+#   type             — the AUDITED classification, for future retail-filter /
+#                       analytics use: retail | institutional | foreign | mixed_unknown
+#   type_confidence  — high | medium | low | none
+#   legacy_type      — foreign | big_local | local | unknown. PRESERVED
+#                       exactly equal to what stock_scanner.pipeline.
+#                       broker_intelligence.classify_broker() returned BEFORE
+#                       this audit (derived mechanically from the old hardcoded
+#                       FOREIGN_BROKER_CODES/BIG_LOCAL_BROKER_CODES sets) —
+#                       stock_scanner/pipeline/smart_money_screener.py depends
+#                       on these exact values. Do NOT change without reviewing
+#                       that impact; `type` is the field to use for anything new.
+#   notes            — one-line evidence pointer; full reasoning is in the audit doc.
+#
+# A code NOT listed under `brokers:` has no recorded evidence at all — see
+# "Codes observed in real trading data with zero classification anywhere" in
+# the audit doc. Callers must default such codes to type=mixed_unknown and
+# legacy_type=local (if a well-formed 2-letter code) or unknown otherwise —
+# exactly the fallback broker_intelligence.classify_broker() already used
+# pre-audit; see get_broker_type()'s docstring in broker_analytics.py.
+#
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+# Every entry's name_confidence/type/type_confidence/legacy_type is checked
+# against the values documented above by
+# stock_scanner.pipeline.broker_analytics.validate_broker_config() —
+# tests/test_broker_analytics.py asserts zero errors against this file, so
+# an invalid value (typo, wrong case, a legacy_type value used where type
+# belongs, etc.) fails CI immediately. See broker_analytics.py's
+# _ENUM_FIELDS if the valid value sets themselves ever need to change.
+#
+# TODO (deliberately deferred — see docs/BROKER_CLASSIFICATION_AUDIT.md's
+# architecture review; do not add these without a concrete feature that
+# needs them): ownership_country, aliases, last_reviewed,
+# conflicts_with/dispute_group, nested classification blocks, splitting
+# this file by section, retail_score, any other new per-broker metadata.
+#
+# Updated: 2026-07-25 (Broker Classification Audit, Phase 1 + schema validation)
+
+brokers:
+  # --- Confidently classified this audit -----------------------------------
+  XL:
+    name: "Stockbit Sekuritas Digital"
+    name_confidence: high
+    type: retail
+    type_confidence: high
+    legacy_type: local
+    notes: "#1 by tx frequency nationally; previously in an empty retail group with no name"
+
+  XC:
+    name: "Ajaib Sekuritas Asia"
+    name_confidence: high
+    type: retail
+    type_confidence: high
+    legacy_type: local
+    notes: "Top-4 by tx frequency nationally"
+
+  YP:
+    name: "Mirae Asset Sekuritas Indonesia"
+    name_confidence: medium
+    type: retail
+    type_confidence: medium
+    legacy_type: big_local
+    notes: "#2 by tx frequency; foreign-owned but retail-dominant client base. Corrected from a hedged claim that collided with PD's identity"
+
+  PD:
+    name: "Indo Premier Sekuritas"
+    name_confidence: medium
+    type: retail
+    type_confidence: medium
+    legacy_type: big_local
+    notes: "Live IDX_BROKER_NAMES dict + external research agree; internal 'Henan Putihrai' comment appears to be a labeling error"
+
+  CC:
+    name: "Mandiri Sekuritas"
+    name_confidence: high
+    type: institutional
+    type_confidence: high
+    legacy_type: big_local
+    notes: "#1 by trading value nationally; Bank Mandiri's IB/underwriting arm. Old config comment 'Mirae Asset' was a copy-paste error vs. YP"
+
+  RX:
+    name: "Macquarie Sekuritas Indonesia"
+    name_confidence: medium
+    type: foreign
+    type_confidence: medium
+    legacy_type: local
+    notes: "Gap-filled: absent from every pre-audit source despite historical cache + external evidence. legacy_type=local matches classify_broker()'s pre-audit fallback for any unrecognized 2-letter code"
+
+  KZ:
+    name: "CLSA Securities Indonesia"
+    name_confidence: low
+    type: foreign
+    type_confidence: low
+    legacy_type: local
+    notes: "Gap-filled from external research only; not in any pre-audit source. legacy_type=local matches classify_broker()'s pre-audit fallback"
+
+  GS: {name: "Goldman Sachs", name_confidence: high, type: foreign, type_confidence: high, legacy_type: foreign, notes: "Globally known institution"}
+  MS: {name: "Morgan Stanley Sekuritas", name_confidence: high, type: foreign, type_confidence: high, legacy_type: foreign, notes: "Globally known institution"}
+  DB: {name: "Deutsche Bank", name_confidence: high, type: foreign, type_confidence: high, legacy_type: foreign, notes: "Globally known institution"}
+  ML: {name: "Merrill Lynch / BofA Securities", name_confidence: high, type: foreign, type_confidence: high, legacy_type: foreign, notes: "Globally known institution"}
+  DP: {name: "DBS Vickers Securities", name_confidence: high, type: foreign, type_confidence: high, legacy_type: foreign, notes: "Globally known institution"}
+  SB: {name: "Nomura Securities", name_confidence: high, type: foreign, type_confidence: high, legacy_type: foreign, notes: "Globally known institution"}
+  AK: {name: "UBS Sekuritas Indonesia", name_confidence: high, type: foreign, type_confidence: high, legacy_type: foreign, notes: "Fully agreed across every source (EN/ID naming variant only)"}
+  CS: {name: "Credit Suisse / UBS Securities", name_confidence: high, type: foreign, type_confidence: high, legacy_type: foreign, notes: "Global institutional bank; one low-quality external source calling this retail-popular is not credible"}
+
+  # --- Type confidently resolved even though exact identity is not ---------
+  JP:
+    name: "JPMorgan Securities"
+    name_confidence: low
+    type: foreign
+    type_confidence: medium
+    legacy_type: foreign
+    notes: "Identity uncertain vs. BK below — internal sources hedge between JPMorgan and Barclays; type is solid either way"
+
+  BK:
+    name: "JP Morgan Sekuritas Indonesia"
+    name_confidence: low
+    type: foreign
+    type_confidence: medium
+    legacy_type: foreign
+    notes: "Identity uncertain vs. JP above — common bandarmology usage ties BK to JPMorgan; possible label swap with JP, see audit doc"
+
+  ZP:
+    name: "Maybank Sekuritas Indonesia"
+    name_confidence: low
+    type: foreign
+    type_confidence: medium
+    legacy_type: foreign
+    notes: "Disputed — pre-audit config says Macquarie. Historical cache shows ZP was once 'Kim Eng Sekuritas' (Kim Eng -> Maybank Kim Eng -> Maybank lineage); current 'Macquarie' label more likely belongs to RX"
+
+  YU:
+    name: "CGS International / CGS-CIMB Sekuritas Indonesia"
+    name_confidence: low
+    type: foreign
+    type_confidence: medium
+    legacy_type: foreign
+    notes: "Multiple external sources tie YU to CGS-CIMB, not CLSA; CLSA's real code is more likely KZ — see audit doc"
+
+  HD:
+    name: "HD Capital Sekuritas"
+    name_confidence: high
+    type: mixed_unknown
+    type_confidence: none
+    legacy_type: big_local
+    notes: "Identity solidly confirmed across sources; ownership/client-base type is directly disputed between external sources"
+
+  # --- Unresolvable conflicts — Unknown by design, not by omission ---------
+  NI:
+    name: "Unknown"
+    name_confidence: none
+    type: mixed_unknown
+    type_confidence: none
+    legacy_type: big_local
+    notes: "Disputed — pre-audit sources say BCA Sekuritas, external research says BNI Sekuritas. 3-way collision on the 'BNI Sekuritas' identity with BW and BQ below; cannot adjudicate without IDX's own registry"
+
+  OD:
+    name: "Unknown"
+    name_confidence: none
+    type: mixed_unknown
+    type_confidence: none
+    legacy_type: big_local
+    notes: "3-way conflict: config says Mandiri Sekuritas, live dict says Mirae Asset, external research says BRI Danareksa — every source names a different company, the clearest unresolvable conflict in this audit"
+
+  RB:
+    name: "Unknown"
+    name_confidence: none
+    type: mixed_unknown
+    type_confidence: none
+    legacy_type: foreign
+    notes: "Config says CGS-CIMB; two external sources each name a different other company. CGS-CIMB's real code more likely YU (see above) — RB's identity has no corroborated answer"
+
+  QA:
+    name: "Unknown"
+    name_confidence: none
+    type: mixed_unknown
+    type_confidence: none
+    legacy_type: foreign
+    notes: "Live dict says Citigroup Securities; external research says Tuntun Sekuritas. Bulge-bracket foreign bank vs. small domestic broker are very different classifications — 1-vs-1 evidence, high stakes if wrong"
+
+  KK:
+    name: "Unknown"
+    name_confidence: none
+    type: mixed_unknown
+    type_confidence: none
+    legacy_type: foreign
+    notes: "Config says Maybank Securities; external research says Phillip Sekuritas — foreign bank vs. large domestic retail-branch broker are very different classifications"
+
+  DR:
+    name: "Unknown"
+    name_confidence: none
+    type: mixed_unknown
+    type_confidence: none
+    legacy_type: big_local
+    notes: "Config + live dict say OSO Sekuritas; multiple external sources say RHB Sekuritas Indonesia. Internal agreement is not independent corroboration; external sources consistently disagree"
+
+  BW:
+    name: "Unknown"
+    name_confidence: none
+    type: mixed_unknown
+    type_confidence: none
+    legacy_type: big_local
+    notes: "Disputed — collides with BQ and NI on 'BNI Sekuritas'; see NI above, 3-way collision, no way to adjudicate"
+
+  BQ:
+    name: "Unknown"
+    name_confidence: none
+    type: mixed_unknown
+    type_confidence: none
+    legacy_type: local
+    notes: "Disputed — collides with BW and NI on 'BNI Sekuritas'; see NI above, 3-way collision, no way to adjudicate"
+
+  YJ:
+    name: "Unknown"
+    name_confidence: none
+    type: mixed_unknown
+    type_confidence: none
+    legacy_type: big_local
+    notes: "Disputed — collides with LG on 'Trimegah Sekuritas'; same company name claimed for two different codes within the same source file"
+
+  LG:
+    name: "Unknown"
+    name_confidence: none
+    type: mixed_unknown
+    type_confidence: none
+    legacy_type: big_local
+    notes: "Disputed — collides with YJ on 'Trimegah Sekuritas'; same company name claimed for two different codes within the same source file"
+
+  GI:
+    name: "Unknown"
+    name_confidence: none
+    type: mixed_unknown
+    type_confidence: none
+    legacy_type: big_local
+    notes: "Disputed — collides with OD and ZU on the BRI Danareksa / Danareksa family; BRI Danareksa's post-merger name claimed for multiple codes"
+
+  ZU:
+    name: "Unknown"
+    name_confidence: none
+    type: mixed_unknown
+    type_confidence: none
+    legacy_type: big_local
+    notes: "Disputed — collides with OD and GI on the BRI Danareksa / Danareksa family; pre-merger 'Danareksa Sekuritas' name, same collision cluster"
+
+  YB:
+    name: "Panin Sekuritas"
+    name_confidence: low
+    type: mixed_unknown
+    type_confidence: none
+    legacy_type: big_local
+    notes: "Concrete pre-audit example of the multi-group-membership bug (listed in both big_local and retail); name itself not independently corroborated"
+
+  # --- Single-sourced, unverified — plausible but not confirmed ------------
+  LS: {name: "Credit Suisse International", name_confidence: low, type: mixed_unknown, type_confidence: low, legacy_type: foreign, notes: "Possible duplicate of CS — same parent name under a different code, not independently verified"}
+  MK: {name: "Daiwa Capital Markets", name_confidence: low, type: foreign, type_confidence: low, legacy_type: foreign, notes: "Single-sourced, not independently re-verified"}
+  OX: {name: "CIMB Securities", name_confidence: low, type: foreign, type_confidence: low, legacy_type: foreign, notes: "Single-sourced, not independently re-verified"}
+  SA: {name: "Societe Generale", name_confidence: medium, type: foreign, type_confidence: medium, legacy_type: foreign, notes: "Globally known institution, but single-sourced within this codebase"}
+  UX: {name: "UOB Kay Hian Securities", name_confidence: low, type: foreign, type_confidence: low, legacy_type: foreign, notes: "Single-sourced, not independently re-verified"}
+  ZH: {name: "CIMB Niaga Sekuritas", name_confidence: low, type: foreign, type_confidence: low, legacy_type: big_local, notes: "CIMB is a known Malaysian banking group; single-sourced"}
+  DH: {name: "Bahana Sekuritas", name_confidence: low, type: mixed_unknown, type_confidence: none, legacy_type: big_local, notes: "Single-sourced, no client-base evidence"}
+  ID: {name: "Sinarmas Sekuritas", name_confidence: low, type: mixed_unknown, type_confidence: none, legacy_type: big_local, notes: "Single-sourced, no client-base evidence"}
+  EP: {name: "MNC Sekuritas", name_confidence: low, type: mixed_unknown, type_confidence: none, legacy_type: big_local, notes: "Single-sourced, no client-base evidence"}
+  AD: {name: "Phintraco Sekuritas", name_confidence: low, type: mixed_unknown, type_confidence: none, legacy_type: big_local, notes: "Single-sourced, no client-base evidence"}
+  FZ: {name: "Waterfront Sekuritas", name_confidence: medium, type: mixed_unknown, type_confidence: none, legacy_type: big_local, notes: "Name agreed by config + live dict; no client-base evidence"}
+  IN: {name: "Investindo Nusantara Sekuritas", name_confidence: medium, type: mixed_unknown, type_confidence: none, legacy_type: local, notes: "Name agreed across 3 internal sources; no client-base evidence"}
+  MU: {name: "Minna Padi Investama", name_confidence: medium, type: mixed_unknown, type_confidence: none, legacy_type: local, notes: "Name agreed across 3 internal sources; no client-base evidence"}
+  KI: {name: "Ciptadana Sekuritas Asia", name_confidence: low, type: mixed_unknown, type_confidence: none, legacy_type: big_local, notes: "Possible dual-entity with MQ, not confidently an error — see audit doc"}
+  MQ: {name: "Ciptadana Sekuritas", name_confidence: low, type: mixed_unknown, type_confidence: none, legacy_type: local, notes: "Possible dual-entity with KI, not confidently an error — see audit doc"}
+  CP: {name: "KB Valbury Sekuritas", name_confidence: low, type: mixed_unknown, type_confidence: low, legacy_type: local, notes: "Plausibly an outdated pre-acquisition name (Valbury Asia -> KB Valbury), not a real conflict"}
+  CD: {name: "Unknown", name_confidence: none, type: mixed_unknown, type_confidence: none, legacy_type: local, notes: "Pre-audit config's own comment ('Corporate direct') was never a real company name"}
+  EM: {name: "Unknown", name_confidence: none, type: mixed_unknown, type_confidence: none, legacy_type: local, notes: "Never independently named; does not appear in any observed real trading data"}
+  IX: {name: "Unknown", name_confidence: none, type: mixed_unknown, type_confidence: none, legacy_type: local, notes: "Never independently named; does not appear in any observed real trading data"}
+  MG: {name: "Semesta Indovest Sekuritas", name_confidence: low, type: mixed_unknown, type_confidence: none, legacy_type: local, notes: "Single low-quality external mention only"}
+  AZ: {name: "Sucor Sekuritas", name_confidence: low, type: mixed_unknown, type_confidence: none, legacy_type: local, notes: "Domestic ownership per one source; no client-base evidence"}
 
 # ---------------------------------------------------------------------------
-# BROKER CLASSIFICATIONS
-# ---------------------------------------------------------------------------
-# Setiap broker IDX dikelompokkan berdasarkan jenis investor yang dilayani.
-# Klasifikasi ini menentukan kategori di setiap metric (FAR, Retail Ratio, SMS).
-
-broker_groups:
-  # Foreign institutional brokers — investor asing (fund, asset manager, bank)
-  foreign:
-    codes:
-      - CS     # Credit Suisse / UBS Securities
-      - ML     # Merrill Lynch / BofA Securities
-      - MS     # Morgan Stanley
-      - JP     # JPMorgan Securities
-      - DB     # Deutsche Bank
-      - YU     # CLSA Securities Indonesia
-      - ZP     # Macquarie Sekuritas
-      - RB     # CGS-CIMB Securities
-      - GS     # Goldman Sachs
-      - UX     # UOB Kay Hian Securities
-      - AK     # UBS Securities Indonesia
-      - DP     # DBS Vickers Securities
-      - SB     # Nomura Securities
-      - BK     # JP Securities / Barclays
-      - QA     # Citigroup Securities
-      - LS     # Credit Suisse International
-      - MK     # Daiwa Capital Markets
-      - KK     # Maybank Securities
-      - OX     # CIMB Securities
-      - SA     # Societe Generale
-    description: "Foreign institutional investors"
-
-  # Large domestic brokers — sekuritas lokal besar dengan basis investor besar
-  big_local:
-    codes:
-      - YP     # Indo Premier Sekuritas / Mirae Asset
-      - OD     # Mandiri Sekuritas
-      - DH     # Bahana Sekuritas
-      - YJ     # Trimegah Sekuritas
-      - ZH     # CIMB Niaga Sekuritas
-      - BW     # BNI Sekuritas
-      - DR     # OSO Sekuritas
-      - CC     # Mirae Asset Sekuritas
-      - ID     # Sinarmas Sekuritas
-      - YB     # Panin Sekuritas
-      - GI     # BRI Danareksa Sekuritas
-      - LG     # Phillip Sekuritas
-      - ZU     # Danareksa Sekuritas
-      - HD     # HD Capital Sekuritas
-      - PD     # Henan Putihrai
-      - EP     # MNC Sekuritas
-      - FZ     # Manulife Sekuritas
-      - KI     # Ciptadana Sekuritas
-      - AD     # Phintraco Sekuritas
-      - NI     # BCA Sekuritas
-    description: "Large domestic brokers"
-
-  # Institution brokers — fokus pada corporate/fund buyers lokal
-  # Subset dari big_local yang spesifik untuk accumulation tracking
-  institution:
-    codes:
-      - CP     # Valbury Asia Securities / institutional desk
-      - CC     # Mirae Asset Sekuritas
-      - CD     # (Corporate direct)
-      - PD     # Henan Putihrai (institutional)
-      - NI     # BCA Sekuritas (institutional)
-      - HD     # HD Capital Sekuritas (institutional)
-    description: "Institutional buyers (domestic funds, corporations)"
-
-  # Retail brokers — focused pada retail investor
-  retail:
-    codes:
-      - XL     # XL Investindo
-      - XC     # (Retail platform)
-      - YB     # Panin Sekuritas (retail desk)
-      - EM     # (Retail segment)
-      - IX     # (Retail platform)
-    description: "Retail-focused brokers"
-
-  # Local (other) brokers — tidak termasuk big_local atau foreign
-  local:
-    codes: []  # Auto-populated jika broker_code tidak match di atas
-    description: "Other domestic brokers"
-
-# ---------------------------------------------------------------------------
-# METRIC THRESHOLDS & CONFIGURATION
+# METRIC THRESHOLDS & CONFIGURATION — unchanged from the pre-audit config
 # ---------------------------------------------------------------------------
 
 metrics:
@@ -149,32 +345,32 @@ metrics:
     description: "Skor akumulasi smart money (weighted foreign + institution - retail)"
 
 # ---------------------------------------------------------------------------
-# DISPLAY & UI PREFERENCES
+# DISPLAY & UI PREFERENCES — unchanged from the pre-audit config
 # ---------------------------------------------------------------------------
 
 display:
-  # Leaderboard defaults
-  top_n_leaderboard: 10        # Top N saham di leaderboard
-  top_n_brokers: 5             # Top N brokers di detail view
-
-  # Date range
-  date_range_default_days: 20  # Default lookback untuk history
-
-  # Chart styling
+  top_n_leaderboard: 10
+  top_n_brokers: 5
+  date_range_default_days: 20
   chart_colors:
-    foreign: "#3b82f6"         # blue
-    institution: "#8b5cf6"      # purple
-    retail: "#f97316"           # orange
-    local: "#64748b"            # gray
-    accumulation: "#4ade80"      # green (positive net)
-    distribution: "#ef4444"      # red (negative net)
-    neutral: "#64748b"           # gray (zero/neutral)
+    foreign: "#3b82f6"
+    institution: "#8b5cf6"
+    retail: "#f97316"
+    local: "#64748b"
+    accumulation: "#4ade80"
+    distribution: "#ef4444"
+    neutral: "#64748b"
 
 # ---------------------------------------------------------------------------
 # NOTES
 # ---------------------------------------------------------------------------
-# - Broker codes diambil dari IDX standar (2-letter codes)
-# - Institution adalah subset dari big_local, dipakai untuk SMS weighting terpisah
-# - Retail codes bersifat eksperimental (belum ada definisi formal dari IDX)
-# - Metric menggunakan net_lot saja (lot-based); value-based metrics untuk fase extended
-# - Jika broker_code tidak ada di daftar manapun, akan di-classify sebagai "local"
+# - Broker codes are IDX standard (2-letter codes).
+# - `type` (retail/institutional/foreign/mixed_unknown) is the audited
+#   classification going forward — see docs/BROKER_CLASSIFICATION_AUDIT.md
+#   for full evidence per code before trusting or changing any entry.
+# - `legacy_type` exists ONLY to keep broker_intelligence.classify_broker()'s
+#   pre-audit output unchanged; do not use it for anything new.
+# - A code with type_confidence: none / mixed_unknown is a deliberate,
+#   evidence-based "we don't know" — not a placeholder to be filled in casually.
+# - Codes with no entry at all here have zero recorded evidence; treat them
+#   the same as an explicit mixed_unknown/none entry.
