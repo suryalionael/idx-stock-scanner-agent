@@ -790,6 +790,30 @@ def _render_broker_latest(ticker: str, scan_date: str, key_prefix: str = "") -> 
     if note:
         st.warning(f"⚠️ {note}")
 
+    # A "fresh" fetch just wrote a brand-new parquet to data/broker/ — but the
+    # global Retail Filter (app.py, near st.checkbox("Hide Retail Accumulation"))
+    # already ran earlier this script pass, from cache only, before this panel
+    # ever executed. Force one rerun so its cache-only read picks up the file
+    # that now exists on disk. Guarded per (ticker, session date) so it fires
+    # once, not on every rerun — _cached_broker_latest is st.cache_data-memoized,
+    # so the replay re-reads the same cached result instead of refetching.
+    #
+    # Two conditions gate this beyond "fresh", to avoid reruns that can't
+    # possibly change anything the user sees:
+    #   - hide_retail off → apply_retail_filter() is already a no-op (early
+    #     return before touching any parquet), so there's nothing to sync.
+    #   - fetched date > scan_date → enrich_df_with_top_brokers()'s fallback
+    #     is bounded to dates <= scan_date (see _newest_broker_date_for_ticker),
+    #     so a "Latest" fetch for a newer session than the one being viewed
+    #     will never be picked up by the filter regardless of rerunning.
+    fetched_date = info.get("date")
+    hide_retail_on = bool(st.session_state.get("hide_retail_accumulation"))
+    if src == "fresh" and hide_retail_on and fetched_date and fetched_date <= scan_date:
+        rerun_key = f"brk_fresh_rerun_{key_prefix}_{ticker}_{fetched_date}"
+        if not st.session_state.get(rerun_key):
+            st.session_state[rerun_key] = True
+            st.rerun()
+
     _render_broker_summary_body(df, key_suffix=f"latest_{key_prefix}_{ticker}_{scan_date}")
 
 
