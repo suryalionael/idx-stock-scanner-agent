@@ -138,5 +138,16 @@ knowledge_application:
   bonus_scale: 1.0        # scale of (shrunk_win_rate - 0.5) per matched entry, before lifecycle weighting
   max_total_bonus: 0.5    # hard cap on the summed bonus per candidate (0-10 total_score scale)
 
+# ---------------------------------------------------------------------------
+# AI LAB AUTOMATION — post-scan generation/resolution/reflection/hypothesis/
+# knowledge chain (stock_scanner/ai_lab/pipeline.py::run_ai_pipeline()), run
+# as Step 12 of run_daily_scan.py — strictly after all production scoring/
+# ranking/filtering/publishing above. AI Lab output never feeds back into
+# production scoring, ranking, or filtering. See
+# docs/ADR_AI_AUTOMATION_AND_STOCK_DICTIONARY.md.
+# ---------------------------------------------------------------------------
+ai_lab:
+  enabled: true    # set false to disable the whole chain without a code revert
+
 # --- Logging ---
 log_level: "INFO"

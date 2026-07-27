@@ -142,7 +142,12 @@ def export_knowledge_base(conn: sqlite3.Connection, path: Path | None = None) ->
     stock_scanner/db/registry_io.py: data/db/signals.db is gitignored and
     rebuilt fresh from committed sources on every CI run, so anything not
     derivable from those sources (like LLM-generated hypotheses) needs its
-    own durable mirror."""
+    own durable mirror.
+
+    Publishes top-level `generated_at`/`summary` fields, mirroring the
+    shape stock_scanner.db.knowledge_entries.export_knowledge_report()
+    already uses — so the dashboard can read this payload's status
+    without computing it client-side, same as its AI Lab sibling."""
     path = path or _DEFAULT_MIRROR_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     cur = conn.cursor()
@@ -150,7 +155,15 @@ def export_knowledge_base(conn: sqlite3.Connection, path: Path | None = None) ->
         dict(zip(_COLS, row))
         for row in cur.execute(f"SELECT {','.join(_COLS)} FROM knowledge_base").fetchall()
     ]
-    path.write_text(json.dumps({"knowledge_base": rows}, indent=2, default=str))
+    by_status: dict[str, int] = {}
+    for row in rows:
+        by_status[row["status"]] = by_status.get(row["status"], 0) + 1
+    payload = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "summary": {"total_entries": len(rows), "by_status": by_status},
+        "knowledge_base": rows,
+    }
+    path.write_text(json.dumps(payload, indent=2, default=str))
     return path
 
 

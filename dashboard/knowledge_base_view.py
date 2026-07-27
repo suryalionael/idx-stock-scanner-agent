@@ -22,8 +22,11 @@ _STATUS_ORDER = ["candidate", "reviewed", "testing", "tested_passed", "tested_fa
 
 
 @st.cache_data(ttl=300)
-def _load_df() -> pd.DataFrame:
-    payload = load_knowledge_base_payload()
+def _load_payload() -> dict:
+    return load_knowledge_base_payload()
+
+
+def _df_from_payload(payload: dict) -> pd.DataFrame:
     rows = payload.get("knowledge_base", [])
     if not rows:
         return pd.DataFrame()
@@ -49,29 +52,31 @@ def render_knowledge_base_tab() -> None:
         "Benjamini-Hochberg FDR correction, Wilson confidence interval). **This table has "
         "no effect on production scoring, ranking, or model promotion** — see "
         "[docs/KNOWLEDGE_BASE_POLICY.md](https://github.com/suryalionael/idx-stock-scanner-agent/"
-        "blob/main/docs/KNOWLEDGE_BASE_POLICY.md) for the full policy. Status changes only "
-        "happen via `scripts/review_knowledge_base.py` on the command line — nothing on this "
-        "page writes anything."
+        "blob/main/docs/KNOWLEDGE_BASE_POLICY.md) for the full policy. Status changes happen "
+        "through a separate, deliberate human review process — nothing on this page writes "
+        "anything."
     )
 
-    df = _load_df()
+    payload = _load_payload()
+    df = _df_from_payload(payload)
     if df.empty:
-        st.info(
-            "📭 No hypotheses yet. The Learning Agent is run manually, not on a schedule — "
-            "see docs/LEARNING_AGENT_RUNBOOK.md."
-        )
+        st.info("📭 No recommendations have been generated yet.")
         return
 
     # ── Summary ──────────────────────────────────────────────────────────
-    counts = df["status"].value_counts()
-    summary_cols = st.columns(len(_STATUS_ORDER))
+    # Read directly from the published payload's summary — no client-side
+    # value_counts()/max() computation (see export_knowledge_base()).
+    summary = payload.get("summary") or {}
+    by_status = summary.get("by_status") or {}
+    summary_cols = st.columns(len(_STATUS_ORDER) + 1)
     for col, status in zip(summary_cols, _STATUS_ORDER):
-        col.metric(status, int(counts.get(status, 0)))
+        col.metric(status, int(by_status.get(status, 0)))
+    summary_cols[-1].metric("Last Update", (payload.get("generated_at") or "—")[:10])
 
     st.markdown("")
 
     # ── Filter ───────────────────────────────────────────────────────────
-    available_statuses = [s for s in _STATUS_ORDER if s in counts.index]
+    available_statuses = [s for s in _STATUS_ORDER if s in df["status"].unique()]
     selected = st.multiselect(
         "Filter by status", options=available_statuses, default=available_statuses,
         key="kb_status_filter",

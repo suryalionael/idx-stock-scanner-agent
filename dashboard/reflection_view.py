@@ -41,8 +41,7 @@ def render_reflection_section() -> None:
         "Wilson confidence intervals, Fisher's exact test, Benjamini-Hochberg correction, or a "
         "one-sample binomial calibration test, never LLM-invented numbers. Read-only research "
         "findings; nothing here changes Production Scanner logic, thresholds, or the Knowledge "
-        "Base. Generated manually via `scripts/run_reflection_engine.py` — see "
-        "docs/AI_LAB_ARCHITECTURE.md."
+        "Base."
     )
 
     payload = _load_reflection_payload()
@@ -52,17 +51,17 @@ def render_reflection_section() -> None:
 
     if df.empty:
         st.info(
-            "📭 No reflection observations yet — either `scripts/run_reflection_engine.py` hasn't "
-            "been run, or there aren't enough resolved recommendations yet to clear the "
-            "statistical significance gate. An empty report is the correct, honest result when "
-            "data is still sparse, not an error."
+            "📭 Waiting for enough resolved recommendations. An empty report is the correct, "
+            "honest result when there aren't yet enough resolved trades to clear the "
+            "statistical significance gate — not an error."
         )
         return
 
-    cols = st.columns(3)
+    cols = st.columns(4)
     cols[0].metric("Total Observations", summary.get("total_observations", len(df)))
     cols[1].metric("Resolved Trades Analyzed", summary.get("resolved_trade_count", "—"))
     cols[2].metric("Categories", len(summary.get("by_category") or {}) or df["category"].nunique())
+    cols[3].metric("Last Run", (payload.get("generated_at") or "—")[:10])
 
     if narrative and narrative.get("overall_summary"):
         st.markdown("**🧭 Overall Summary** _(LLM narration over the code-computed observations below — never a source of new numbers)_")

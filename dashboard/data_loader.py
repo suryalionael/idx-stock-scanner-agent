@@ -11,6 +11,7 @@ Untuk deploy ke Streamlit Community Cloud, set:
   REMOTE_DATA_URL=https://raw.githubusercontent.com/<user>/<repo>/main/data/published/latest_scan.json
 """
 import os
+from functools import lru_cache
 from pathlib import Path
 from datetime import date
 from typing import Any
@@ -111,6 +112,17 @@ _REMOTE_KNOWLEDGE_REPORT_URL = os.environ.get(
 )
 _LOCAL_KNOWLEDGE_REPORT_PATH = Path(__file__).parent.parent / "data" / "published" / "knowledge_report.json"
 
+# AI Pipeline Status — execution metadata only (status/timing/reason per
+# stage), published by stock_scanner/ai_lab/pipeline.py::run_ai_pipeline()
+# after every Daily Scan. Same standalone, read-only, remote-then-local
+# pattern; this is the ONLY place any dashboard code reads this file — no
+# view opens data/published/ai_pipeline_status.json directly.
+_REMOTE_AI_PIPELINE_STATUS_URL = os.environ.get(
+    "REMOTE_AI_PIPELINE_STATUS_URL",
+    "https://raw.githubusercontent.com/suryalionael/idx-stock-scanner-agent/main/data/published/ai_pipeline_status.json",
+)
+_LOCAL_AI_PIPELINE_STATUS_PATH = Path(__file__).parent.parent / "data" / "published" / "ai_pipeline_status.json"
+
 # Marker string yang menandakan URL belum dikonfigurasi dengan benar
 _URL_PLACEHOLDERS = ("PLACEHOLDER_USER", "PLACEHOLDER_REPO", "<username>", "<user>", "<repo>")
 
@@ -125,6 +137,7 @@ _FOREIGN_DIR       = _ROOT / "data" / "foreign"
 _BROKER_DIR        = _ROOT / "data" / "broker"
 _FUNDAMENTALS_DIR  = _ROOT / "data" / "fundamentals"
 _BROKER_CONFIG     = _ROOT / "stock_scanner" / "configs" / "broker_config.yaml"
+_DICTIONARY_DIR    = _ROOT / "stock_scanner" / "configs" / "dictionary"
 
 # Kolom tabel utama (urutan display) — Ticker, lalu Top Buyer, Top Seller
 TABLE_COLS = [
@@ -194,6 +207,107 @@ def load_broker_config() -> dict:
             stacklevel=2,
         )
     return config
+
+
+# ---------------------------------------------------------------------------
+# Stock Dictionary
+# ---------------------------------------------------------------------------
+
+_DICTIONARY_SCHEMA_VERSION = 1
+
+
+@lru_cache(maxsize=1)
+def load_stock_dictionary() -> dict:
+    """Load the Stock Dictionary — the single source of truth explaining
+    every metric/indicator/score shown anywhere in the dashboard.
+
+    Reads three files under stock_scanner/configs/dictionary/:
+      stock_dictionary.yaml — the entries themselves (id, title, definition, ...)
+      aliases.yaml          — entry_id -> [alias, ...] for search
+      categories.yaml       — category_id -> {display_name, description};
+                               this file's keys ARE the valid category set
+
+    Never raises: any missing file, YAML parse error, schema_version
+    mismatch, unknown category reference, or dangling alias just logs a
+    warning and degrades gracefully — a Dictionary problem must never crash
+    the dashboard, same fail-open contract as load_broker_config().
+
+    Returns:
+        {
+          "entries": [...],                 # as authored in stock_dictionary.yaml
+          "categories": {cat_id: {...}},     # from categories.yaml
+          "alias_index": {alias_lower: entry_id},  # built from aliases.yaml
+        }
+        All three keys are always present, empty if their source is missing.
+    """
+    import sys
+
+    entries: list[dict] = []
+    categories: dict = {}
+    alias_index: dict[str, str] = {}
+
+    entries_path = _DICTIONARY_DIR / "stock_dictionary.yaml"
+    aliases_path = _DICTIONARY_DIR / "aliases.yaml"
+    categories_path = _DICTIONARY_DIR / "categories.yaml"
+
+    if not entries_path.exists():
+        print(f"[data_loader] WARNING: stock_dictionary.yaml tidak ditemukan di {entries_path}.", file=sys.stderr)
+        return {"entries": [], "categories": {}, "alias_index": {}}
+
+    try:
+        with open(entries_path, encoding="utf-8") as f:
+            entries_doc = yaml.safe_load(f) or {}
+        if entries_doc.get("schema_version") != _DICTIONARY_SCHEMA_VERSION:
+            print(
+                f"[data_loader] WARNING: stock_dictionary.yaml schema_version "
+                f"{entries_doc.get('schema_version')!r} != expected {_DICTIONARY_SCHEMA_VERSION} "
+                f"— loading anyway (best-effort).",
+                file=sys.stderr,
+            )
+        entries = entries_doc.get("entries") or []
+    except Exception as exc:
+        print(f"[data_loader] ERROR: Gagal parse stock_dictionary.yaml: {exc}", file=sys.stderr)
+        return {"entries": [], "categories": {}, "alias_index": {}}
+
+    if categories_path.exists():
+        try:
+            with open(categories_path, encoding="utf-8") as f:
+                categories_doc = yaml.safe_load(f) or {}
+            categories = categories_doc.get("categories") or {}
+        except Exception as exc:
+            print(f"[data_loader] WARNING: Gagal parse categories.yaml: {exc}", file=sys.stderr)
+    else:
+        print(f"[data_loader] WARNING: categories.yaml tidak ditemukan di {categories_path}.", file=sys.stderr)
+
+    if aliases_path.exists():
+        try:
+            with open(aliases_path, encoding="utf-8") as f:
+                aliases_doc = yaml.safe_load(f) or {}
+            for entry_id, alias_list in (aliases_doc.get("aliases") or {}).items():
+                for alias in alias_list or []:
+                    alias_index[str(alias).strip().lower()] = entry_id
+        except Exception as exc:
+            print(f"[data_loader] WARNING: Gagal parse aliases.yaml: {exc}", file=sys.stderr)
+    else:
+        print(f"[data_loader] WARNING: aliases.yaml tidak ditemukan di {aliases_path}.", file=sys.stderr)
+
+    # Validate category references — warn, never drop the entry (a bad
+    # category shouldn't hide a term from search/browse).
+    known_categories = set(categories)
+    for entry in entries:
+        if entry.get("category") not in known_categories:
+            print(
+                f"[data_loader] WARNING: stock_dictionary entry {entry.get('id')!r} references "
+                f"unknown category {entry.get('category')!r}.",
+                file=sys.stderr,
+            )
+
+    print(
+        f"[data_loader] INFO: Stock Dictionary loaded ({len(entries)} entries, "
+        f"{len(categories)} categories, {len(alias_index)} aliases)",
+        file=sys.stderr,
+    )
+    return {"entries": entries, "categories": categories, "alias_index": alias_index}
 
 
 # ---------------------------------------------------------------------------
@@ -1607,6 +1721,71 @@ def _load_local_knowledge_report() -> dict:
     except Exception as exc:
         print(f"[data_loader] ERROR: Gagal baca knowledge_report lokal: {exc}", file=sys.stderr)
         return {"entries": [], "summary": {}, "narrative": None}
+
+
+def load_ai_pipeline_status_payload(url: str | None = None) -> dict:
+    """Load the AI Automation Pipeline's execution-status mirror — same
+    standalone, read-only, remote-then-local pattern as the other AI Lab
+    loaders. This is the ONLY function anywhere in the dashboard that reads
+    data/published/ai_pipeline_status.json; every view that needs overall
+    pipeline health (last run, per-stage ok/skipped/failed) goes through
+    this loader instead of opening the file itself.
+
+    Returns {} (not an exception) if the AI pipeline hasn't run yet — a
+    normal state before the first Daily Scan with this feature, not an
+    error.
+    """
+    import json
+    import sys
+    import urllib.request
+
+    target_url = url or _REMOTE_AI_PIPELINE_STATUS_URL
+    if any(p in target_url for p in _URL_PLACEHOLDERS):
+        return _load_local_ai_pipeline_status()
+
+    try:
+        with urllib.request.urlopen(target_url, timeout=10) as resp:
+            raw = resp.read().decode("utf-8")
+        payload = json.loads(raw)
+        print(
+            f"[data_loader] INFO: Remote ai_pipeline_status loaded dari {target_url} "
+            f"(last_run={payload.get('last_run', '?')})",
+            file=sys.stderr,
+        )
+        return payload
+    except Exception as exc:
+        print(
+            f"[data_loader] WARNING: Gagal load remote ai_pipeline_status dari {target_url}: {exc} "
+            f"— mencoba file lokal.",
+            file=sys.stderr,
+        )
+
+    return _load_local_ai_pipeline_status()
+
+
+def _load_local_ai_pipeline_status() -> dict:
+    import json
+    import sys
+
+    if not _LOCAL_AI_PIPELINE_STATUS_PATH.exists():
+        print(
+            f"[data_loader] INFO: ai_pipeline_status.json tidak ditemukan secara lokal "
+            f"({_LOCAL_AI_PIPELINE_STATUS_PATH}) — AI pipeline mungkin belum pernah jalan.",
+            file=sys.stderr,
+        )
+        return {}
+
+    try:
+        with open(_LOCAL_AI_PIPELINE_STATUS_PATH, encoding="utf-8") as f:
+            payload = json.load(f)
+        print(
+            f"[data_loader] INFO: Local ai_pipeline_status loaded (last_run={payload.get('last_run', '?')})",
+            file=sys.stderr,
+        )
+        return payload
+    except Exception as exc:
+        print(f"[data_loader] ERROR: Gagal baca ai_pipeline_status lokal: {exc}", file=sys.stderr)
+        return {}
 
 
 def df_from_published_payload(payload: dict) -> pd.DataFrame:
