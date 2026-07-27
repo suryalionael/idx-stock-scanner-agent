@@ -1,0 +1,1604 @@
+# Stock Dictionary — single source of truth for every metric/indicator/
+# score/term shown anywhere in the dashboard. See dashboard/stock_dictionary_view.py
+# for the UI and dashboard/data_loader.py::load_stock_dictionary() for the loader.
+#
+# Schema per entry: id, title, short_name, category (must be a key in
+# categories.yaml), definition, formula, interpretation, how_scanner_uses_it,
+# example, related_terms (list of other entry ids), references (typed list:
+# source_code | documentation | external).
+#
+# Adding a future metric requires only a new entry here — no dashboard code
+# change. Coverage against every metric actually displayed in the dashboard
+# is verified by scripts/check_dictionary_coverage.py, not by counting
+# entries in this file.
+schema_version: 1
+entries:
+
+  # ---------------------------------------------------------------------
+  # Production Scores
+  # ---------------------------------------------------------------------
+  - id: trend_score
+    title: "Trend Score"
+    short_name: "Trend"
+    category: production_scores
+    definition: "Component score (0-10) measuring how well a stock's moving averages and momentum indicators confirm an established uptrend."
+    formula: "MA alignment (full=10pt, partial=5pt) + slope_ma20>0 (+2) + golden_cross (+3) + ADX>=25 (+1) + ADX>=40 (+1) + supertrend_bullish (+2), clipped to 0-10."
+    interpretation: "Higher is a stronger, more confirmed uptrend. Near 0 suggests no trend or a downtrend."
+    how_scanner_uses_it: "One of 5 weighted components of total_score (25% weight)."
+    example: "A stock trading above rising MA20/MA50/MA200 with a recent golden cross and ADX of 30 scores near the top of the range."
+    related_terms: [total_score, momentum_score, ma20, ma50, ma200, golden_cross, adx]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/signal_engine.py"}
+
+  - id: momentum_score
+    title: "Momentum Score"
+    short_name: "Momentum"
+    category: production_scores
+    definition: "Component score (0-10) measuring short-to-medium-term price momentum via RSI, MACD, and rate of change."
+    formula: "RSI in 40-70 sweet spot (+5) + MACD histogram>0 (+3) + ROC5>0 (+1) + ROC20>0 (+1) + stochastic RSI k>d and <80 (+1)."
+    interpretation: "Higher indicates momentum is building without being overextended. RSI outside the 40-70 band contributes nothing here (not penalized directly, just not rewarded)."
+    how_scanner_uses_it: "One of 5 weighted components of total_score (25% weight)."
+    example: "RSI14 of 58 with a positive MACD histogram and positive 5- and 20-day ROC scores highly."
+    related_terms: [total_score, trend_score, rsi14, macd, roc5, roc20, stoch_rsi_k]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/signal_engine.py"}
+
+  - id: breakout_score
+    title: "Breakout Score"
+    short_name: "Breakout"
+    category: production_scores
+    definition: "Component score (0-10) measuring how close a stock is to, or how strongly it has already broken out of, a key resistance/52-week-high level."
+    formula: "Blends ATR-based breakout confirmation with proximity to the 52-week high."
+    interpretation: "Higher means a stock is either breaking out now or very close to a breakout level."
+    how_scanner_uses_it: "One of 5 weighted components of total_score (25% weight)."
+    example: "A stock closing within 2% of its 52-week high with an ATR breakout flag scores near the maximum."
+    related_terms: [total_score, atr_breakout, pct_from_52w_high, atr14]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/signal_engine.py"}
+
+  - id: volume_score
+    title: "Volume Score"
+    short_name: "Volume"
+    category: production_scores
+    definition: "Component score (0-10) measuring whether trading volume confirms the price move — spikes, elevated ratio-to-average, and accumulation via OBV."
+    formula: "Combines vol_ratio_20d, a volume-spike flag, and OBV trend direction."
+    interpretation: "Higher means volume is genuinely confirming the move, not just price moving on thin trading."
+    how_scanner_uses_it: "One of 5 weighted components of total_score (15% weight)."
+    example: "A stock with 3x its 20-day average volume and a rising OBV trend scores highly."
+    related_terms: [total_score, vol_ratio_20d, vol_spike, obv_trend]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/signal_engine.py"}
+
+  - id: penalty_score
+    title: "Penalty Score"
+    short_name: "Penalty"
+    category: production_scores
+    definition: "Deductions (0-10 scale) applied for risk flags such as unusual market activity (UMA) or missing fundamental data."
+    formula: "is_uma flag subtracts 1.0; missing fundamental_status subtracts 0.5; other quality-filter penalties add further deductions (see scanner_config.yaml)."
+    interpretation: "Higher penalty_score means more red flags were found — it is subtracted, not added, when computing total_score."
+    how_scanner_uses_it: "Subtracted from total_score at 20% weight."
+    example: "A stock flagged as UMA (Unusual Market Activity) with also-missing fundamentals accumulates a higher penalty and a lower total_score."
+    related_terms: [total_score, is_uma, fundamental_status]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/signal_engine.py"}
+      - {type: source_code, value: "stock_scanner/configs/scanner_config.yaml"}
+
+  - id: total_score
+    title: "Total Score"
+    short_name: "Total"
+    category: production_scores
+    definition: "The Production Scanner's headline 0-10 composite score, combining trend, momentum, breakout, volume, and penalty."
+    formula: "trend_score*0.25 + momentum_score*0.25 + breakout_score*0.25 + volume_score*0.15 - penalty_score*0.20, clipped to 0-10."
+    interpretation: "Higher means a stronger overall setup across every dimension the scanner tracks. This is the primary ranking key across every tab."
+    how_scanner_uses_it: "Drives ranking and, combined with thresholds in scanner_config.yaml, the signal classification (BREAKOUT/PRE_MARKUP/WATCH/AVOID)."
+    example: "A total_score of 8.2 ranks near the top of the day's candidates."
+    related_terms: [enhanced_total_score, trend_score, momentum_score, breakout_score, volume_score, penalty_score, signal]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/signal_engine.py"}
+
+  - id: enhanced_total_score
+    title: "Enhanced Total Score"
+    short_name: "Enhanced"
+    category: production_scores
+    definition: "total_score adjusted by news sentiment and foreign-flow signals, when the enhanced-scoring feature is enabled."
+    formula: "total_score + (news_score-5)*0.08 + (foreign_score-5)*0.08, clipped to 0-10."
+    interpretation: "Diverges from total_score when news sentiment or foreign flow is unusually positive or negative — a small, bounded nudge, not a re-ranking."
+    how_scanner_uses_it: "Optional secondary ranking column, toggled via use_enhanced_score in scanner_config.yaml."
+    example: "A stock with strongly positive recent news gets a small boost above its plain total_score."
+    related_terms: [total_score, news_score, foreign_score]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/signal_engine.py"}
+      - {type: source_code, value: "stock_scanner/configs/scanner_config.yaml"}
+
+  - id: news_score
+    title: "News Score"
+    short_name: "News"
+    category: production_scores
+    definition: "Component score (0-10, neutral=5.0) derived from recent news sentiment for a ticker."
+    formula: "Derived from aggregated news sentiment; defaults to a neutral 5.0 when no news data is available."
+    interpretation: "Above 5 is net-positive recent news; below 5 is net-negative."
+    how_scanner_uses_it: "Feeds enhanced_total_score only, not the base total_score."
+    example: "A ticker with several positive news articles in the last 3 days scores well above 5."
+    related_terms: [enhanced_total_score, news_data_status]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/news_sentiment.py"}
+
+  - id: foreign_score
+    title: "Foreign Flow Score"
+    short_name: "Foreign Flow"
+    category: production_scores
+    definition: "Component score (0-10, neutral=5.0) derived from foreign investor net buy/sell flow."
+    formula: "Derived from foreign net flow data; defaults to a neutral 5.0 when unavailable."
+    interpretation: "Above 5 indicates net foreign accumulation; below 5 indicates net foreign distribution."
+    how_scanner_uses_it: "Feeds enhanced_total_score only, not the base total_score."
+    example: "Sustained foreign net buying pushes this score above 5."
+    related_terms: [enhanced_total_score, far]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/foreign_flow.py"}
+
+  - id: signal
+    title: "Signal"
+    short_name: "Signal"
+    category: production_scores
+    definition: "The Production Scanner's final classification for a ticker: BREAKOUT, PRE_MARKUP, WATCH, AVOID, or NONE."
+    formula: "Threshold rules on total_score and its components, defined in scanner_config.yaml (e.g. BREAKOUT needs total>=7.5, breakout_score>=7.0, volume_score>=6.0)."
+    interpretation: "BREAKOUT = strongest setup; PRE_MARKUP = building momentum; WATCH = worth monitoring; AVOID = a hard liquidity or risk gate was tripped; NONE = doesn't meet any tier."
+    how_scanner_uses_it: "The primary badge shown on every ticker across every tab."
+    example: "A ticker with total_score 8.1, breakout_score 7.4, and volume_score 6.5 classifies as BREAKOUT."
+    related_terms: [total_score, breakout_score, volume_score]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/signal_engine.py"}
+      - {type: source_code, value: "stock_scanner/configs/scanner_config.yaml"}
+
+  - id: scalping_score
+    title: "Scalping Score"
+    short_name: "Scalp Score"
+    category: production_scores
+    definition: "A 0-10 score specific to the Scalping tab, rewarding volume spikes, short-term momentum, and near-term catalysts suited to fast trades."
+    formula: "Volume spike/ratio (up to 2.5pt) + ROC5/ROC20 momentum (2.5pt) + ATR breakout (1.0pt) + momentum_score composite (1.5pt) + RSI 50-72 sweet spot (1.0pt) + near 52-week high (1.0pt) + news catalyst (0.5pt) + squeeze release (0.5pt)."
+    interpretation: "Higher favors stocks with the volume/momentum profile scalpers look for right now, not necessarily the best multi-week setup."
+    how_scanner_uses_it: "Drives the SCALPING_HIGH / SCALPING_WATCH labels and ranking on the Scalping tab."
+    example: "A stock with a 5x volume spike and RSI14 at 62 scores highly here even if its long-term trend_score is unremarkable."
+    related_terms: [scalping_label, roc5, roc20, vol_ratio_20d, atr_breakout, squeeze_release]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/scalping.py"}
+
+  - id: scalping_label
+    title: "Scalping Label"
+    short_name: "Scalp Label"
+    category: production_scores
+    definition: "Classification derived from scalping_score: SCALPING_HIGH, SCALPING_WATCH, or NOT_SCALPING."
+    formula: "SCALPING_HIGH if scalping_score >= 6.5; SCALPING_WATCH if >= 4.0; otherwise NOT_SCALPING."
+    interpretation: "SCALPING_HIGH is the strongest short-term momentum candidate list."
+    how_scanner_uses_it: "The filterable label on the Scalping tab."
+    example: "A scalping_score of 7.2 labels as SCALPING_HIGH."
+    related_terms: [scalping_score]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/scalping.py"}
+
+  - id: long_term_score
+    title: "Long Term Score"
+    short_name: "LT Score"
+    category: production_scores
+    definition: "A composite score for the Long Term tab blending fundamental quality, valuation, and cyclicality."
+    formula: "Combines (A) fundamental quality — ROE/DER/margin/growth, (B) valuation — PE/PBV vs. sector, Graham Number, intrinsic value, and (C) cyclicality classification."
+    interpretation: "Higher favors fundamentally sound, reasonably valued businesses suited to buy-and-hold, not short-term momentum."
+    how_scanner_uses_it: "Drives the LONG_TERM_CORE / LONG_TERM_WATCHLIST labels and ranking on the Long Term tab."
+    example: "A stock with ROE 22%, DER 0.6, and trading below its Graham Number intrinsic value scores highly."
+    related_terms: [long_term_label, roe_pct, der, intrinsic_value, valuation_status, cyclicality]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/long_term.py"}
+
+  - id: long_term_label
+    title: "Long Term Label"
+    short_name: "LT Label"
+    category: production_scores
+    definition: "Classification derived from long_term_score: LONG_TERM_CORE, LONG_TERM_WATCHLIST, or NOT_LONG_TERM."
+    formula: "Threshold rules on long_term_score, defined in the long-term scoring module."
+    interpretation: "LONG_TERM_CORE is the strongest buy-and-hold candidate list."
+    how_scanner_uses_it: "The filterable label on the Long Term tab."
+    example: "A stock clearing the fundamental and valuation thresholds labels as LONG_TERM_CORE."
+    related_terms: [long_term_score]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/long_term.py"}
+
+  # ---------------------------------------------------------------------
+  # Technical Indicators
+  # ---------------------------------------------------------------------
+  - id: rsi14
+    title: "RSI14 (Relative Strength Index, 14-period)"
+    short_name: "RSI14"
+    category: technical_indicators
+    definition: "A momentum oscillator (0-100) measuring the speed and magnitude of recent price changes over 14 periods."
+    formula: "RSI = 100 - (100 / (1 + RS)), where RS = average gain / average loss over 14 periods."
+    interpretation: "Above 70 is often considered overbought; below 30 oversold. The scanner's momentum_score rewards a 40-70 'sweet spot' rather than extremes."
+    how_scanner_uses_it: "Feeds momentum_score and scalping_score; also shown directly as a column."
+    example: "RSI14 of 58 sits comfortably in the scanner's rewarded momentum range."
+    related_terms: [momentum_score, scalping_score, macd]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+      - {type: external, value: "Investopedia – Relative Strength Index (RSI)"}
+
+  - id: macd
+    title: "MACD (Moving Average Convergence Divergence)"
+    short_name: "MACD"
+    category: technical_indicators
+    definition: "A trend-following momentum indicator showing the relationship between two moving averages (macd), its signal line (macd_signal), and their difference (macd_histogram)."
+    formula: "MACD = EMA(12) - EMA(26); Signal = EMA(9) of MACD; Histogram = MACD - Signal."
+    interpretation: "A positive, rising histogram indicates strengthening upward momentum."
+    how_scanner_uses_it: "macd_histogram > 0 contributes to momentum_score."
+    example: "A MACD histogram crossing from negative to positive often precedes an uptrend."
+    related_terms: [momentum_score, rsi14]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+      - {type: external, value: "Investopedia – MACD"}
+
+  - id: ma20
+    title: "MA20 (20-period Moving Average)"
+    short_name: "MA20"
+    category: technical_indicators
+    definition: "The simple moving average of closing price over the last 20 trading sessions."
+    formula: "MA20 = mean(close, last 20 sessions)"
+    interpretation: "Price trading above a rising MA20 is a short-term uptrend signal."
+    how_scanner_uses_it: "Used for MA alignment/golden-cross detection feeding trend_score, and shown on every price chart."
+    example: "Price crossing above MA20 with MA20 itself sloping upward supports a bullish trend_score."
+    related_terms: [ma50, ma200, trend_score, golden_cross]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+
+  - id: ma50
+    title: "MA50 (50-period Moving Average)"
+    short_name: "MA50"
+    category: technical_indicators
+    definition: "The simple moving average of closing price over the last 50 trading sessions."
+    formula: "MA50 = mean(close, last 50 sessions)"
+    interpretation: "A medium-term trend reference; MA20 crossing above MA50 is the 'golden cross' signal."
+    how_scanner_uses_it: "Used for MA alignment/golden-cross detection feeding trend_score, and trend_state classification."
+    example: "MA20 crossing above MA50 triggers golden_cross = true."
+    related_terms: [ma20, ma200, golden_cross, trend_state]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+      - {type: source_code, value: "dashboard/streaks.py"}
+
+  - id: ma200
+    title: "MA200 (200-period Moving Average)"
+    short_name: "MA200"
+    category: technical_indicators
+    definition: "The simple moving average of closing price over the last 200 trading sessions — a common long-term trend reference."
+    formula: "MA200 = mean(close, last 200 sessions)"
+    interpretation: "Price above a rising MA200 is widely considered a long-term bull market signal for that stock."
+    how_scanner_uses_it: "Used for full/partial MA-alignment checks feeding trend_score, price_vs_ma200, and trend_state classification."
+    example: "\"Full alignment\" (close > MA20 > MA50 > MA200, all rising) scores the maximum trend_score MA-alignment points."
+    related_terms: [ma20, ma50, trend_score, trend_state]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+      - {type: source_code, value: "dashboard/streaks.py"}
+
+  - id: golden_cross
+    title: "Golden Cross"
+    short_name: "Golden Cross"
+    category: technical_indicators
+    definition: "A boolean flag: true when the 20-period moving average has recently crossed above the 50-period moving average."
+    formula: "ma20 crosses above ma50 within a recent lookback window."
+    interpretation: "A classic bullish trend-continuation signal."
+    how_scanner_uses_it: "Contributes +3 points to trend_score when true."
+    example: "A stock whose MA20 just crossed above its MA50 shows golden_cross = true and gets a trend_score boost."
+    related_terms: [ma20, ma50, trend_score]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+
+  - id: atr14
+    title: "ATR14 (Average True Range, 14-period)"
+    short_name: "ATR14"
+    category: technical_indicators
+    definition: "A volatility measure — the average of the true range (the greatest of high-low, high-prev_close, low-prev_close) over 14 periods."
+    formula: "ATR14 = average(true range, last 14 sessions)"
+    interpretation: "Higher ATR means larger typical daily price swings. Used as the unit for trading-level distances, not as a directional signal."
+    how_scanner_uses_it: "Drives atr_breakout detection and the entry/target/cutloss trading levels."
+    example: "A stock with ATR14 of Rp 50 might get a cutloss set roughly 1.5x ATR below entry."
+    related_terms: [atr_breakout, entry_low, cutloss, tp_low]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+      - {type: source_code, value: "stock_scanner/alerts/level_calculator.py"}
+      - {type: external, value: "Investopedia – Average True Range (ATR)"}
+
+  - id: atr_breakout
+    title: "ATR Breakout"
+    short_name: "ATR Breakout"
+    category: technical_indicators
+    definition: "A boolean flag: true when the day's price range or move exceeds what ATR14 would typically predict, signaling an unusually strong move."
+    formula: "Price move exceeds a multiple of ATR14 (see feature_builder.py for the exact threshold)."
+    interpretation: "A true flag suggests today's move is statistically larger than this stock's normal daily range."
+    how_scanner_uses_it: "Contributes to breakout_score and scalping_score."
+    example: "A stock that normally moves Rp 20/day (ATR14) but moved Rp 60 today flags atr_breakout = true."
+    related_terms: [atr14, breakout_score, scalping_score]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+
+  - id: vol_ratio_20d
+    title: "Volume Ratio (20-day)"
+    short_name: "Vol Ratio"
+    category: technical_indicators
+    definition: "Today's trading volume divided by the average volume over the last 20 sessions."
+    formula: "vol_ratio_20d = volume_today / mean(volume, last 20 sessions)"
+    interpretation: "A ratio above 1.5-2x is generally considered a meaningful volume spike; scalping favors even higher ratios."
+    how_scanner_uses_it: "Feeds volume_score and scalping_score, and is a standalone filter (Min Volume Ratio slider) on the Scalping tab."
+    example: "A vol_ratio_20d of 3.0 means volume today is triple the recent 20-day average."
+    related_terms: [volume_score, vol_spike, scalping_score]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+
+  - id: vol_spike
+    title: "Volume Spike"
+    short_name: "Vol Spike"
+    category: technical_indicators
+    definition: "A boolean flag: true when vol_ratio_20d exceeds a defined spike threshold."
+    formula: "vol_ratio_20d above a fixed threshold (see feature_builder.py)."
+    interpretation: "A simpler, threshold-based sibling of vol_ratio_20d for quick filtering."
+    how_scanner_uses_it: "Contributes to volume_score."
+    example: "A stock trading at 4x normal volume shows vol_spike = true."
+    related_terms: [vol_ratio_20d, volume_score]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+
+  - id: obv_trend
+    title: "OBV Trend (On-Balance Volume)"
+    short_name: "OBV Trend"
+    category: technical_indicators
+    definition: "The directional trend of On-Balance Volume, a running total of volume that adds on up days and subtracts on down days."
+    formula: "OBV cumulatively adds/subtracts daily volume based on close direction; obv_trend reflects whether this cumulative line is rising."
+    interpretation: "A rising OBV trend suggests volume is confirming (accumulating into) the price move."
+    how_scanner_uses_it: "Contributes to volume_score."
+    example: "Price making new highs alongside a rising OBV trend is a bullish volume confirmation."
+    related_terms: [volume_score, vol_ratio_20d]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+      - {type: external, value: "Investopedia – On-Balance Volume (OBV)"}
+
+  - id: supertrend_bullish
+    title: "Supertrend (Bullish)"
+    short_name: "Supertrend"
+    category: technical_indicators
+    definition: "A boolean flag from the Supertrend indicator (period=10, multiplier=3.0), true when price is in a Supertrend-confirmed uptrend."
+    formula: "ATR-based trailing stop-and-reverse line; bullish when price is above the current Supertrend line."
+    interpretation: "A widely-used trend-following confirmation signal, distinct from moving averages."
+    how_scanner_uses_it: "Contributes +2 points to trend_score when true."
+    example: "A stock trading above its Supertrend line for several sessions shows supertrend_bullish = true."
+    related_terms: [trend_score, adx]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+      - {type: external, value: "Investopedia – Supertrend Indicator"}
+
+  - id: stoch_rsi_k
+    title: "Stochastic RSI %K"
+    short_name: "StochRSI K"
+    category: technical_indicators
+    definition: "A stochastic oscillator applied to RSI (rather than price) — the %K line, parameters (14,14,3,3)."
+    formula: "Standard stochastic formula applied to a 14-period RSI series, with 3-period smoothing."
+    interpretation: "More sensitive than RSI alone; %K crossing above %D below the 80 level supports continuing momentum."
+    how_scanner_uses_it: "stoch_rsi_k > stoch_rsi_d and < 80 contributes +1 to momentum_score."
+    example: "%K crossing above %D at a reading of 45 (not yet overbought) is a small momentum tailwind."
+    related_terms: [stoch_rsi_d, rsi14, momentum_score]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+
+  - id: stoch_rsi_d
+    title: "Stochastic RSI %D"
+    short_name: "StochRSI D"
+    category: technical_indicators
+    definition: "The signal line (smoothed %K) of the Stochastic RSI indicator."
+    formula: "3-period moving average of stoch_rsi_k."
+    interpretation: "Used together with %K for crossover signals."
+    how_scanner_uses_it: "Compared against stoch_rsi_k as part of momentum_score."
+    example: "See stoch_rsi_k."
+    related_terms: [stoch_rsi_k, momentum_score]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+
+  - id: adx
+    title: "ADX (Average Directional Index)"
+    short_name: "ADX"
+    category: technical_indicators
+    definition: "A 14-period indicator measuring trend strength (not direction) on a 0-100 scale, alongside its +DI/-DI directional lines."
+    formula: "Derived from smoothed directional movement (+DM/-DM) relative to true range, period=14."
+    interpretation: "Above 25 suggests a strong trend is present (in either direction); above 40 a very strong trend. Low ADX suggests a ranging/sideways market."
+    how_scanner_uses_it: "ADX >= 25 contributes +1 to trend_score, ADX >= 40 contributes a further +1."
+    example: "ADX of 32 with price above rising moving averages supports a strong-trend classification."
+    related_terms: [trend_score, supertrend_bullish]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+      - {type: external, value: "Investopedia – Average Directional Index (ADX)"}
+
+  - id: squeeze_on
+    title: "Squeeze On (Bollinger/Keltner)"
+    short_name: "Squeeze"
+    category: technical_indicators
+    definition: "A boolean flag: true when Bollinger Bands are contracted inside the Keltner Channel, indicating a period of low volatility that often precedes a breakout."
+    formula: "Bollinger Band width falls entirely inside the Keltner Channel width."
+    interpretation: "A 'squeeze' is a coiling-spring setup — it signals reduced volatility, not direction; squeeze_release marks when it fires."
+    how_scanner_uses_it: "squeeze_release contributes a small bonus to scalping_score."
+    example: "A stock showing squeeze_on = true for several sessions may be setting up for a sharp move once it releases."
+    related_terms: [squeeze_release, scalping_score, bb_width]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+      - {type: external, value: "Investopedia – TTM Squeeze"}
+
+  - id: squeeze_release
+    title: "Squeeze Release"
+    short_name: "Squeeze Release"
+    category: technical_indicators
+    definition: "A boolean flag: true on the session a prior Bollinger/Keltner squeeze condition ends."
+    formula: "squeeze_on transitions from true to false."
+    interpretation: "Often coincides with the start of a volatility expansion / breakout move."
+    how_scanner_uses_it: "Contributes +0.5pt to scalping_score."
+    example: "A squeeze that persisted for 10 sessions releasing alongside a volume spike is a classic scalping setup."
+    related_terms: [squeeze_on, scalping_score]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+
+  - id: vwap_20d
+    title: "VWAP (20-day rolling approximation)"
+    short_name: "VWAP"
+    category: technical_indicators
+    definition: "A rolling 20-day approximation of Volume-Weighted Average Price."
+    formula: "Rolling 20-day volume-weighted average of price."
+    interpretation: "Price above VWAP suggests buyers have paid a premium recently; below suggests the opposite."
+    how_scanner_uses_it: "price_vs_vwap shows the percentage a stock trades above/below this level."
+    example: "A stock 3% above its 20-day VWAP is trading at a premium to its recent volume-weighted average."
+    related_terms: [price_vs_vwap]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+      - {type: external, value: "Investopedia – Volume-Weighted Average Price (VWAP)"}
+
+  - id: price_vs_vwap
+    title: "Price vs. VWAP"
+    short_name: "vs VWAP"
+    category: technical_indicators
+    definition: "The percentage a stock's current price sits above or below its 20-day VWAP."
+    formula: "(close - vwap_20d) / vwap_20d * 100"
+    interpretation: "Positive means trading above the volume-weighted average; negative means below."
+    how_scanner_uses_it: "A supplementary reference metric shown alongside VWAP."
+    example: "+3% means the stock trades 3% above its rolling VWAP."
+    related_terms: [vwap_20d]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+
+  - id: roc5
+    title: "ROC5 (5-day Rate of Change)"
+    short_name: "ROC5"
+    category: technical_indicators
+    definition: "The percentage price change over the last 5 trading sessions."
+    formula: "ROC5 = (close_today - close_5_sessions_ago) / close_5_sessions_ago * 100"
+    interpretation: "A short-term momentum gauge. Very high positive ROC5 (default threshold 30%) is flagged as 'Extended' — momentum has already run far, raising late-entry risk."
+    how_scanner_uses_it: "Feeds momentum_score and scalping_score; also drives the 'Extended' overheated-momentum warning."
+    example: "ROC5 of +8.9% means the stock is up nearly 9% over the last week."
+    related_terms: [roc20, momentum_score, scalping_score]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+      - {type: source_code, value: "stock_scanner/pipeline/scalping.py"}
+
+  - id: roc20
+    title: "ROC20 (20-day Rate of Change)"
+    short_name: "ROC20"
+    category: technical_indicators
+    definition: "The percentage price change over the last 20 trading sessions."
+    formula: "ROC20 = (close_today - close_20_sessions_ago) / close_20_sessions_ago * 100"
+    interpretation: "A medium-term momentum gauge, less noisy than ROC5."
+    how_scanner_uses_it: "Feeds momentum_score."
+    example: "ROC20 of +15% indicates a solid month-long uptrend."
+    related_terms: [roc5, momentum_score]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+
+  - id: pct_from_52w_high
+    title: "% From 52-Week High"
+    short_name: "52w High%"
+    category: technical_indicators
+    definition: "How far the current price sits below (or at) its 52-week high, as a percentage."
+    formula: "(high_52w - close) / high_52w * 100"
+    interpretation: "0% means trading at a new 52-week high. Smaller values indicate proximity to a breakout level."
+    how_scanner_uses_it: "Feeds breakout_score and scalping_score."
+    example: "A reading of 2% means the stock is trading just 2% below its 52-week high."
+    related_terms: [breakout_score, scalping_score]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+
+  - id: bb_width
+    title: "Bollinger Band Width"
+    short_name: "BB Width"
+    category: technical_indicators
+    definition: "The width of the Bollinger Bands relative to the middle band — a measure of relative volatility."
+    formula: "(upper_band - lower_band) / middle_band"
+    interpretation: "Narrow width suggests low volatility (often preceding a squeeze/breakout); wide width suggests high current volatility."
+    how_scanner_uses_it: "A supporting input for squeeze_on detection."
+    example: "A very low bb_width alongside squeeze_on = true confirms a genuine volatility contraction."
+    related_terms: [squeeze_on]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+      - {type: external, value: "Investopedia – Bollinger Bands"}
+
+  - id: hist_vol_20d
+    title: "Historical Volatility (20-day)"
+    short_name: "Hist Vol"
+    category: technical_indicators
+    definition: "The annualized standard deviation of daily returns over the last 20 sessions."
+    formula: "std(daily returns, last 20 sessions) annualized"
+    interpretation: "Higher values indicate a more volatile stock over the recent period."
+    how_scanner_uses_it: "A supporting risk/context metric, not a scoring input."
+    example: "A hist_vol_20d of 45% indicates meaningfully more day-to-day swing than a 15% reading."
+    related_terms: [atr14]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/feature_builder.py"}
+
+  # ---------------------------------------------------------------------
+  # Financial Metrics
+  # ---------------------------------------------------------------------
+  - id: pe_ratio
+    title: "PER / PE Ratio (Price to Earnings)"
+    short_name: "PER"
+    category: financial_metrics
+    definition: "Price per share divided by earnings per share — how much investors pay per unit of company earnings."
+    formula: "PER = Price / EPS"
+    interpretation: "In the IDX context used by this scanner: PER <= 10 is considered cheap, 10-20 fair, above 30 expensive — sector context matters."
+    how_scanner_uses_it: "Shown in the fundamentals table and the Long Term tab's valuation layer; feeds the AI explanation narrative."
+    example: "A PER of 8 for a profitable, growing company may indicate undervaluation."
+    related_terms: [pbv, roe_pct, market_cap]
+    references:
+      - {type: source_code, value: "dashboard/explain.py"}
+      - {type: external, value: "Investopedia – Price-to-Earnings (P/E) Ratio"}
+
+  - id: pbv
+    title: "PBV (Price to Book Value)"
+    short_name: "PBV"
+    category: financial_metrics
+    definition: "Price per share divided by book value per share — how much investors pay relative to the company's net asset value."
+    formula: "PBV = Price / Book Value per Share"
+    interpretation: "In the IDX context used by this scanner: PBV <= 1.5 is considered undervalued-leaning, above 4 a valuation premium."
+    how_scanner_uses_it: "Shown in the fundamentals table and used in the Long Term tab's valuation layer and Graham Number check."
+    example: "A PBV of 0.9 means the stock trades below its book value."
+    related_terms: [pe_ratio, intrinsic_value, roe_pct]
+    references:
+      - {type: source_code, value: "dashboard/explain.py"}
+      - {type: source_code, value: "stock_scanner/pipeline/long_term.py"}
+      - {type: external, value: "Investopedia – Price-to-Book (P/B) Ratio"}
+
+  - id: roe_pct
+    title: "ROE (Return on Equity)"
+    short_name: "ROE"
+    category: financial_metrics
+    definition: "Net income as a percentage of shareholders' equity — how efficiently a company turns equity into profit."
+    formula: "ROE = Net Income / Shareholders' Equity * 100"
+    interpretation: "In the IDX context used by this scanner: ROE >= 15% is considered good, >= 25% very good."
+    how_scanner_uses_it: "A core input to the Long Term score's fundamental-quality layer and the Smart Money Screener's fundamental grade."
+    example: "ROE of 22% is comfortably in the 'very good' range this scanner uses."
+    related_terms: [long_term_score, fundamental_grade, der]
+    references:
+      - {type: source_code, value: "dashboard/explain.py"}
+      - {type: external, value: "Investopedia – Return on Equity (ROE)"}
+
+  - id: der
+    title: "DER (Debt to Equity Ratio)"
+    short_name: "DER"
+    category: financial_metrics
+    definition: "Total debt divided by shareholders' equity — how leveraged a company is."
+    formula: "DER = Total Debt / Shareholders' Equity"
+    interpretation: "In the IDX context used by this scanner: DER <= 1 is considered safe, above 2.5 elevated (banks are a structural exception, expected to run higher). DER > 4.0 triggers a hard quality-filter exclusion."
+    how_scanner_uses_it: "A quality-filter penalty input and a Long Term score / Smart Money fundamental-grade input."
+    example: "DER of 0.6 is well within the 'safe' range for a non-financial company."
+    related_terms: [long_term_score, fundamental_grade, roe_pct]
+    references:
+      - {type: source_code, value: "dashboard/explain.py"}
+      - {type: source_code, value: "stock_scanner/configs/scanner_config.yaml"}
+      - {type: external, value: "Investopedia – Debt-to-Equity (D/E) Ratio"}
+
+  - id: div_yield_pct
+    title: "Dividend Yield"
+    short_name: "Div Yield"
+    category: financial_metrics
+    definition: "Annual dividend per share as a percentage of the current share price."
+    formula: "Dividend Yield = Annual Dividend per Share / Price * 100"
+    interpretation: "In the IDX context used by this scanner: yield >= 3% is considered attractive."
+    how_scanner_uses_it: "Shown in the fundamentals table on the Long Term tab."
+    example: "A 4.5% dividend yield clears the scanner's 'attractive' threshold."
+    related_terms: [pe_ratio]
+    references:
+      - {type: source_code, value: "dashboard/explain.py"}
+
+  - id: revenue_growth_pct
+    title: "Revenue Growth"
+    short_name: "Rev Growth"
+    category: financial_metrics
+    definition: "Year-over-year (or period-over-period) percentage growth in reported revenue."
+    formula: "(Revenue_current - Revenue_prior) / Revenue_prior * 100"
+    interpretation: "Positive, accelerating growth supports a higher fundamental grade/Long Term score."
+    how_scanner_uses_it: "An input to the Long Term score and Smart Money Screener fundamental grade."
+    example: "Revenue growth of 18% year-over-year is a strong positive signal."
+    related_terms: [profit_growth_pct, long_term_score, fundamental_grade]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/long_term.py"}
+
+  - id: profit_growth_pct
+    title: "Profit Growth"
+    short_name: "Profit Growth"
+    category: financial_metrics
+    definition: "Year-over-year (or period-over-period) percentage growth in reported net profit."
+    formula: "(Profit_current - Profit_prior) / Profit_prior * 100"
+    interpretation: "Positive growth, especially outpacing revenue growth (margin expansion), is a strong positive signal."
+    how_scanner_uses_it: "An input to the Long Term score and Smart Money Screener fundamental grade."
+    example: "Profit growth of 25% while revenue grew 10% suggests improving margins."
+    related_terms: [revenue_growth_pct, long_term_score, fundamental_grade]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/long_term.py"}
+
+  - id: market_cap
+    title: "Market Capitalization"
+    short_name: "Market Cap"
+    category: financial_metrics
+    definition: "The total market value of a company's outstanding shares."
+    formula: "Market Cap = Share Price * Shares Outstanding"
+    interpretation: "Used as size/liquidity context alongside other fundamentals — not itself a scoring input."
+    how_scanner_uses_it: "Reference context shown alongside other financial metrics."
+    example: "A market cap of Rp 50 trillion places a company among the largest on the exchange."
+    related_terms: [pe_ratio, pbv]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/fundamental.py"}
+
+  - id: fundamental_status
+    title: "Fundamental Data Status"
+    short_name: "Fund. Status"
+    category: financial_metrics
+    definition: "A data-quality badge indicating whether fundamental data for a ticker is complete (ok), partial, or missing."
+    formula: "Derived from which fundamental fields were successfully fetched for the ticker."
+    interpretation: "'missing' data triggers a quality-filter penalty and is shown so users know a fundamentals-based view may be incomplete."
+    how_scanner_uses_it: "A quality-filter penalty input (penalty_score) and a dashboard status badge."
+    example: "A newly-listed company with no reported EPS yet shows fundamental_status = missing."
+    related_terms: [penalty_score]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/fundamental.py"}
+      - {type: source_code, value: "dashboard/app.py"}
+
+  # ---------------------------------------------------------------------
+  # Broker Analysis
+  # ---------------------------------------------------------------------
+  - id: far
+    title: "FAR (Foreign Accumulation Ratio)"
+    short_name: "FAR"
+    category: broker_analysis
+    definition: "The share of total positive broker net-buy volume attributable to foreign brokers."
+    formula: "FAR = Foreign Net Buy / Total Positive Net Buy * 100"
+    interpretation: "<30% Retail Dominated, 30-60% Mixed, >60% Foreign Dominated, >80% Strong Foreign Accumulation."
+    how_scanner_uses_it: "A broker-analytics metric available to the Smart Money Screener and Broker Summary panels."
+    example: "FAR of 72% indicates foreign brokers are driving most of the buying interest."
+    related_terms: [retail_ratio, smart_money_score, foreign_score]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/broker_analytics.py"}
+      - {type: source_code, value: "stock_scanner/configs/broker_config.yaml"}
+
+  - id: retail_ratio
+    title: "Retail Ratio"
+    short_name: "Retail Ratio"
+    category: broker_analysis
+    definition: "The share of total positive broker net-buy volume attributable to retail-classified brokers."
+    formula: "Retail Ratio = Retail Net Buy / Total Positive Net Buy * 100"
+    interpretation: ">50% Strong retail dominance, 20-50% Moderate, <20% Weak."
+    how_scanner_uses_it: "Powers the dashboard's 'Hide Retail Accumulation' filter — stocks above the configured threshold (broker_config.yaml) can be hidden. Stocks with no broker data are never hidden (fail-open)."
+    example: "A retail_ratio of 65% would hide the stock when the filter is enabled."
+    related_terms: [far, smart_money_score, top_buyer, top_seller]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/broker_analytics.py"}
+      - {type: source_code, value: "stock_scanner/configs/broker_config.yaml"}
+
+  - id: smart_money_score
+    title: "Smart Money Score (Broker Analytics)"
+    short_name: "SMS"
+    category: broker_analysis
+    definition: "A normalized 0-100 score combining foreign, institutional, and retail broker net flow, weighted to reward foreign/institutional accumulation and penalize retail-dominated flow. Distinct from the Smart Money Screener tab's separate 'Pillar'-based label of the same informal name."
+    formula: "SMS = (Foreign Net * 1.0) + (Institution Net * 0.7) - (Retail Net * 0.3), normalized to 0-100."
+    interpretation: "0-25 Weak, 25-50 Moderate, 50-75 Strong, 75-100 Very Strong."
+    how_scanner_uses_it: "A broker-analytics metric available to Broker Summary panels; separate from smart_money_label on the Smart Money tab."
+    example: "An SMS of 68 indicates strong smart-money accumulation."
+    related_terms: [far, retail_ratio, ridr, smart_money_label]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/broker_analytics.py"}
+      - {type: source_code, value: "stock_scanner/configs/broker_config.yaml"}
+
+  - id: ridr
+    title: "RIDR (Retail-to-Institution Distribution Ratio)"
+    short_name: "RIDR"
+    category: broker_analysis
+    definition: "A ratio comparing retail net buying to institutional net selling, intended to flag retail distribution risk. Currently a stub — not yet computed."
+    formula: "RIDR = Retail Net Buy / abs(Institution Net Sell)"
+    interpretation: "<1.0 would indicate institutional accumulation, 1.0-1.5 neutral, >1.5 retail distribution risk — once implemented."
+    how_scanner_uses_it: "Defined in broker_config.yaml as an extended-phase metric; the calculation function currently returns None (not yet implemented)."
+    example: "Not currently populated in the dashboard."
+    related_terms: [smart_money_score, retail_ratio]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/broker_analytics.py"}
+      - {type: source_code, value: "stock_scanner/configs/broker_config.yaml"}
+
+  - id: top_buyer
+    title: "Top Buyer"
+    short_name: "Top Buyer"
+    category: broker_analysis
+    definition: "The broker code(s) with the largest net-buy volume for a ticker on a given session."
+    formula: "Top 3 broker codes ranked by net_lot, descending."
+    interpretation: "Shows which brokers are accumulating the most, useful alongside broker-type classification (retail/institutional/foreign)."
+    how_scanner_uses_it: "Displayed on every signal table and the Broker Summary panel; also the input the retail filter classifies against."
+    example: "Top Buyer: XL, BQ, XC shows the three largest net-buying broker codes."
+    related_terms: [top_seller, retail_ratio, net_lot]
+    references:
+      - {type: source_code, value: "dashboard/data_loader.py"}
+
+  - id: top_seller
+    title: "Top Seller"
+    short_name: "Top Seller"
+    category: broker_analysis
+    definition: "The broker code(s) with the largest net-sell volume for a ticker on a given session."
+    formula: "Top 3 broker codes ranked by net_lot, ascending (most negative first)."
+    interpretation: "Shows which brokers are distributing the most."
+    how_scanner_uses_it: "Displayed alongside top_buyer on every signal table and the Broker Summary panel."
+    example: "Top Seller: CC, LG, AK shows the three largest net-selling broker codes."
+    related_terms: [top_buyer, net_lot]
+    references:
+      - {type: source_code, value: "dashboard/data_loader.py"}
+
+  - id: net_lot
+    title: "Net Lot"
+    short_name: "Net Lot"
+    category: broker_analysis
+    definition: "A broker's buy volume minus sell volume for a ticker, in lots, over the period shown."
+    formula: "net_lot = buy_lot - sell_lot"
+    interpretation: "Positive means net accumulation by that broker; negative means net distribution."
+    how_scanner_uses_it: "The primary ranking column in the Broker Summary panel's Top Buyer/Top Seller tables."
+    example: "A net_lot of +1,451,600 for broker XL means it bought about 1.45 million more lots than it sold."
+    related_terms: [top_buyer, top_seller, net_value]
+    references:
+      - {type: source_code, value: "dashboard/app.py"}
+
+  - id: net_value
+    title: "Net Value"
+    short_name: "Net Value"
+    category: broker_analysis
+    definition: "A broker's buy value minus sell value for a ticker, in Rupiah, over the period shown."
+    formula: "net_value = buy_value - sell_value"
+    interpretation: "The Rupiah-denominated counterpart to net_lot — useful when comparing brokers trading at very different price points."
+    how_scanner_uses_it: "Shown alongside net_lot in the Broker Summary panel."
+    example: "A net_value of +Rp 672.4 billion for broker XL is a very large accumulation in Rupiah terms."
+    related_terms: [net_lot]
+    references:
+      - {type: source_code, value: "dashboard/app.py"}
+
+  - id: volume_accum
+    title: "Volume Accumulation (Smart Money Screener)"
+    short_name: "Vol Accum"
+    category: broker_analysis
+    definition: "One of 5 Smart Money Screener detectors: flags rising volume without a corresponding large price move — an early-accumulation footprint."
+    formula: "vol_ratio_20d >= 1.5 (strong >= 2.5) while 20-day ROC <= 8% and price is >= 7% below its 52-week high."
+    interpretation: "Volume building quietly, ahead of a price move, is the classic early-accumulation pattern this detector targets."
+    how_scanner_uses_it: "One of 5 pillars combined into smart_money_label and smart_money_pillars."
+    example: "A stock with 2.8x normal volume but flat price and still well off its highs would flag this detector."
+    related_terms: [smart_money_label, smart_money_pillars, vol_ratio_20d]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/smart_money_screener.py"}
+      - {type: source_code, value: "stock_scanner/configs/smart_money_config.yaml"}
+
+  - id: broker_absorption
+    title: "Broker Absorption"
+    short_name: "Broker Absorption"
+    category: broker_analysis
+    definition: "One of 5 Smart Money Screener detectors: flags when one broker absorbs supply being sold by many other brokers."
+    formula: "A single broker's net-buy share of positive volume exceeds a threshold (Moderate >= 25%, Strong >= 40%) while selling comes from 3+ distinct brokers."
+    interpretation: "Concentrated buying against dispersed selling can indicate a single informed party accumulating."
+    how_scanner_uses_it: "One of 5 pillars combined into smart_money_label; also surfaces absorb_broker and absorb_share."
+    example: "Broker XL absorbing 45% of positive net buy while 5 different brokers sold would flag 'Strong' absorption."
+    related_terms: [smart_money_label, absorb_broker, absorb_share]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/smart_money_screener.py"}
+      - {type: source_code, value: "stock_scanner/configs/smart_money_config.yaml"}
+
+  - id: absorb_broker
+    title: "Absorbing Broker"
+    short_name: "Absorb Broker"
+    category: broker_analysis
+    definition: "The broker code identified as absorbing the most supply in the broker_absorption detector."
+    formula: "The single broker with the largest positive net-buy share among all brokers."
+    interpretation: "Names the specific broker driving the broker_absorption signal."
+    how_scanner_uses_it: "Shown alongside absorb_share on the Smart Money tab."
+    example: "absorb_broker: XL means broker code XL is the identified absorber."
+    related_terms: [broker_absorption, absorb_share]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/smart_money_screener.py"}
+
+  - id: absorb_share
+    title: "Absorption Share"
+    short_name: "Absorb Share"
+    category: broker_analysis
+    definition: "The absorbing broker's share of total positive net-buy volume."
+    formula: "absorb_share = absorbing broker's net_lot / total positive net_lot across all brokers"
+    interpretation: "Higher share means a more concentrated, single-party accumulation."
+    how_scanner_uses_it: "The magnitude behind the broker_absorption Strong/Moderate classification."
+    example: "An absorb_share of 45% clears the 'Strong' threshold."
+    related_terms: [broker_absorption, absorb_broker]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/smart_money_screener.py"}
+
+  - id: hidden_accum
+    title: "Hidden Accumulation"
+    short_name: "Hidden Accum"
+    category: broker_analysis
+    definition: "One of 5 Smart Money Screener detectors: flags accumulation happening while the price is still depressed relative to its moving averages."
+    formula: "MA200 > MA5 > close (price below short-term average, itself below the long-term average) while broker flow shows net accumulation."
+    interpretation: "Smart money sometimes accumulates before a stock's price has technically turned — this detector looks for that mismatch."
+    how_scanner_uses_it: "One of 5 pillars combined into smart_money_label, classified as Hidden/Early/Strong/None."
+    example: "A stock trading below its MA200 and MA5 but showing sustained institutional net buying could flag 'Hidden' accumulation."
+    related_terms: [smart_money_label, ma200]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/smart_money_screener.py"}
+      - {type: source_code, value: "stock_scanner/configs/smart_money_config.yaml"}
+
+  - id: fundamental_grade
+    title: "Fundamental Grade (Smart Money Screener)"
+    short_name: "Fund. Grade"
+    category: broker_analysis
+    definition: "One of 5 Smart Money Screener detectors: an A/B/C letter grade (and 0-100 score) from a company-quality checklist."
+    formula: "Checks ROE >= 10%, DER <= 1.5, non-negative revenue/profit growth, and positive EBITDA. Grade A >= 80, B >= 60, else C."
+    interpretation: "Grade A/B is required alongside other pillars for the 'Strong Candidate' Smart Money label — a poor-quality company can't qualify no matter how strong its broker flow looks."
+    how_scanner_uses_it: "A gating pillar for smart_money_label."
+    example: "ROE 18%, DER 0.8, positive growth, positive EBITDA scores a fundamental_grade of A."
+    related_terms: [smart_money_label, roe_pct, der]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/smart_money_screener.py"}
+      - {type: source_code, value: "stock_scanner/configs/smart_money_config.yaml"}
+
+  - id: smart_money_label
+    title: "Smart Money Label"
+    short_name: "SM Label"
+    category: broker_analysis
+    definition: "The Smart Money Screener's combined verdict — 'Strong Candidate' or 'Watch' — built from up to 5 detector pillars."
+    formula: "Strong Candidate needs >= 4 aligned pillars; Watch needs >= 2; both require a fundamental_grade of A or B."
+    interpretation: "A stronger label means more independent smart-money signals are aligned at once, not just one detector firing."
+    how_scanner_uses_it: "The primary ranking/filter label on the Smart Money tab."
+    example: "A stock with volume_accum, broker_absorption, and hidden_accum all flagging, plus grade B fundamentals, would likely earn 'Strong Candidate'."
+    related_terms: [smart_money_pillars, volume_accum, broker_absorption, hidden_accum, fundamental_grade]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/smart_money_screener.py"}
+      - {type: source_code, value: "stock_scanner/configs/smart_money_config.yaml"}
+
+  - id: smart_money_pillars
+    title: "Smart Money Pillars"
+    short_name: "Pillar"
+    category: broker_analysis
+    definition: "The count (0-5) of Smart Money Screener detectors currently aligned for a ticker."
+    formula: "Count of {volume_accum, ownership accumulation, broker_absorption, hidden_accum, fundamental_grade A/B} that are true/passing."
+    interpretation: "More aligned pillars is a stronger, more corroborated signal."
+    how_scanner_uses_it: "Directly determines the smart_money_label thresholds."
+    example: "A pillar count of 4 out of 5 supports a 'Strong Candidate' label."
+    related_terms: [smart_money_label]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/smart_money_screener.py"}
+
+  # ---------------------------------------------------------------------
+  # Risk Metrics
+  # ---------------------------------------------------------------------
+  - id: entry_low
+    title: "Entry Zone (Low/High)"
+    short_name: "Area Entry"
+    category: risk_metrics
+    definition: "The suggested price range to consider entering a position, computed from ATR14, MA20, and MA50."
+    formula: "Derived from current price and ATR14, bounded by nearby moving averages — see level_calculator.py for the exact formula."
+    interpretation: "A daily-timeframe reference, not a scalping-precision level. Always verify against a live chart before entry."
+    how_scanner_uses_it: "Shown as the Area Entry row in every ticker's Level Trading table."
+    example: "An entry zone of Rp 470-484 suggests entering within that band."
+    related_terms: [tp_low, cutloss, atr14]
+    references:
+      - {type: source_code, value: "stock_scanner/alerts/level_calculator.py"}
+
+  - id: tp_low
+    title: "Target Profit (Low/High)"
+    short_name: "Target Profit"
+    category: risk_metrics
+    definition: "The suggested take-profit price range, computed alongside the entry zone from ATR14 and moving averages."
+    formula: "Derived from entry level and ATR14-based distance — see level_calculator.py."
+    interpretation: "Combined with entry and cutloss, this defines the trade's risk:reward ratio."
+    how_scanner_uses_it: "Shown as the Target Profit row in every ticker's Level Trading table."
+    example: "A target profit of Rp 552-596 alongside an entry of Rp 470-484 implies roughly 15-20% upside."
+    related_terms: [entry_low, cutloss, rr]
+    references:
+      - {type: source_code, value: "stock_scanner/alerts/level_calculator.py"}
+
+  - id: cutloss
+    title: "Cutloss (Stop Loss)"
+    short_name: "Cutloss"
+    category: risk_metrics
+    definition: "The suggested stop-loss price — where to exit if the trade goes against the position, computed from ATR14 and moving averages."
+    formula: "Derived from entry level minus an ATR14-based distance — see level_calculator.py."
+    interpretation: "A pre-planned risk-management exit, not a guarantee against slippage or gaps."
+    how_scanner_uses_it: "Shown as the Cutloss row in every ticker's Level Trading table; used to compute the risk:reward ratio (rr)."
+    example: "A cutloss of Rp 432 against an entry of Rp 470 defines the maximum planned loss on the trade."
+    related_terms: [entry_low, tp_low, rr, atr14]
+    references:
+      - {type: source_code, value: "stock_scanner/alerts/level_calculator.py"}
+
+  - id: rr
+    title: "R:R (Risk:Reward Ratio)"
+    short_name: "R:R"
+    category: risk_metrics
+    definition: "How much potential profit a trade offers relative to its planned risk."
+    formula: "R:R = (tp_low - entry_low) / (entry_low - cutloss)"
+    interpretation: "A higher ratio means more potential reward per unit of risk. Trades below the configured minimum (default 1.5) are flagged low_rr and excluded from the active/ranked list."
+    how_scanner_uses_it: "Gates trade_setup_status — a setup with R:R below min_rr is marked 'low_rr', not 'active'."
+    example: "A 1:2.5 ratio means a trade risks 1 unit to potentially gain 2.5."
+    related_terms: [entry_low, tp_low, cutloss, trade_setup_status]
+    references:
+      - {type: source_code, value: "stock_scanner/alerts/level_calculator.py"}
+      - {type: source_code, value: "stock_scanner/configs/scanner_config.yaml"}
+
+  - id: trade_setup_status
+    title: "Trade Setup Status"
+    short_name: "Setup Status"
+    category: risk_metrics
+    definition: "Whether a ticker's computed trading levels represent a usable setup: active, low_rr, or inactive."
+    formula: "'active' if levels compute and R:R clears min_rr; 'low_rr' if levels compute but R:R is below min_rr; 'inactive' otherwise."
+    interpretation: "Only 'active' setups are treated as ranked, tradeable candidates by the level-dependent parts of the dashboard."
+    how_scanner_uses_it: "Gates which tickers show a complete Level Trading table."
+    example: "A ticker with a computed but sub-1.5 risk:reward ratio shows trade_setup_status = low_rr."
+    related_terms: [rr, entry_low, cutloss]
+    references:
+      - {type: source_code, value: "stock_scanner/alerts/level_calculator.py"}
+      - {type: source_code, value: "stock_scanner/configs/scanner_config.yaml"}
+
+  - id: is_uma
+    title: "UMA (Unusual Market Activity)"
+    short_name: "UMA"
+    category: risk_metrics
+    definition: "A boolean flag indicating the exchange has placed a ticker under special monitoring for unusual price/volume activity."
+    formula: "Sourced from exchange-published UMA notices."
+    interpretation: "A risk flag — UMA-flagged stocks often carry elevated speculative/manipulation risk."
+    how_scanner_uses_it: "Contributes a -1.0 penalty to penalty_score."
+    example: "A stock under active UMA status has its total_score reduced via the penalty component."
+    related_terms: [penalty_score]
+    references:
+      - {type: source_code, value: "stock_scanner/configs/scanner_config.yaml"}
+
+  # ---------------------------------------------------------------------
+  # Valuation
+  # ---------------------------------------------------------------------
+  - id: intrinsic_value
+    title: "Intrinsic Value (Graham Number)"
+    short_name: "Intrinsic Value"
+    category: valuation
+    definition: "An estimate of a stock's fair value based on Benjamin Graham's formula combining earnings and book value per share."
+    formula: "Graham Number = sqrt(22.5 * EPS * Book Value per Share)"
+    interpretation: "A price below the Graham Number suggests potential undervaluation by this specific, conservative method — not a guarantee, and not applicable to loss-making companies."
+    how_scanner_uses_it: "A core input to the Long Term tab's valuation_status and margin_of_safety."
+    example: "A Graham Number of Rp 1,200 against a current price of Rp 950 implies roughly 26% margin of safety."
+    related_terms: [margin_of_safety, valuation_status, pbv, pe_ratio]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/long_term.py"}
+      - {type: external, value: "Investopedia – Graham Number"}
+
+  - id: margin_of_safety
+    title: "Margin of Safety"
+    short_name: "MoS"
+    category: valuation
+    definition: "The percentage discount (or premium) of the current price versus the estimated intrinsic value."
+    formula: "MoS = (intrinsic_value - close) / close * 100"
+    interpretation: "A larger positive margin of safety means more downside protection built into the current entry price, per this valuation method."
+    how_scanner_uses_it: "Shown alongside intrinsic_value on the Long Term tab."
+    example: "A margin of safety of +20% means the current price is 20% below the estimated fair value."
+    related_terms: [intrinsic_value, valuation_status]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/long_term.py"}
+      - {type: external, value: "Investopedia – Margin of Safety"}
+
+  - id: valuation_status
+    title: "Valuation Status"
+    short_name: "Valuation"
+    category: valuation
+    definition: "A classification (e.g. UNDERVALUED, FAIR, OVERVALUED) summarizing where a stock sits versus its estimated intrinsic value and sector peers."
+    formula: "Threshold rules on margin_of_safety and relative PE/PBV vs. sector — see long_term.py."
+    interpretation: "A quick-read label backing the more detailed intrinsic_value/margin_of_safety figures."
+    how_scanner_uses_it: "Shown on the Long Term tab alongside long_term_label."
+    example: "valuation_status = UNDERVALUED alongside a positive margin_of_safety."
+    related_terms: [intrinsic_value, margin_of_safety, long_term_label]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/long_term.py"}
+
+  - id: cyclicality
+    title: "Cyclicality"
+    short_name: "Cyclicality"
+    category: valuation
+    definition: "A sector-based classification of how much a company's performance depends on economic/commodity cycles: defensive, cyclical, mixed, or unknown."
+    formula: "Sector lookup — Defensive: Consumer Staples/Healthcare/Utilities/Telco/Financials. Cyclical: Energy/Materials/Industrials/Consumer Discretionary/Real Estate. Mixed: IT/Communication Services."
+    interpretation: "Defensive sectors are considered more stable for buy-and-hold; cyclical sectors depend heavily on the industry/commodity cycle."
+    how_scanner_uses_it: "Feeds long_term_score and shown as a warning/reassurance caption on the Long Term tab."
+    example: "A bank (Financials) classifies as defensive; a coal miner (Energy) classifies as cyclical."
+    related_terms: [long_term_score]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/long_term.py"}
+
+  # ---------------------------------------------------------------------
+  # Market Statistics
+  # ---------------------------------------------------------------------
+  - id: streak_len
+    title: "Streak Length"
+    short_name: "Streak"
+    category: market_statistics
+    definition: "The number of consecutive trading sessions a stock has closed in the same direction (up or down)."
+    formula: "Count of consecutive same-direction close-to-close moves, most recent session backward."
+    interpretation: "A longer streak indicates sustained directional momentum — but also raises reversion risk the longer it runs."
+    how_scanner_uses_it: "Drives the 'Naik/Turun Beruntun' (streak) tab's candidate list and labeling."
+    example: "A streak_len of 4 with streak_dir = up means 4 consecutive up-closing sessions."
+    related_terms: [streak_dir, trend_state]
+    references:
+      - {type: source_code, value: "dashboard/streaks.py"}
+
+  - id: streak_dir
+    title: "Streak Direction"
+    short_name: "Streak Dir"
+    category: market_statistics
+    definition: "Whether the current streak (see streak_len) is an up-streak or a down-streak."
+    formula: "Sign of the most recent run of same-direction closes."
+    interpretation: "Used together with streak_len to describe the current run."
+    how_scanner_uses_it: "Filters the streak tab into 'naik' (up) / 'turun' (down) lists."
+    example: "streak_dir = up, streak_len = 3 means 3 straight up-closing sessions."
+    related_terms: [streak_len]
+    references:
+      - {type: source_code, value: "dashboard/streaks.py"}
+
+  - id: trend_state
+    title: "Trend State"
+    short_name: "Trend State"
+    category: market_statistics
+    definition: "A classification of the prevailing medium-term trend: bullish, sideways, or bearish."
+    formula: "Uses SMA20/50/200 alignment and a 10-session MA50 slope percentage, with defined bullish/bearish slope thresholds and a minimum session-count requirement."
+    interpretation: "A broader-context label than any single score — describes the underlying regime a ticker is trading in."
+    how_scanner_uses_it: "Shown on the streak tab and used as supporting context for trend_score."
+    example: "A rising MA50 with full moving-average alignment classifies as bullish trend_state."
+    related_terms: [ma20, ma50, ma200, trend_score, streak_len]
+    references:
+      - {type: source_code, value: "dashboard/streaks.py"}
+
+  - id: win_rate
+    title: "Win Rate (Signal Performance)"
+    short_name: "Win Rate"
+    category: market_statistics
+    definition: "The percentage of past Swing/Scalping signals that were profitable, measured against a defined reference and horizon."
+    formula: "Wins / Total resolved signals * 100. Reference = prior-session close (PREV CLOSE at signal time); High and Close are measured from the NEXT trading session; a signal counts as a Win if next-session Close > Prev Close."
+    interpretation: "A quick, honest read on how well past signals of a given type have performed — not a guarantee of future results."
+    how_scanner_uses_it: "The headline metric on the Signal Performance tab."
+    example: "A 62% win rate over the last 30 days means 62% of resolved signals closed above their prior-session reference."
+    related_terms: [total_score, signal]
+    references:
+      - {type: source_code, value: "dashboard/app.py"}
+
+  - id: ihsg_benchmark
+    title: "IHSG Benchmark"
+    short_name: "IHSG"
+    category: market_statistics
+    definition: "The Jakarta Composite Index (IHSG) session performance, used as a market-wide benchmark against individual signal returns."
+    formula: "Percentage change of the IHSG index for the relevant session."
+    interpretation: "Comparing average signal return against the IHSG's own move shows whether the scanner's picks outperformed or underperformed the broader market that session."
+    how_scanner_uses_it: "Shown as an outperform/underperform spread on the Signal Performance tab."
+    example: "Signals averaging +2.1% versus an IHSG move of +0.4% is a +1.7 percentage-point outperformance."
+    related_terms: [win_rate]
+    references:
+      - {type: source_code, value: "dashboard/app.py"}
+      - {type: source_code, value: "dashboard/data_loader.py"}
+
+  # ---------------------------------------------------------------------
+  # AI & Machine Learning
+  # ---------------------------------------------------------------------
+  - id: ai_score
+    title: "AI Score"
+    short_name: "AI Score"
+    category: ai_ml
+    definition: "AI Lab's own 0-100 score for a recommendation, entirely separate from the Production Scanner's total_score."
+    formula: "Deterministically computed from Evidence before either LLM call happens (never LLM-generated) — see stock_scanner/ai_lab/scoring.py's decision trace."
+    interpretation: "Same evidence in, same score out, always — the LLM only narrates this number in prose, it cannot change it."
+    how_scanner_uses_it: "AI Lab's primary ranking key — has no effect on Production Scanner scoring or ranking."
+    example: "An AI Score of 78 with a matching high final_score in the decision trace."
+    related_terms: [ai_confidence, decision_trace]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/scoring.py"}
+      - {type: documentation, value: "AI Automation Pipeline"}
+
+  - id: ai_confidence
+    title: "AI Confidence"
+    short_name: "Confidence"
+    category: ai_ml
+    definition: "AI Lab's own confidence measure (0-100%) for a recommendation, broken down into technical/statistical/pattern-similarity/risk components."
+    formula: "Deterministically computed from the decision trace — never LLM-generated."
+    interpretation: "Higher confidence means more of the underlying evidence components agree with each other, not just a higher raw score."
+    how_scanner_uses_it: "Shown in the Confidence Breakdown panel on every AI Lab recommendation."
+    example: "A final_confidence of 72% backed by strong technical and pattern-similarity components."
+    related_terms: [ai_score, pattern_similarity_score, confidence_breakdown]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/scoring.py"}
+
+  - id: pattern_similarity_score
+    title: "Pattern Similarity Score"
+    short_name: "Pattern Similarity"
+    category: ai_ml
+    definition: "How closely a candidate's current setup matches the closest validated historical pattern in the knowledge base."
+    formula: "A similarity measure between current feature evidence and the best-matching historical pattern's conditions."
+    interpretation: "Higher similarity means stronger historical precedent for this exact setup."
+    how_scanner_uses_it: "One component of the decision trace feeding ai_score and ai_confidence; also drives the Historical Pattern Comparison panel."
+    example: "A 90% best-pattern-similarity means the current setup closely matches a previously validated pattern."
+    related_terms: [ai_score, decision_trace, knowledge_base_ai_lab]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/scoring.py"}
+
+  - id: decision_trace
+    title: "Decision Trace"
+    short_name: "Decision Trace"
+    category: ai_ml
+    definition: "The explicit breakdown of AI Score into its component parts: Technical, Statistical, Pattern Similarity, Risk, and Final Score."
+    formula: "Each component computed deterministically from Evidence; Final Score is their combination."
+    interpretation: "Ensures the AI Score is never an unexplained single number — every component is visible and code-computed."
+    how_scanner_uses_it: "Displayed on every AI Lab recommendation's detail panel."
+    example: "Technical 80, Statistical 20, Pattern Similarity 90, Risk 60 combining into a Final Score of 55."
+    related_terms: [ai_score, confidence_breakdown]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/scoring.py"}
+
+  - id: confidence_breakdown
+    title: "Confidence Breakdown"
+    short_name: "Confidence Breakdown"
+    category: ai_ml
+    definition: "The explicit breakdown of AI Confidence into Technical, Statistical, Pattern Similarity, Risk Adjustment, and Final Confidence."
+    formula: "Each component computed deterministically alongside the decision trace."
+    interpretation: "Shows exactly why a recommendation carries the confidence level it does."
+    how_scanner_uses_it: "Displayed alongside decision_trace on every AI Lab recommendation's detail panel."
+    example: "Technical 75%, Statistical 60%, Pattern Similarity 90%, Risk Adjustment -5%, Final Confidence 72%."
+    related_terms: [ai_confidence, decision_trace]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/scoring.py"}
+
+  - id: reflection
+    title: "Reflection (Engine)"
+    short_name: "Reflection"
+    category: ai_ml
+    definition: "The stage that reviews RESOLVED AI Lab recommendations and produces statistically gated observations — the first step of the closed learning loop."
+    formula: "Wilson confidence intervals, Fisher's exact test, and Benjamini-Hochberg correction over resolved-trade outcomes; never LLM-invented numbers."
+    interpretation: "Only observations that clear the statistical significance gate are published — an empty report means there isn't enough resolved evidence yet, which is a normal, honest state."
+    how_scanner_uses_it: "Runs automatically as part of the AI Automation Pipeline; seeds the Hypothesis Generator stage."
+    example: "An observation might read: 'BREAKOUT-labeled AI recommendations on Momentum AI show a higher win rate than baseline, n=42, 95% CI 0.55-0.78.'"
+    related_terms: [hypothesis, wilson_confidence_interval, fishers_exact_test, benjamini_hochberg]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/reflection_engine.py"}
+      - {type: documentation, value: "AI Automation Pipeline"}
+
+  - id: hypothesis
+    title: "Hypothesis (Generator + Statistical Validation)"
+    short_name: "Hypothesis"
+    category: ai_ml
+    definition: "Multi-condition (order 2-3) candidate explanations refined from Reflection Engine's single-dimension findings, then statistically validated."
+    formula: "Candidates seeded from reflection_observations; validated using the same Wilson/Fisher/shrunk-win-rate/Benjamini-Hochberg machinery as Reflection."
+    interpretation: "A validated hypothesis has cleared a real statistical bar — it is a candidate for Knowledge Base curation, always human-review-gated before any production impact."
+    how_scanner_uses_it: "Runs automatically as part of the AI Automation Pipeline; seeds the Knowledge Base Engine stage."
+    example: "A hypothesis might combine two conditions — e.g. sector=Financials AND smart_money_label=Strong — validated across enough resolved trades."
+    related_terms: [reflection, statistical_validation, knowledge_base_ai_lab]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/hypothesis_engine.py"}
+      - {type: source_code, value: "stock_scanner/ai_lab/statistical_validation.py"}
+      - {type: documentation, value: "AI Automation Pipeline"}
+
+  - id: statistical_validation
+    title: "Statistical Validation"
+    short_name: "Stat. Validation"
+    category: ai_ml
+    definition: "The scoring layer applied to candidate hypotheses — the same Wilson CI / Fisher's exact / shrunk-win-rate / Benjamini-Hochberg machinery used throughout AI Lab's statistical stages."
+    formula: "See wilson_confidence_interval, fishers_exact_test, shrunk_win_rate, benjamini_hochberg."
+    interpretation: "Not a separate script — it is one call inside the Hypothesis Generator stage, covering both hypothesis generation and validation in a single pipeline step."
+    how_scanner_uses_it: "Determines whether each candidate hypothesis is validated or rejected."
+    example: "A candidate with a Benjamini-Hochberg-adjusted p-value below alpha (default 0.05) and enough successes is validated."
+    related_terms: [hypothesis, wilson_confidence_interval, fishers_exact_test, benjamini_hochberg, shrunk_win_rate]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/statistical_validation.py"}
+
+  - id: knowledge_base_ai_lab
+    title: "Knowledge Base (AI Lab)"
+    short_name: "Knowledge Base"
+    category: ai_ml
+    definition: "AI Lab's long-lived curation of ALL historical validated hypotheses into KnowledgeEntry rows with a deterministic lifecycle. Distinct from the unrelated production Learning Agent knowledge_base table."
+    formula: "Groups by exact normalized condition-set (deterministic, never LLM clustering); lifecycle advances/regresses based on repeated confirmation vs. contradiction."
+    interpretation: "A candidate pool only — nothing here writes to the production knowledge_base table automatically; any future promotion path stays human-review-gated."
+    how_scanner_uses_it: "Runs automatically as the final stage of the AI Automation Pipeline."
+    example: "A pattern confirmed across many independent validation runs progresses from Emerging to Confirmed to Strong."
+    related_terms: [hypothesis, emerging_status, confirmed_status, strong_status, archived_status]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/knowledge_base_engine.py"}
+      - {type: documentation, value: "AI Automation Pipeline"}
+
+  - id: emerging_status
+    title: "Emerging (Lifecycle Status)"
+    short_name: "Emerging"
+    category: ai_ml
+    definition: "The starting lifecycle status for a newly-curated AI Lab knowledge entry."
+    formula: "Assigned when a condition-set is first curated into a knowledge entry."
+    interpretation: "Not yet repeatedly confirmed — the earliest, least-certain stage of the lifecycle."
+    how_scanner_uses_it: "One of the status buckets shown on the AI Lab Knowledge Base section."
+    example: "A brand-new validated pattern starts as Emerging."
+    related_terms: [confirmed_status, strong_status, knowledge_base_ai_lab]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/knowledge_base_engine.py"}
+
+  - id: confirmed_status
+    title: "Confirmed (Lifecycle Status)"
+    short_name: "Confirmed"
+    category: ai_ml
+    definition: "A lifecycle status indicating a knowledge entry has been re-confirmed by more than one curation run."
+    formula: "Promoted from Emerging after repeated validation across runs."
+    interpretation: "More established than Emerging, but not yet at the highest confidence tier."
+    how_scanner_uses_it: "One of the status buckets shown on the AI Lab Knowledge Base section; counted in the 'Active' bucket."
+    example: "A pattern confirmed in 3 consecutive curation runs advances to Confirmed."
+    related_terms: [emerging_status, strong_status, knowledge_base_ai_lab]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/knowledge_base_engine.py"}
+
+  - id: strong_status
+    title: "Strong (Lifecycle Status)"
+    short_name: "Strong"
+    category: ai_ml
+    definition: "The highest-confidence lifecycle status for an AI Lab knowledge entry, reached after sustained, repeated confirmation."
+    formula: "Promoted from Confirmed after clearing a strong_threshold of repeated confirmations."
+    interpretation: "The most-established candidate tier — still a candidate pool, never automatically promoted to production."
+    how_scanner_uses_it: "One of the status buckets shown on the AI Lab Knowledge Base section; counted in the 'Active' bucket."
+    example: "A pattern confirmed across 5+ runs with no contradictions reaches Strong."
+    related_terms: [confirmed_status, archived_status, knowledge_base_ai_lab]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/knowledge_base_engine.py"}
+
+  - id: archived_status
+    title: "Archived (Lifecycle Status)"
+    short_name: "Archived"
+    category: ai_ml
+    definition: "A terminal lifecycle status for an AI Lab knowledge entry that has been repeatedly contradicted and is no longer considered reliable."
+    formula: "Reached from Contradicted after an archive_margin of further disconfirming runs."
+    interpretation: "Kept for historical record, but no longer an active candidate."
+    how_scanner_uses_it: "One of the status buckets shown on the AI Lab Knowledge Base section."
+    example: "A pattern that stopped replicating across several runs eventually moves to Archived."
+    related_terms: [strong_status, knowledge_base_ai_lab]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/knowledge_base_engine.py"}
+
+  - id: wilson_confidence_interval
+    title: "Wilson Confidence Interval"
+    short_name: "Wilson CI"
+    category: ai_ml
+    definition: "A statistical method for estimating a confidence interval around a win-rate/proportion, more reliable than a naive normal-approximation interval for small samples."
+    formula: "The Wilson score interval formula applied to (successes, trials) at a given confidence level."
+    interpretation: "A tighter, more trustworthy interval than a naive proportion CI, especially with limited resolved trades."
+    how_scanner_uses_it: "Used throughout Reflection, Hypothesis Validation, and the production Learning Agent's statistical gate."
+    example: "A win rate of 65% over 20 trades might carry a Wilson 95% CI of roughly 43%-82%."
+    related_terms: [fishers_exact_test, shrunk_win_rate, benjamini_hochberg]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/statistical_validation.py"}
+      - {type: external, value: "Wikipedia – Binomial proportion confidence interval (Wilson score interval)"}
+
+  - id: fishers_exact_test
+    title: "Fisher's Exact Test"
+    short_name: "Fisher's Exact"
+    category: ai_ml
+    definition: "A statistical significance test for 2x2 contingency tables, used here to test whether an observed win rate differs from a baseline rate more than chance would explain."
+    formula: "Exact hypergeometric probability test on the (win/loss) vs. (group/baseline) contingency table."
+    interpretation: "A low p-value suggests the observed difference is unlikely to be due to chance alone — exact, so reliable even with small samples."
+    how_scanner_uses_it: "Gates whether a reflection observation or candidate hypothesis is considered statistically significant."
+    example: "A candidate pattern's p-value of 0.02 (before multiple-testing correction) would be considered significant at alpha=0.05."
+    related_terms: [benjamini_hochberg, wilson_confidence_interval]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/statistical_validation.py"}
+      - {type: external, value: "Wikipedia – Fisher's exact test"}
+
+  - id: benjamini_hochberg
+    title: "Benjamini-Hochberg Correction"
+    short_name: "BH Correction"
+    category: ai_ml
+    definition: "A method for controlling the false discovery rate when testing many hypotheses at once, adjusting raw p-values upward to account for multiple comparisons."
+    formula: "Ranks p-values and compares each to a rank-dependent threshold, controlling the expected proportion of false positives among rejected hypotheses."
+    interpretation: "Without this correction, testing dozens of candidate patterns at once would find 'significant' results by chance alone; BH correction guards against that."
+    how_scanner_uses_it: "Applied to every batch of reflection observations and candidate hypotheses before anything is marked validated/significant."
+    example: "A raw p-value of 0.03 might become a BH-adjusted p-value of 0.09 once tested alongside 20 other candidates — no longer significant at alpha=0.05."
+    related_terms: [fishers_exact_test, wilson_confidence_interval]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/statistical_validation.py"}
+      - {type: external, value: "Wikipedia – False discovery rate (Benjamini-Hochberg procedure)"}
+
+  - id: shrunk_win_rate
+    title: "Shrunk Win Rate"
+    short_name: "Shrunk Win Rate"
+    category: ai_ml
+    definition: "A win rate adjusted ('shrunk') toward a baseline rate, more heavily for small samples, to avoid over-trusting a high win rate computed from very few trades."
+    formula: "A Bayesian-style shrinkage of the raw win rate toward the baseline rate, with the shrinkage strength inversely related to sample size."
+    interpretation: "A 100% win rate on 3 trades shrinks toward the baseline far more than a 70% win rate on 200 trades — protecting against small-sample overconfidence."
+    how_scanner_uses_it: "Used as the reliability-adjusted win rate figure in Reflection observations, Hypothesis validation, and the production Learning Agent's pattern data."
+    example: "A raw win rate of 100% (3/3) might shrink to something like 65% once adjusted for the tiny sample."
+    related_terms: [wilson_confidence_interval, knowledge_base_ai_lab]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/statistical_validation.py"}
+
+  # ---------------------------------------------------------------------
+  # General
+  # ---------------------------------------------------------------------
+  - id: news_data_status
+    title: "News Data Status"
+    short_name: "News Status"
+    category: general
+    definition: "A data-quality badge indicating whether recent news sentiment data for a ticker is available (ok), unavailable (none), or failed to fetch (failed)."
+    formula: "Derived from whether the news pipeline successfully returned articles for the ticker."
+    interpretation: "'failed'/'none' means news_score falls back to its neutral default of 5.0."
+    how_scanner_uses_it: "A dashboard status badge; also explains why news_score/enhanced_total_score may sit at a neutral value."
+    example: "A ticker with no recent news coverage shows news_data_status = none."
+    related_terms: [news_score, fundamental_status]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/news_sentiment.py"}
+      - {type: source_code, value: "dashboard/app.py"}
+
+  - id: eps
+    title: "EPS (Earnings Per Share)"
+    short_name: "EPS"
+    category: financial_metrics
+    definition: "Net income divided by the number of outstanding shares — how much profit is attributable to each share."
+    formula: "EPS = Net Income / Shares Outstanding"
+    interpretation: "Higher, growing EPS generally supports a higher valuation, all else equal."
+    how_scanner_uses_it: "A direct input to the Graham Number intrinsic-value calculation."
+    example: "EPS of Rp 120 with a book value per share of Rp 800 feeds directly into the Graham Number."
+    related_terms: [intrinsic_value, pe_ratio, pbv]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/fundamental.py"}
+      - {type: external, value: "Investopedia – Earnings Per Share (EPS)"}
+
+  - id: ebitda
+    title: "EBITDA"
+    short_name: "EBITDA"
+    category: financial_metrics
+    definition: "Earnings Before Interest, Taxes, Depreciation, and Amortization — a measure of core operating profitability."
+    formula: "EBITDA = Net Income + Interest + Taxes + Depreciation + Amortization"
+    interpretation: "A positive EBITDA is a baseline quality check; the Smart Money Screener's fundamental grade requires it."
+    how_scanner_uses_it: "One of the checks feeding fundamental_grade."
+    example: "A company with consistently positive EBITDA clears this part of the fundamental-quality check."
+    related_terms: [fundamental_grade, roe_pct]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/smart_money_screener.py"}
+      - {type: external, value: "Investopedia – EBITDA"}
+
+  - id: quality_adjusted_score
+    title: "Quality-Adjusted Score"
+    short_name: "Quality Adj. Score"
+    category: production_scores
+    definition: "total_score adjusted downward by any quality-filter penalties not already folded into penalty_score, used as the ranking key for AI Lab's candidate selection."
+    formula: "See stock_scanner/pipeline/quality_filters.py for the exact adjustment; falls back to total_score when unavailable."
+    interpretation: "Exists so a downstream consumer (AI Lab generation) always sorts by the most quality-aware score available."
+    how_scanner_uses_it: "The sort key AI Lab's generation stage uses to pick its candidate universe from the latest ranked CSV."
+    example: "A stock with a high total_score but a tripped quality flag ranks lower by quality_adjusted_score than by total_score alone."
+    related_terms: [total_score, penalty_score]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/quality_filters.py"}
+      - {type: source_code, value: "stock_scanner/ai_lab/generation.py"}
+
+  - id: max_runup_pct
+    title: "Max Run-up %"
+    short_name: "Max Run-up"
+    category: risk_metrics
+    definition: "The largest favorable (in-the-money) move a trade reached while active, as a percentage — the MFE (Maximum Favorable Excursion) of the trade."
+    formula: "max((highest_price - entry_price) / entry_price * 100) observed while the position was ACTIVE."
+    interpretation: "Shows how much upside was available during the trade's life, even if it wasn't captured at exit."
+    how_scanner_uses_it: "Tracked continuously on every ACTIVE AI Lab recommendation; feeds future Calibration Engine work."
+    example: "A trade that peaked 12% above entry before pulling back to close at +4% shows max_runup_pct of 12%."
+    related_terms: [max_drawdown_pct, return_percentage_ai_lab]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/resolver.py"}
+      - {type: documentation, value: "AI Automation Pipeline"}
+
+  - id: max_drawdown_pct
+    title: "Max Drawdown %"
+    short_name: "Max Drawdown"
+    category: risk_metrics
+    definition: "The largest adverse (against-the-position) move a trade reached while active, as a percentage — the MAE (Maximum Adverse Excursion) of the trade."
+    formula: "min((lowest_price - entry_price) / entry_price * 100) observed while the position was ACTIVE."
+    interpretation: "Shows how much pain was endured during the trade's life, even if it recovered by exit."
+    how_scanner_uses_it: "Tracked continuously on every ACTIVE AI Lab recommendation; feeds future Calibration Engine work."
+    example: "A trade that dipped 8% below entry before recovering to close at +5% shows max_drawdown_pct of -8%."
+    related_terms: [max_runup_pct]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/resolver.py"}
+      - {type: documentation, value: "AI Automation Pipeline"}
+
+  - id: return_percentage_ai_lab
+    title: "Return Percentage (AI Lab)"
+    short_name: "Return %"
+    category: ai_ml
+    definition: "The realized percentage return of a resolved AI Lab recommendation, from entry_price to exit_price."
+    formula: "(exit_price - entry_price) / entry_price * 100"
+    interpretation: "The actual outcome of a trade, as opposed to expected_return which was the pre-trade estimate."
+    how_scanner_uses_it: "Recorded on every CLOSED/EXPIRED recommendation; aggregated into average_return."
+    example: "A recommendation entered at Rp 1,000 and exited at Rp 1,080 shows a return_percentage of 8%."
+    related_terms: [average_return, expected_return]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/resolver.py"}
+
+  - id: expected_return
+    title: "Expected Return"
+    short_name: "Expected Return"
+    category: ai_ml
+    definition: "AI Lab's pre-trade estimate of likely return for a recommendation, computed at generation time."
+    formula: "Derived from the decision agent's evidence and historical pattern comparison — never LLM-invented."
+    interpretation: "A forecast, not a guarantee — compare against the eventual realized return_percentage once resolved."
+    how_scanner_uses_it: "Shown on every AI Lab recommendation at generation time."
+    example: "An expected_return of +6% sets the initial expectation for a recommendation before it resolves."
+    related_terms: [return_percentage_ai_lab, average_return]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/agents/decision_agent.py"}
+
+  - id: risk_level
+    title: "Risk Level (AI Lab)"
+    short_name: "Risk Level"
+    category: ai_ml
+    definition: "AI Lab's categorical risk classification for a recommendation (e.g. LOW/MEDIUM/HIGH), computed deterministically alongside the decision trace."
+    formula: "Derived from the risk_score component of the decision trace."
+    interpretation: "A quick-read risk label backing the more detailed decision_trace risk component."
+    how_scanner_uses_it: "Shown on every AI Lab recommendation."
+    example: "A recommendation with a low risk_score in its decision trace carries risk_level = LOW."
+    related_terms: [decision_trace, ai_score]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/scoring.py"}
+
+  - id: average_return
+    title: "Average Return"
+    short_name: "Avg Return"
+    category: ai_ml
+    definition: "The mean realized return across all of an AI model's resolved (CLOSED/EXPIRED) recommendations."
+    formula: "mean(return_percentage across resolved recommendations)"
+    interpretation: "Shows \"not enough data\" (never 0 or NaN) until at least one recommendation has resolved — a deliberate choice so an empty/early state is never mistaken for a real zero-return result."
+    how_scanner_uses_it: "One of AI Lab's headline performance metrics, recomputed automatically from every published batch."
+    example: "An average return of +5.2% across 30 resolved trades."
+    related_terms: [return_percentage_ai_lab, average_loss, expected_value]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/performance.py"}
+
+  - id: average_loss
+    title: "Average Loss"
+    short_name: "Avg Loss"
+    category: ai_ml
+    definition: "The mean realized return across all of an AI model's LOSING resolved recommendations only."
+    formula: "mean(return_percentage across resolved recommendations where trade_outcome = LOSS)"
+    interpretation: "Shows \"not enough data\" until at least one losing trade has resolved."
+    how_scanner_uses_it: "One of AI Lab's headline performance metrics, used alongside average_return to compute profit_factor."
+    example: "An average loss of -3.1% across losing trades."
+    related_terms: [average_return, profit_factor]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/performance.py"}
+
+  - id: profit_factor
+    title: "Profit Factor"
+    short_name: "Profit Factor"
+    category: ai_ml
+    definition: "The ratio of gross profit to gross loss across all resolved recommendations — a standard trading-system quality metric."
+    formula: "Profit Factor = sum(positive returns) / abs(sum(negative returns))"
+    interpretation: "Above 1.0 means winning trades outweigh losing trades in aggregate; the higher above 1.0, the stronger."
+    how_scanner_uses_it: "One of AI Lab's headline performance metrics."
+    example: "A profit factor of 1.8 means gross profits were 1.8x gross losses."
+    related_terms: [average_return, average_loss, expected_value]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/performance.py"}
+      - {type: external, value: "Investopedia – Profit Factor"}
+
+  - id: expected_value
+    title: "Expected Value"
+    short_name: "Expected Value"
+    category: ai_ml
+    definition: "The probability-weighted average outcome across all resolved recommendations — win rate times average win, plus loss rate times average loss."
+    formula: "Expected Value = (win_rate * average_return) + ((1 - win_rate) * average_loss)"
+    interpretation: "A single number summarizing whether a strategy is expected to be profitable per trade, on average, over time."
+    how_scanner_uses_it: "One of AI Lab's headline performance metrics."
+    example: "An expected value of +1.8% per trade suggests a positive long-run edge."
+    related_terms: [average_return, average_loss, profit_factor, win_rate]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/performance.py"}
+
+  - id: sharpe_ratio
+    title: "Sharpe Ratio"
+    short_name: "Sharpe Ratio"
+    category: ai_ml
+    definition: "A risk-adjusted return measure — average return divided by the standard deviation (volatility) of returns."
+    formula: "Sharpe Ratio = mean(returns) / std(returns)"
+    interpretation: "Higher means better return per unit of volatility/risk taken, not just higher raw return."
+    how_scanner_uses_it: "One of AI Lab's headline performance metrics."
+    example: "A Sharpe ratio of 1.2 indicates a favorable return-to-volatility trade-off across resolved recommendations."
+    related_terms: [average_return, expected_value]
+    references:
+      - {type: source_code, value: "stock_scanner/ai_lab/performance.py"}
+      - {type: external, value: "Investopedia – Sharpe Ratio"}
+
+  - id: ai_learning_timeline
+    title: "AI Learning Timeline"
+    short_name: "Learning Timeline"
+    category: ai_ml
+    definition: "A chronological log of AI Lab lifecycle events — recommendations generated, outcomes resolved, reflection/hypothesis/knowledge-base runs — each logged once per run with an honest, count-based description."
+    formula: "One event per pipeline stage per run (e.g. hypothesis_generated, outcome_resolved, reflection_generated, hypothesis_validated, knowledge_base_updated)."
+    interpretation: "A running history of what the AI Automation Pipeline has done over time, distinct from the current-state summaries shown elsewhere."
+    how_scanner_uses_it: "Displayed as the AI Lab tab's event timeline section."
+    example: "An event reading 'Generated 12 recommendation(s) for 2026-07-25 across models: momentum_ai, breakout_ai.'"
+    related_terms: [ai_score, knowledge_base_ai_lab]
+    references:
+      - {type: source_code, value: "dashboard/ai_lab_view.py"}
+
+  - id: ticker_concentration_flag
+    title: "Ticker Concentration Flag"
+    short_name: "Ticker Concentration"
+    category: ai_ml
+    definition: "A quality-control flag on a production Learning Agent pattern indicating whether its supporting trades are overly concentrated in a single ticker (rather than a genuinely repeatable, cross-ticker pattern)."
+    formula: "Flagged when one ticker accounts for an outsized share of a pattern's supporting trade sample."
+    interpretation: "A flagged pattern's statistical significance is less trustworthy — it may just be one stock's idiosyncratic behavior, not a real market pattern."
+    how_scanner_uses_it: "Shown in the Learning Agent knowledge base's detail inspector."
+    example: "A pattern with 20 supporting trades, 18 of them the same ticker, would raise this flag."
+    related_terms: [time_split_stable, shrunk_win_rate]
+    references:
+      - {type: source_code, value: "stock_scanner/learning/pattern_dedup.py"}
+
+  - id: time_split_stable
+    title: "Time-Split Stable"
+    short_name: "Time-Split Stable"
+    category: ai_ml
+    definition: "A quality-control flag on a production Learning Agent pattern indicating whether it holds up when its supporting trades are split into earlier vs. later time periods and tested separately."
+    formula: "Compares win rate/effect stability across a chronological split of the supporting trade sample."
+    interpretation: "A stable pattern held up across both halves of history; an unstable one may reflect a regime that has already changed."
+    how_scanner_uses_it: "Shown in the Learning Agent knowledge base's detail inspector."
+    example: "A pattern that shows a consistent win rate in both the first and second half of its trade history is time_split_stable = true."
+    related_terms: [ticker_concentration_flag, shrunk_win_rate]
+    references:
+      - {type: source_code, value: "stock_scanner/learning/pattern_dedup.py"}
+
+  - id: ownership
+    title: "Ownership (Smart Money Screener)"
+    short_name: "Ownership"
+    category: broker_analysis
+    definition: "One of 5 Smart Money Screener detectors: classifies recent foreign/shareholder ownership change as Accumulation, Neutral, or Distribution."
+    formula: "Derived from foreign net buy (5d/20d) and shareholder-composition trend, per thresholds in smart_money_config.yaml."
+    interpretation: "Accumulation supports a smart-money-buying narrative; Distribution argues against it."
+    how_scanner_uses_it: "One of 5 pillars combined into smart_money_label."
+    example: "Sustained foreign net buying alongside rising institutional shareholder counts classifies as Accumulation."
+    related_terms: [smart_money_label, far]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/smart_money_screener.py"}
+      - {type: source_code, value: "stock_scanner/configs/smart_money_config.yaml"}
+
+  - id: hit_10pct_intraday
+    title: "Hit 10% Intraday"
+    short_name: "Hit Intraday ≥10%"
+    category: market_statistics
+    definition: "A boolean flag: true when a stock's intraday high reached at least 10% above the previous session's close."
+    formula: "high / prev_close - 1 >= 0.10"
+    interpretation: "Catches stocks that touched a big move intraday, even if they didn't close there."
+    how_scanner_uses_it: "Drives the Daily Movers >10% tab's intraday-hit count."
+    example: "A stock whose intraday high was 11% above yesterday's close flags hit_10pct_intraday = true."
+    related_terms: [hit_10pct_close]
+    references:
+      - {type: source_code, value: "dashboard/daily_movers_view.py"}
+
+  - id: news_count_3d
+    title: "News Count (3-day)"
+    short_name: "News Count 3d"
+    category: general
+    definition: "The number of news articles found for a ticker over the last 3 days."
+    formula: "Count of distinct news articles matched to the ticker in the trailing 3-day window."
+    interpretation: "A higher count means more recent news coverage — context for how much evidence news_score is based on."
+    how_scanner_uses_it: "Shown alongside news_score/news_data_status as a coverage-volume indicator."
+    example: "A news_count_3d of 5 means 5 articles were found for the ticker in the last 3 days."
+    related_terms: [news_score, news_data_status]
+    references:
+      - {type: source_code, value: "stock_scanner/pipeline/news_sentiment.py"}
+
+  - id: hit_10pct_close
+    title: "Hit 10% Close"
+    short_name: "Hit Close ≥10%"
+    category: market_statistics
+    definition: "A boolean flag: true when a stock's closing price reached at least 10% above the previous session's close."
+    formula: "close / prev_close - 1 >= 0.10"
+    interpretation: "A stricter version of hit_10pct_intraday — the move held into the close, not just an intraday spike."
+    how_scanner_uses_it: "Drives the Daily Movers >10% tab's close-hit count."
+    example: "A stock that closed 12% above yesterday's close flags hit_10pct_close = true."
+    related_terms: [hit_10pct_intraday]
+    references:
+      - {type: source_code, value: "dashboard/daily_movers_view.py"}

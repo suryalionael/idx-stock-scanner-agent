@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""AI Lab — recommendation resolver (NOT wired into any GitHub Actions
-schedule; see docs/AI_LAB_ARCHITECTURE.md "What's phased for later").
+"""AI Lab — recommendation resolver ("Performance Tracker"), CLI entry point.
+
+Runs automatically as part of the Daily Scan's AI Automation Pipeline (see
+the "AI Automation Pipeline" section of docs/AI_LAB_ARCHITECTURE.md and
+docs/ADR_AI_AUTOMATION_AND_STOCK_DICTIONARY.md) — this script remains
+available for manual/standalone runs and debugging. The actual logic lives
+in stock_scanner/ai_lab/resolution.py::run().
 
 Advances every AI Lab recommendation's lifecycle against forward OHLCV
-data instead of the previously 100%-manual
-stock_scanner.db.ai_lab.update_recommendation_status() runbook: PENDING ->
-ACTIVE (entry_price set once generated_date's close is available) and
-ACTIVE -> CLOSED | EXPIRED (TP/SL simulation, same fallback exit policy as
-stock_scanner.pipeline.evaluator). Also refreshes running
+data: PENDING -> ACTIVE (entry_price set once generated_date's close is
+available) and ACTIVE -> CLOSED | EXPIRED (TP/SL simulation, same fallback
+exit policy as stock_scanner.pipeline.evaluator). Also refreshes running
 highest_price/lowest_price/max_runup_pct/max_drawdown_pct/holding_days on
 every ACTIVE row each run, even when it doesn't resolve this time — see
 stock_scanner/ai_lab/resolver.py.
@@ -28,72 +31,9 @@ from pathlib import Path
 repo_root = Path(__file__).parent.parent
 sys.path.insert(0, str(repo_root))
 
-from loguru import logger  # noqa: E402
-
-from stock_scanner.ai_lab.resolver import activate_pending, resolve_active  # noqa: E402
-from stock_scanner.db.ai_lab import (  # noqa: E402
-    export_ai_recommendations,
-    export_learning_events,
-    import_ai_recommendations,
-    import_learning_events,
-    load_recommendations,
-    log_learning_event,
-    update_recommendation_status,
-)
-from stock_scanner.db.init_db import create_schema, get_connection  # noqa: E402
+from stock_scanner.ai_lab import resolution  # noqa: E402
 
 _DEFAULT_RAW_DIR = repo_root / "data" / "raw"
-
-
-def main(raw_dir: Path, horizon_days: int, risk_pct: float) -> None:
-    conn = get_connection()
-    create_schema(conn)
-    import_ai_recommendations(conn)
-    import_learning_events(conn)
-
-    pending = load_recommendations(conn, status="PENDING")
-    activations = activate_pending(pending, raw_dir) if not pending.empty else []
-    for row in activations:
-        rec_id = row.pop("id")
-        status = row.pop("status")
-        update_recommendation_status(conn, rec_id, status, **row)
-    logger.info(f"ai_lab: activated {len(activations)}/{len(pending)} PENDING recommendation(s)")
-
-    active = load_recommendations(conn, status="ACTIVE")
-    tracked = resolve_active(active, raw_dir, horizon_days=horizon_days, risk_pct=risk_pct) if not active.empty else []
-    closed = won = lost = expired = still_active = 0
-    for row in tracked:
-        rec_id = row.pop("id")
-        status = row.pop("status", None)
-        if status is None:
-            status = "ACTIVE"
-            still_active += 1
-        else:
-            closed += 1
-            if status == "EXPIRED":
-                expired += 1
-            if row.get("trade_outcome") == "WIN":
-                won += 1
-            elif row.get("trade_outcome") == "LOSS":
-                lost += 1
-        update_recommendation_status(conn, rec_id, status, **row)
-    logger.info(
-        f"ai_lab: tracked {len(tracked)}/{len(active)} ACTIVE recommendation(s) — "
-        f"{closed} resolved ({won} WIN, {lost} LOSS, {expired} EXPIRED), {still_active} still tracking"
-    )
-
-    if activations or tracked:
-        log_learning_event(
-            conn, event_type="outcome_resolved",
-            description=f"Resolved {len(activations)} activation(s) and {len(tracked)} tracking update(s): "
-                        f"{closed} closed ({won} WIN, {lost} LOSS, {expired} EXPIRED), {still_active} still tracking.",
-            metadata={"activated": len(activations), "closed": closed, "won": won,
-                      "lost": lost, "expired": expired, "still_active": still_active},
-        )
-
-    export_ai_recommendations(conn)
-    export_learning_events(conn)
-    logger.info("ai_lab: published data/published/ai_recommendations.json + ai_learning_events.json")
 
 
 def _parse_args() -> argparse.Namespace:
@@ -106,4 +46,4 @@ def _parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = _parse_args()
-    main(args.raw_dir, args.horizon_days, args.risk_pct)
+    resolution.run(raw_dir=args.raw_dir, horizon_days=args.horizon_days, risk_pct=args.risk_pct)

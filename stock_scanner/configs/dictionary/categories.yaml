@@ -1,0 +1,38 @@
+# Stock Dictionary — category taxonomy.
+#
+# This file's keys ARE the strongly-defined, enumerable category set —
+# every entry in stock_dictionary.yaml's `category` field must be one of
+# these keys. There is deliberately no second, hardcoded Python enum
+# duplicating this list: the loader (dashboard/data_loader.py::
+# load_stock_dictionary()) builds its category set from this file at load
+# time and validates entries against it, so there is only ever one source
+# of truth for "what categories exist."
+schema_version: 1
+categories:
+  production_scores:
+    display_name: "Production Scores"
+    description: "Rule-based scores computed by the Production Scanner's signal engine and its scalping/long-term extensions."
+  technical_indicators:
+    display_name: "Technical Indicators"
+    description: "Classic price/volume technical-analysis indicators computed in the feature-building stage."
+  financial_metrics:
+    display_name: "Financial Metrics"
+    description: "Fundamental ratios and financial-statement-derived metrics."
+  broker_analysis:
+    display_name: "Broker Analysis"
+    description: "Broker transaction metrics — who is buying/selling and what that implies about smart money vs. retail flow."
+  risk_metrics:
+    display_name: "Risk Metrics"
+    description: "Trading levels, risk gates, and setup-quality flags used to size and manage a position."
+  valuation:
+    display_name: "Valuation"
+    description: "Intrinsic-value and relative-valuation metrics used by the Long Term screener."
+  market_statistics:
+    display_name: "Market Statistics"
+    description: "Streaks, trend state, and benchmark/performance statistics not tied to a single ticker's score."
+  ai_ml:
+    display_name: "AI & Machine Learning"
+    description: "AI Lab's scoring, statistical-validation, and knowledge-lifecycle concepts — entirely separate from Production Scanner scoring."
+  general:
+    display_name: "General Investing Terms"
+    description: "Cross-cutting terms and status badges that don't belong to a single subsystem."

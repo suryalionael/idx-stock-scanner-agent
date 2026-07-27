@@ -73,6 +73,19 @@ def test_export_import_round_trip(tmp_path):
     payload = json.loads(export_path.read_text())
     assert len(payload["knowledge_base"]) == 1
 
+
+def test_export_publishes_generated_at_and_summary(tmp_path):
+    """The dashboard reads status from these fields directly (no client-side
+    value_counts()/max()) — see dashboard/knowledge_base_view.py."""
+    conn = _conn()
+    write_hypotheses(conn, [_hypothesis()], source_run_id="run1")
+    export_path = export_knowledge_base(conn, path=tmp_path / "knowledge_base.json")
+
+    payload = json.loads(export_path.read_text())
+    assert "generated_at" in payload and payload["generated_at"]
+    assert payload["summary"]["total_entries"] == 1
+    assert payload["summary"]["by_status"] == {"candidate": 1}
+
     fresh_conn = _conn()
     n_imported = import_knowledge_base(fresh_conn, path=export_path)
     assert n_imported == 1

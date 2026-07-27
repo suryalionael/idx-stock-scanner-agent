@@ -23,10 +23,13 @@ lifecycle (Emerging/Confirmed/Strong/Weakening/Contradicted/Archived) — a cand
 pool for a possible future promotion into the production `knowledge_base` table
 (always human-reviewed, never automatic), and the closing stage of the current pipeline
 before the future Calibration Engine.
-**Not yet done:** no scheduled GitHub Actions workflow — `scripts/run_ai_lab.py`,
-`scripts/resolve_ai_lab.py`, `scripts/run_reflection_engine.py`,
-`scripts/run_hypothesis_engine.py`, and `scripts/run_knowledge_base_engine.py` are all
-manual-only. A deliberate follow-up, not an oversight — see "What's phased for later."
+**Automation:** all five stages above now run automatically as the final step of the
+Daily Scan orchestrator (`stock_scanner/ai_lab/pipeline.py::run_ai_pipeline()`), gated
+by `ai_lab.enabled` in `scanner_config.yaml` — see "Scheduled execution" under "What's
+phased for later" and `docs/ADR_AI_AUTOMATION_AND_STOCK_DICTIONARY.md`. No GitHub
+Actions workflow change was needed: the chain runs in-process, in the same job that
+already invokes the scan. Each script remains independently runnable for manual/
+standalone use.
 
 ---
 
@@ -548,13 +551,21 @@ imports `knowledge_base_engine.py`/`client.py`/`agents/`).
 ## What's phased for later (explicitly out of scope for this pass)
 
 - **Live 9router wiring**: needs the real base URL/contract confirmed (see above).
-- **Scheduled execution**: none of `scripts/run_ai_lab.py` (generation),
-  `scripts/resolve_ai_lab.py` (resolution), `scripts/run_reflection_engine.py`
-  (reflection), `scripts/run_hypothesis_engine.py` (hypothesis generation +
-  validation), or `scripts/run_knowledge_base_engine.py` (curation) has a GitHub
-  Actions workflow yet — deliberately manual-only until a live generation run has been
-  reviewed at least once; scheduling a downstream stage before the stage before it is
-  itself scheduled would be automating half a loop.
+- **Scheduled execution**: ~~none of ... has a GitHub Actions workflow yet~~ — **superseded**.
+  After the initial manual-only period's review, all five stages
+  (`scripts/run_ai_lab.py` generation, `scripts/resolve_ai_lab.py` resolution,
+  `scripts/run_reflection_engine.py` reflection, `scripts/run_hypothesis_engine.py`
+  hypothesis generation + validation, `scripts/run_knowledge_base_engine.py`
+  curation) now run automatically, in-process, as the final step of the Daily
+  Scan orchestrator — see `stock_scanner/ai_lab/pipeline.py::run_ai_pipeline()`
+  and the "AI Automation Pipeline" and "Architecture Decision Record" sections
+  of `docs/ADR_AI_AUTOMATION_AND_STOCK_DICTIONARY.md` for the full design and
+  rationale. Gated by `ai_lab.enabled` in `scanner_config.yaml` (default on) so
+  the whole chain can be disabled without a code revert. Each script's
+  business logic now lives in an importable `stock_scanner/ai_lab/` module
+  (`generation.py`, `resolution.py`, `reflection_runner.py`,
+  `hypothesis_runner.py`, `knowledge_runner.py`); the scripts themselves
+  remain thin CLI wrappers for manual/standalone use, unchanged flags.
 - **Auto Promotion Engine** (see below): architecture prepared, not implemented.
 - **Promotion into the production `knowledge_base` table**: `knowledge_entries`
   (`lifecycle_status='strong'` rows) is a candidate pool only — nothing writes to the

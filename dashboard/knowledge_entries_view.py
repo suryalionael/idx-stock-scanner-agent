@@ -19,7 +19,6 @@ import streamlit as st
 from dashboard.data_loader import load_knowledge_report_payload
 
 _ACTIVE_STATUSES = {"confirmed", "strong"}
-_STALE_STATUSES = {"weakening", "contradicted", "archived"}
 
 
 @st.cache_data(ttl=300)
@@ -58,9 +57,7 @@ def render_knowledge_entries_section() -> None:
         "Confirmed → Strong, or → Weakening → Contradicted → Archived). Not another "
         "statistical engine — no new significance testing here, only curation of what "
         "Statistical Validation already decided. Read-only research findings; nothing here "
-        "changes Production Scanner logic, thresholds, or the production Knowledge Base. "
-        "Generated manually via `scripts/run_knowledge_base_engine.py` — see "
-        "docs/AI_LAB_ARCHITECTURE.md."
+        "changes Production Scanner logic, thresholds, or the production Knowledge Base."
     )
 
     payload = _load_knowledge_payload()
@@ -70,19 +67,20 @@ def render_knowledge_entries_section() -> None:
 
     if df.empty:
         st.info(
-            "📭 No knowledge entries yet — either `scripts/run_knowledge_base_engine.py` "
-            "hasn't been run, or no condition-set has ever been validated by Statistical "
-            "Validation. An empty report is the correct, honest result when upstream "
-            "evidence is still sparse."
+            "📭 Waiting for enough resolved recommendations. An empty report is the correct, "
+            "honest result when no condition-set has been validated by Statistical Validation "
+            "yet — not an error."
         )
         return
 
-    cols = st.columns(4)
-    cols[0].metric("Total Knowledge Entries", summary.get("total_entries", len(df)))
     by_status = summary.get("by_lifecycle_status") or {}
-    cols[1].metric("Active (Confirmed/Strong)", sum(by_status.get(s, 0) for s in _ACTIVE_STATUSES))
-    cols[2].metric("Weakening/Contradicted/Archived", sum(by_status.get(s, 0) for s in _STALE_STATUSES))
-    cols[3].metric("Resolved Trades Analyzed", summary.get("resolved_trade_count", "—"))
+    cols = st.columns(6)
+    cols[0].metric("Total Knowledge Entries", summary.get("total_entries", len(df)))
+    cols[1].metric("Emerging", by_status.get("emerging", 0))
+    cols[2].metric("Confirmed", by_status.get("confirmed", 0))
+    cols[3].metric("Strong", by_status.get("strong", 0))
+    cols[4].metric("Archived", by_status.get("archived", 0))
+    cols[5].metric("Last Run", (payload.get("generated_at") or "—")[:10])
 
     if narrative and narrative.get("overall_summary"):
         st.markdown("**🧭 Overall Summary** _(LLM narration over the code-computed knowledge entries below — never a source of new numbers, lifecycle changes, or confidence)_")

@@ -49,8 +49,7 @@ def render_hypothesis_section() -> None:
         "win rate, and Benjamini-Hochberg correction — never LLM-invented numbers. A candidate "
         "pool for a possible future Knowledge Base promotion, always via human review, never "
         "automatic. Read-only research findings; nothing here changes Production Scanner logic, "
-        "thresholds, or the Knowledge Base. Generated manually via "
-        "`scripts/run_hypothesis_engine.py` — see docs/AI_LAB_ARCHITECTURE.md."
+        "thresholds, or the Knowledge Base."
     )
 
     payload = _load_hypotheses_payload()
@@ -60,19 +59,20 @@ def render_hypothesis_section() -> None:
 
     if df.empty:
         st.info(
-            "📭 No hypotheses yet — either `scripts/run_hypothesis_engine.py` hasn't been run, "
-            "there are no gated Reflection Engine observations to seed candidates from, or no "
-            "candidate cleared the statistical significance gate. An empty report is the "
-            "correct, honest result when upstream evidence is still sparse."
+            "📭 Waiting for enough resolved recommendations. An empty report is the correct, "
+            "honest result when there are no gated Reflection Engine observations to seed "
+            "candidates from yet, or no candidate has cleared the statistical significance "
+            "gate — not an error."
         )
         return
 
-    cols = st.columns(4)
+    cols = st.columns(5)
     cols[0].metric("Total Hypotheses", summary.get("total_hypotheses", len(df)))
     by_status = summary.get("by_status") or {}
     cols[1].metric("Validated", by_status.get("validated", 0))
     cols[2].metric("Rejected", by_status.get("rejected", 0))
     cols[3].metric("Resolved Trades Analyzed", summary.get("resolved_trade_count", "—"))
+    cols[4].metric("Last Run", (payload.get("generated_at") or "—")[:10])
 
     if narrative and narrative.get("overall_summary"):
         st.markdown("**🧭 Overall Summary** _(LLM narration over the code-computed hypotheses below — never a source of new numbers)_")

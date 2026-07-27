@@ -32,7 +32,10 @@ Modules:
     agents/hypothesis_agent.py — evidence -> HypothesisOutput
     agents/decision_agent.py   — evidence + hypothesis -> DecisionOutput -> AIRecommendation
 
-Status: manually-triggered only (scripts/run_ai_lab.py). Not wired into any
-GitHub Actions schedule yet — this is the storage/agent/dashboard scaffold;
-a live scheduled run is a deliberate follow-up, not part of this pass.
+Status: runs automatically as the final step of the Daily Scan orchestrator
+(pipeline.py::run_ai_pipeline(), gated by ai_lab.enabled in
+scanner_config.yaml) — see the "Architecture Decision Record" in
+docs/ADR_AI_AUTOMATION_AND_STOCK_DICTIONARY.md and the "Scheduled
+execution" note in docs/AI_LAB_ARCHITECTURE.md. scripts/run_ai_lab.py and
+its siblings remain available for manual/standalone runs.
 """

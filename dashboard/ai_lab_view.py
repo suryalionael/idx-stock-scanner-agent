@@ -20,7 +20,11 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from dashboard.data_loader import load_ai_learning_events_payload, load_ai_recommendations_payload
+from dashboard.data_loader import (
+    load_ai_learning_events_payload,
+    load_ai_pipeline_status_payload,
+    load_ai_recommendations_payload,
+)
 from dashboard.hypothesis_view import render_hypothesis_section
 from dashboard.knowledge_entries_view import render_knowledge_entries_section
 from dashboard.reflection_view import render_reflection_section
@@ -39,8 +43,17 @@ _EVENT_ICONS = {
 
 
 @st.cache_data(ttl=300)
+def _load_recommendations_payload() -> dict:
+    return load_ai_recommendations_payload()
+
+
+@st.cache_data(ttl=300)
 def _load_recommendations_df() -> pd.DataFrame:
-    payload = load_ai_recommendations_payload()
+    # Reads the cached payload rather than calling load_ai_recommendations_payload()
+    # again — render_ai_lab_tab() also needs the raw payload (for
+    # generated_at/summary), and this is what keeps both call sites to a
+    # single cached fetch instead of two independent reads of the same file.
+    payload = _load_recommendations_payload()
     rows = payload.get("rows", [])
     if not rows:
         return pd.DataFrame()
@@ -60,6 +73,32 @@ def _load_events_df() -> pd.DataFrame:
     return df
 
 
+@st.cache_data(ttl=300)
+def _load_pipeline_status_payload() -> dict:
+    return load_ai_pipeline_status_payload()
+
+
+def _render_pipeline_status_row() -> None:
+    """Overall AI Automation Pipeline health — reads
+    data/published/ai_pipeline_status.json via the one unified loader
+    (dashboard.data_loader.load_ai_pipeline_status_payload); never computed
+    here, purely a read of already-published execution metadata."""
+    status_payload = _load_pipeline_status_payload()
+    if not status_payload:
+        st.caption("⏳ AI Automation Pipeline has not run yet.")
+        return
+
+    last_run = status_payload.get("last_run", "—")
+    stage_names = ["generation", "resolution", "reflection", "hypothesis", "knowledge_base"]
+    icon_map = {"ok": "🟢", "skipped": "🟡", "failed": "🔴"}
+    badges = []
+    for name in stage_names:
+        stage = status_payload.get(name) or {}
+        icon = icon_map.get(stage.get("status"), "⚪")
+        badges.append(f"{icon} {name}")
+    st.caption(f"⚙️ AI Automation Pipeline — last run {last_run} — " + " · ".join(badges))
+
+
 def render_ai_lab_tab() -> None:
     """🧪 AI Lab tab — read-only. See module docstring."""
     st.markdown("### 🧪 AI Lab — Experimental AI Recommendation Engine")
@@ -71,14 +110,20 @@ def render_ai_lab_tab() -> None:
         "performance would future integration into production even be considered — see "
         "docs/AI_LAB_ARCHITECTURE.md."
     )
+    _render_pipeline_status_row()
 
+    payload = _load_recommendations_payload()
     df = _load_recommendations_df()
     if df.empty:
-        st.info(
-            "📭 No AI Lab recommendations yet. `scripts/run_ai_lab.py` is run manually — "
-            "see docs/AI_LAB_ARCHITECTURE.md for the runbook."
-        )
+        st.info("📭 No recommendations have been generated yet.")
     else:
+        by_status = (payload.get("summary") or {}).get("by_status", {})
+        status_cols = st.columns(4)
+        status_cols[0].metric("Pending", by_status.get("PENDING", 0))
+        status_cols[1].metric("Active", by_status.get("ACTIVE", 0))
+        status_cols[2].metric("Resolved", by_status.get("CLOSED", 0))
+        status_cols[3].metric("Expired", by_status.get("EXPIRED", 0))
+        st.caption(f"Last generated: {payload.get('generated_at', '—')}")
         available_models = sorted(df["ai_model"].unique())
         _render_recommendations_section(df, available_models)
         st.divider()

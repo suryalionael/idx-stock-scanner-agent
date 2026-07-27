@@ -360,6 +360,28 @@ def main(config_path: Path = _DEFAULT_CONFIG, force_holiday: bool = False) -> No
     except Exception as exc:  # noqa: BLE001
         logger.warning("Performance tracking skipped: {}", exc)
 
+    # --- Step 12: AI Lab automation chain (non-fatal) ---
+    # generation -> resolution -> reflection -> hypothesis + statistical
+    # validation -> knowledge base. Runs strictly after every production
+    # scoring/ranking/filtering/publishing step above has already completed —
+    # AI Lab never feeds back into today's production output. Each of the 5
+    # stages is independently isolated inside run_ai_pipeline() itself; this
+    # outer try/except is a last-resort safety net on top of that. Gated by
+    # ai_lab.enabled (scanner_config.yaml) so the whole chain can be disabled
+    # without a code revert. See docs/ADR_AI_AUTOMATION_AND_STOCK_DICTIONARY.md.
+    if config.get("ai_lab", {}).get("enabled", True):
+        try:
+            import asyncio
+
+            from stock_scanner.ai_lab.pipeline import run_ai_pipeline
+
+            ai_lab_summary = asyncio.run(run_ai_pipeline(scan_date, config))
+            logger.info(f"AI Lab automation summary: {ai_lab_summary}")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("AI Lab automation chain skipped entirely: {}", exc)
+    else:
+        logger.info("AI Lab automation disabled via config (ai_lab.enabled: false)")
+
     logger.info(f"=== Scan selesai: {scan_date} ===")
 
 
