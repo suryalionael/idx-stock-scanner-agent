@@ -78,11 +78,18 @@ def _load_pipeline_status_payload() -> dict:
     return load_ai_pipeline_status_payload()
 
 
+_STAGE_ICONS = {"ok": "🟢", "skipped": "🟡", "failed": "🔴"}
+
+
 def _render_pipeline_status_row() -> None:
     """Overall AI Automation Pipeline health — reads
     data/published/ai_pipeline_status.json via the one unified loader
     (dashboard.data_loader.load_ai_pipeline_status_payload); never computed
-    here, purely a read of already-published execution metadata."""
+    here, purely a read of already-published execution metadata.
+
+    Surfaces each stage's recorded `reason` (skipped) or `error` (failed) —
+    already present in the published payload, not computed here — so a
+    failed/skipped stage is actionable instead of only a colored dot."""
     status_payload = _load_pipeline_status_payload()
     if not status_payload:
         st.caption("⏳ AI Automation Pipeline has not run yet.")
@@ -90,13 +97,25 @@ def _render_pipeline_status_row() -> None:
 
     last_run = status_payload.get("last_run", "—")
     stage_names = ["generation", "resolution", "reflection", "hypothesis", "knowledge_base"]
-    icon_map = {"ok": "🟢", "skipped": "🟡", "failed": "🔴"}
-    badges = []
-    for name in stage_names:
-        stage = status_payload.get(name) or {}
-        icon = icon_map.get(stage.get("status"), "⚪")
-        badges.append(f"{icon} {name}")
+    stages = [(name, status_payload.get(name) or {}) for name in stage_names]
+
+    badges = [f"{_STAGE_ICONS.get(stage.get('status'), '⚪')} {name}" for name, stage in stages]
     st.caption(f"⚙️ AI Automation Pipeline — last run {last_run} — " + " · ".join(badges))
+
+    # Only stages with a recorded reason/error need a detail line — an "ok"
+    # stage has nothing actionable to add beyond its badge above.
+    detail_lines = []
+    for name, stage in stages:
+        status = stage.get("status")
+        if status == "failed" and stage.get("error"):
+            detail_lines.append(f"🔴 **{name}** failed — {stage['error']}")
+        elif status == "skipped" and stage.get("reason"):
+            detail_lines.append(f"🟡 **{name}** skipped — {stage['reason']}")
+
+    if detail_lines:
+        with st.expander("Why did some stages skip or fail?"):
+            for line in detail_lines:
+                st.markdown(line)
 
 
 def render_ai_lab_tab() -> None:
