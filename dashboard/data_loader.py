@@ -58,10 +58,12 @@ _REMOTE_DAILY_MOVERS_URL = os.environ.get(
 )
 _LOCAL_DAILY_MOVERS_PATH = Path(__file__).parent.parent / "data" / "published" / "daily_movers.json"
 
-# AI Lab — experimental, standalone recommendation engine. Same
-# remote-then-local pattern; the dashboard NEVER calls stock_scanner.ai_lab
-# directly (no live 9router calls from the dashboard) — only reads these
-# committed mirrors. See stock_scanner/ai_lab/, scripts/run_ai_lab.py.
+# AI Lab — experimental, standalone recommendation engine, generated
+# automatically by the AI Automation Pipeline after every Daily Scan (see
+# stock_scanner/ai_lab/pipeline.py::run_ai_pipeline()). Same remote-then-
+# local pattern; the dashboard NEVER calls stock_scanner.ai_lab directly
+# (no live 9router calls from the dashboard) — only reads these committed
+# mirrors.
 _REMOTE_AI_RECOMMENDATIONS_URL = os.environ.get(
     "REMOTE_AI_RECOMMENDATIONS_URL",
     "https://raw.githubusercontent.com/suryalionael/idx-stock-scanner-agent/main/data/published/ai_recommendations.json",
@@ -74,38 +76,36 @@ _REMOTE_AI_LEARNING_EVENTS_URL = os.environ.get(
 )
 _LOCAL_AI_LEARNING_EVENTS_PATH = Path(__file__).parent.parent / "data" / "published" / "ai_learning_events.json"
 
-# Reflection Engine — same standalone, read-only, remote-then-local
-# pattern. The dashboard NEVER imports stock_scanner.ai_lab.reflection_engine
-# or agents (no LLM/stats call from the dashboard) — only reads this
-# committed mirror. See stock_scanner/ai_lab/reflection_engine.py,
-# scripts/run_reflection_engine.py.
+# Reflection Engine — generated automatically by the AI Automation Pipeline
+# (stock_scanner/ai_lab/pipeline.py). Same standalone, read-only, remote-
+# then-local pattern. The dashboard NEVER imports
+# stock_scanner.ai_lab.reflection_engine or agents (no LLM/stats call from
+# the dashboard) — only reads this committed mirror.
 _REMOTE_REFLECTION_REPORT_URL = os.environ.get(
     "REMOTE_REFLECTION_REPORT_URL",
     "https://raw.githubusercontent.com/suryalionael/idx-stock-scanner-agent/main/data/published/reflection_report.json",
 )
 _LOCAL_REFLECTION_REPORT_PATH = Path(__file__).parent.parent / "data" / "published" / "reflection_report.json"
 
-# Hypothesis Generator + Statistical Validation — same standalone,
-# read-only, remote-then-local pattern. The dashboard NEVER imports
-# stock_scanner.ai_lab.hypothesis_engine / statistical_validation / client
-# / agents — only reads this committed mirror. See
-# stock_scanner/ai_lab/hypothesis_engine.py, statistical_validation.py,
-# scripts/run_hypothesis_engine.py.
+# Hypothesis Generator + Statistical Validation — generated automatically
+# by the AI Automation Pipeline (stock_scanner/ai_lab/pipeline.py). Same
+# standalone, read-only, remote-then-local pattern. The dashboard NEVER
+# imports stock_scanner.ai_lab.hypothesis_engine / statistical_validation /
+# client / agents — only reads this committed mirror.
 _REMOTE_HYPOTHESES_REPORT_URL = os.environ.get(
     "REMOTE_HYPOTHESES_REPORT_URL",
     "https://raw.githubusercontent.com/suryalionael/idx-stock-scanner-agent/main/data/published/hypotheses_report.json",
 )
 _LOCAL_HYPOTHESES_REPORT_PATH = Path(__file__).parent.parent / "data" / "published" / "hypotheses_report.json"
 
-# Knowledge Base Engine — same standalone, read-only, remote-then-local
-# pattern. Deliberately load_knowledge_REPORT_payload, not
-# load_knowledge_base_payload — that name already serves the unrelated
+# Knowledge Base Engine — generated automatically by the AI Automation
+# Pipeline (stock_scanner/ai_lab/pipeline.py). Same standalone, read-only,
+# remote-then-local pattern. Deliberately load_knowledge_REPORT_payload,
+# not load_knowledge_base_payload — that name already serves the unrelated
 # production knowledge_base table (see load_knowledge_base_payload below
 # in this file). The dashboard NEVER imports
 # stock_scanner.ai_lab.knowledge_base_engine / client / agents — only
-# reads this committed mirror. See
-# stock_scanner/ai_lab/knowledge_base_engine.py,
-# scripts/run_knowledge_base_engine.py.
+# reads this committed mirror.
 _REMOTE_KNOWLEDGE_REPORT_URL = os.environ.get(
     "REMOTE_KNOWLEDGE_REPORT_URL",
     "https://raw.githubusercontent.com/suryalionael/idx-stock-scanner-agent/main/data/published/knowledge_report.json",
@@ -1472,7 +1472,8 @@ def _load_local_ai_recommendations() -> dict:
     if not _LOCAL_AI_RECOMMENDATIONS_PATH.exists():
         print(
             f"[data_loader] INFO: ai_recommendations.json tidak ditemukan secara lokal "
-            f"({_LOCAL_AI_RECOMMENDATIONS_PATH}) — scripts/run_ai_lab.py mungkin belum pernah dijalankan.",
+            f"({_LOCAL_AI_RECOMMENDATIONS_PATH}) — AI Automation Pipeline belum menghasilkan data "
+            f"untuk sesi ini (menunggu Daily Scan berikutnya).",
             file=sys.stderr,
         )
         return {"rows": [], "summary": {}}
@@ -1583,7 +1584,8 @@ def _load_local_reflection_report() -> dict:
     if not _LOCAL_REFLECTION_REPORT_PATH.exists():
         print(
             f"[data_loader] INFO: reflection_report.json tidak ditemukan secara lokal "
-            f"({_LOCAL_REFLECTION_REPORT_PATH}) — scripts/run_reflection_engine.py mungkin belum pernah dijalankan.",
+            f"({_LOCAL_REFLECTION_REPORT_PATH}) — AI Automation Pipeline belum menghasilkan data "
+            f"untuk sesi ini (menunggu Daily Scan berikutnya).",
             file=sys.stderr,
         )
         return {"observations": [], "summary": {}, "narrative": None}
@@ -1643,7 +1645,8 @@ def _load_local_hypotheses_report() -> dict:
     if not _LOCAL_HYPOTHESES_REPORT_PATH.exists():
         print(
             f"[data_loader] INFO: hypotheses_report.json tidak ditemukan secara lokal "
-            f"({_LOCAL_HYPOTHESES_REPORT_PATH}) — scripts/run_hypothesis_engine.py mungkin belum pernah dijalankan.",
+            f"({_LOCAL_HYPOTHESES_REPORT_PATH}) — AI Automation Pipeline belum menghasilkan data "
+            f"untuk sesi ini (menunggu Daily Scan berikutnya).",
             file=sys.stderr,
         )
         return {"hypotheses": [], "summary": {}, "narrative": None}
@@ -1705,7 +1708,8 @@ def _load_local_knowledge_report() -> dict:
     if not _LOCAL_KNOWLEDGE_REPORT_PATH.exists():
         print(
             f"[data_loader] INFO: knowledge_report.json tidak ditemukan secara lokal "
-            f"({_LOCAL_KNOWLEDGE_REPORT_PATH}) — scripts/run_knowledge_base_engine.py mungkin belum pernah dijalankan.",
+            f"({_LOCAL_KNOWLEDGE_REPORT_PATH}) — AI Automation Pipeline belum menghasilkan data "
+            f"untuk sesi ini (menunggu Daily Scan berikutnya).",
             file=sys.stderr,
         )
         return {"entries": [], "summary": {}, "narrative": None}
