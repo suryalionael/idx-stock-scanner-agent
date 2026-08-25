@@ -6856,6 +6856,7 @@ signal_date,eval_date,strategy,ticker,signal,prev,close,high,pct_high,pct_close,
 2026-08-20,,scalping,DOOH.JK,SCALPING_HIGH,,,,,,,pending
 2026-08-21,,scalping,ALKA.JK,SCALPING_HIGH,,,,,,,pending
 2026-08-21,,scalping,CSMI.JK,SCALPING_HIGH,,,,,,,pending
+2026-08-24,,scalping,LAPD.JK,SCALPING_HIGH,,,,,,,pending
 2026-08-24,,swing,ASGR.JK,BREAKOUT,,,,,,,pending
 2026-08-24,,swing,BEST.JK,PRE_MARKUP,,,,,,,pending
 2026-08-24,,swing,BJBR.JK,PRE_MARKUP,,,,,,,pending
@@ -6920,8 +6921,8 @@ signal_date,eval_date,strategy,ticker,signal,prev,close,high,pct_high,pct_close,
 2026-08-24,,scalping,GMTD.JK,SCALPING_HIGH,,,,,,,pending
 2026-08-24,,scalping,GZCO.JK,SCALPING_HIGH,,,,,,,pending
 2026-08-24,,scalping,HRUM.JK,SCALPING_HIGH,,,,,,,pending
+2026-08-24,,scalping,INDY.JK,SCALPING_HIGH,,,,,,,pending
 2026-08-24,,scalping,ITMA.JK,SCALPING_HIGH,,,,,,,pending
-2026-08-24,,scalping,LAPD.JK,SCALPING_HIGH,,,,,,,pending
 2026-08-24,,scalping,LSIP.JK,SCALPING_HIGH,,,,,,,pending
 2026-08-24,,scalping,MITI.JK,SCALPING_HIGH,,,,,,,pending
 2026-08-24,,scalping,NRCA.JK,SCALPING_HIGH,,,,,,,pending
