@@ -1,7 +1,7 @@
-signal_date,eval_date,strategy,ticker,signal,prev,close,high,pct_high,pct_close,wl,status
-2026-06-05,2026-06-08,swing,APLI.JK,PRE_MARKUP,293.97,288.0,288.0,-2.03,-2.03,L,evaluated
-2026-06-05,2026-06-08,swing,MPMX.JK,PRE_MARKUP,1090.0,900.0,916.82,-15.89,-17.43,L,evaluated
-2026-06-05,2026-06-08,swing,MGLV.JK,PRE_MARKUP,8200.0,8050.0,8200.0,0.0,-1.83,L,evaluated
-2026-06-05,2026-06-08,swing,GULA.JK,PRE_MARKUP,500.0,498.0,500.0,0.0,-0.4,L,evaluated
-2026-06-05,2026-06-08,swing,MUTU.JK,PRE_MARKUP,117.0,107.0,117.0,0.0,-8.55,L,evaluated
-2026-06-05,2026-06-08,swing,RGAS.JK,PRE_MARKUP,101.0,101.0,114.0,12.87,0.0,L,evaluated
+signal_date,eval_date,strategy,ticker,signal,prev,close,high,pct_high,pct_close,wl_high,wl_close,status
+2026-06-05,2026-06-08,swing,APLI.JK,PRE_MARKUP,293.97,288.0,288.0,-2.03,-2.03,L,L,evaluated
+2026-06-05,2026-06-08,swing,MPMX.JK,PRE_MARKUP,1090.0,900.0,916.82,-15.89,-17.43,L,L,evaluated
+2026-06-05,2026-06-08,swing,MGLV.JK,PRE_MARKUP,8200.0,8050.0,8200.0,0.0,-1.83,L,L,evaluated
+2026-06-05,2026-06-08,swing,GULA.JK,PRE_MARKUP,500.0,498.0,500.0,0.0,-0.4,L,L,evaluated
+2026-06-05,2026-06-08,swing,MUTU.JK,PRE_MARKUP,117.0,107.0,117.0,0.0,-8.55,L,L,evaluated
+2026-06-05,2026-06-08,swing,RGAS.JK,PRE_MARKUP,101.0,101.0,114.0,12.87,0.0,W,L,evaluated

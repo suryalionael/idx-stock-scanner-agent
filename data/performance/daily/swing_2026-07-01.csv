@@ -1,7 +1,7 @@
-signal_date,eval_date,strategy,ticker,signal,prev,close,high,pct_high,pct_close,wl,status
-2026-06-30,2026-07-01,swing,BSSR.JK,PRE_MARKUP,3960.0,3960.0,3980.0,0.51,0.0,L,evaluated
-2026-06-30,2026-07-01,swing,CFIN.JK,PRE_MARKUP,320.0,316.0,320.0,0.0,-1.25,L,evaluated
-2026-06-30,2026-07-01,swing,MAPI.JK,PRE_MARKUP,1525.0,1525.0,1525.0,0.0,0.0,L,evaluated
-2026-06-30,2026-07-01,swing,PANS.JK,PRE_MARKUP,1585.0,1465.0,1520.0,-4.1,-7.57,L,evaluated
-2026-06-30,2026-07-01,swing,BSML.JK,PRE_MARKUP,484.0,488.0,492.0,1.65,0.83,W,evaluated
-2026-06-30,2026-07-01,swing,MKAP.JK,PRE_MARKUP,1165.0,1180.0,1195.0,2.58,1.29,W,evaluated
+signal_date,eval_date,strategy,ticker,signal,prev,close,high,pct_high,pct_close,wl_high,wl_close,status
+2026-06-30,2026-07-01,swing,BSSR.JK,PRE_MARKUP,3960.0,3960.0,3980.0,0.51,0.0,W,L,evaluated
+2026-06-30,2026-07-01,swing,CFIN.JK,PRE_MARKUP,320.0,316.0,320.0,0.0,-1.25,L,L,evaluated
+2026-06-30,2026-07-01,swing,MAPI.JK,PRE_MARKUP,1525.0,1525.0,1525.0,0.0,0.0,L,L,evaluated
+2026-06-30,2026-07-01,swing,PANS.JK,PRE_MARKUP,1585.0,1465.0,1520.0,-4.1,-7.57,L,L,evaluated
+2026-06-30,2026-07-01,swing,BSML.JK,PRE_MARKUP,484.0,488.0,492.0,1.65,0.83,W,W,evaluated
+2026-06-30,2026-07-01,swing,MKAP.JK,PRE_MARKUP,1165.0,1180.0,1195.0,2.58,1.29,W,W,evaluated

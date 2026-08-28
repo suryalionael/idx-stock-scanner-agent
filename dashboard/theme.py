@@ -188,14 +188,17 @@ def wl_cell_colors(mode: str | None = None) -> dict[str, tuple[str, str]]:
             "L": ("#5B1A1A", "#FCA5A5")}          # dark-red bg,  red-300 text
 
 
-def style_perf_table(df, mode: str | None = None, wl_col: str = "wl"):
-    """Theme-correct Styler for the Signal Performance table where the W/L column
-    is highlighted: green for W, red for L, as a tinted cell background PLUS the
-    bold high-contrast letter (never colour alone). Accessible in both modes.
+def style_perf_table(df, mode: str | None = None, wl_col: str | list[str] = "wl"):
+    """Theme-correct Styler for the Signal Performance table where the W/L
+    column(s) are highlighted: green for W, red for L, as a tinted cell
+    background PLUS the bold high-contrast letter (never colour alone).
+    Accessible in both modes. `wl_col` accepts one column name or a list
+    (e.g. ["wl_high", "wl_close"]) — each present column is coloured.
     """
     mode = mode or get_mode()
     bg, fg = table_cell_colors(mode)
     wl = wl_cell_colors(mode)
+    wl_cols = [wl_col] if isinstance(wl_col, str) else list(wl_col)
 
     def _wl(v):
         c = wl.get(str(v).strip().upper())
@@ -205,9 +208,10 @@ def style_perf_table(df, mode: str | None = None, wl_col: str = "wl"):
         styler = (df.style
                   .format(_fmt_cell)
                   .set_properties(**{"background-color": bg, "color": fg}))
-        if wl_col in getattr(df, "columns", []):
+        present = [c for c in wl_cols if c in getattr(df, "columns", [])]
+        if present:
             _map = getattr(styler, "map", None) or styler.applymap  # pandas <2.1 compat
-            styler = _map(_wl, subset=[wl_col])  # applied AFTER base → wins on W/L cells
+            styler = _map(_wl, subset=present)  # applied AFTER base → wins on W/L cells
         return styler
     except Exception:  # noqa: BLE001
         return style_table(df, mode)
