@@ -12,13 +12,15 @@ Convention (per product spec)
 -----------------------------
   Signal date     = the session the ticker appeared in the Swing/Scalping list
   Evaluation date = next valid trading session after the signal date
-  Entry  (Open)   = evaluation-date open
+  Open            = reference price, the signal session's close (field `prev`;
+                    displayed/labelled "Open" in the UI and Excel export)
   High            = evaluation-date high
   Close           = evaluation-date close
   Percentage High = (High  - Open) / Open * 100
   Percentage Close= (Close - Open) / Open * 100
-  W/L             = "W" if Close > Open else "L"
-  Win Rate        = #W / #evaluated * 100
+  W/L High        = "W" if High  > Open else "L"
+  W/L Close       = "W" if Close > Open else "L"
+  Win Rate        = #W (W/L Close) / #evaluated * 100
 
 If the next session's OHLC is not available yet, the record is kept as
 status="pending" (NOT faked) and filled on the next run.
@@ -34,6 +36,7 @@ Outputs (all under data/performance/)
   daily/scalping_YYYY-MM-DD.csv        — Scalping signals for that signal date
   daily/signal_list_YYYY-MM-DD.xlsx    — Swing + Scalping sheets + win-rate
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -55,16 +58,29 @@ SWING_SIGNALS = {"BREAKOUT", "PRE_MARKUP"}
 SCALPING_LABELS = {"SCALPING_HIGH"}
 
 # Column order for the daily table. Reference price = PREVIOUS CLOSE (the close
-# of the signal session); High/Close are the next session's, measured vs Prev.
+# of the signal session, field `prev`, labelled "Open" in the UI/Excel);
+# High/Close are the next session's, each with its own W/L vs the reference.
 _RESULT_COLS = [
-    "signal_date", "eval_date", "strategy", "ticker", "signal",
-    "prev", "close", "high", "pct_high", "pct_close", "wl", "status",
+    "signal_date",
+    "eval_date",
+    "strategy",
+    "ticker",
+    "signal",
+    "prev",
+    "close",
+    "high",
+    "pct_high",
+    "pct_close",
+    "wl_high",
+    "wl_close",
+    "status",
 ]
 
 
 # ---------------------------------------------------------------------------
 # Signal-list extraction
 # ---------------------------------------------------------------------------
+
 
 def _signal_list(df: pd.DataFrame, strategy: str) -> pd.DataFrame:
     """Return [ticker, signal] for one strategy from a signals frame."""
@@ -87,6 +103,7 @@ def _signal_list(df: pd.DataFrame, strategy: str) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Next-session OHLC lookup (never fabricates)
 # ---------------------------------------------------------------------------
+
 
 def _next_session_ohlc(ticker: str, signal_date: str, raw_dir: Path) -> Optional[dict]:
     """Previous-close reference + next valid session's high/close for `ticker`.
@@ -121,41 +138,57 @@ def _next_session_ohlc(ticker: str, signal_date: str, raw_dir: Path) -> Optional
         ev = df.loc[i]
         prev_close = df.loc[i - 1, "close"]
         h, c = ev.get("high"), ev.get("close")
-        if (pd.notna(prev_close) and float(prev_close) > 0
-                and pd.notna(h) and pd.notna(c)):
+        if pd.notna(prev_close) and float(prev_close) > 0 and pd.notna(h) and pd.notna(c):
             return {
                 "prev_close": float(prev_close),
                 "eval_date": ev["date"].strftime("%Y-%m-%d"),
-                "high": float(h), "close": float(c),
+                "high": float(h),
+                "close": float(c),
             }
     return None
 
 
-def _evaluate_row(signal_date: str, strategy: str, ticker: str, signal: str,
-                  raw_dir: Path) -> dict:
+def _evaluate_row(signal_date: str, strategy: str, ticker: str, signal: str, raw_dir: Path) -> dict:
     """Build one result row — evaluated or pending. Reference = previous close."""
-    base = {"signal_date": signal_date, "strategy": strategy, "ticker": ticker,
-            "signal": signal, "eval_date": None, "prev": None, "close": None,
-            "high": None, "pct_high": None, "pct_close": None, "wl": None,
-            "status": "pending"}
+    base = {
+        "signal_date": signal_date,
+        "strategy": strategy,
+        "ticker": ticker,
+        "signal": signal,
+        "eval_date": None,
+        "prev": None,
+        "close": None,
+        "high": None,
+        "pct_high": None,
+        "pct_close": None,
+        "wl_high": None,
+        "wl_close": None,
+        "status": "pending",
+    }
     ohlc = _next_session_ohlc(ticker, signal_date, raw_dir)
     if ohlc is None:
         return base
     p, h, c = ohlc["prev_close"], ohlc["high"], ohlc["close"]
-    base.update({
-        "eval_date": ohlc["eval_date"],
-        "prev": round(p, 2), "high": round(h, 2), "close": round(c, 2),
-        "pct_high": round((h - p) / p * 100, 2),
-        "pct_close": round((c - p) / p * 100, 2),
-        "wl": "W" if c > p else "L",
-        "status": "evaluated",
-    })
+    base.update(
+        {
+            "eval_date": ohlc["eval_date"],
+            "prev": round(p, 2),
+            "high": round(h, 2),
+            "close": round(c, 2),
+            "pct_high": round((h - p) / p * 100, 2),
+            "pct_close": round((c - p) / p * 100, 2),
+            "wl_high": "W" if h > p else "L",
+            "wl_close": "W" if c > p else "L",
+            "status": "evaluated",
+        }
+    )
     return base
 
 
 # ---------------------------------------------------------------------------
 # Persistent archive / results helpers (idempotent upserts)
 # ---------------------------------------------------------------------------
+
 
 def _read_csv(path: Path) -> pd.DataFrame:
     if path.exists():
@@ -183,6 +216,7 @@ def _upsert(existing: pd.DataFrame, new: pd.DataFrame, keys: list[str]) -> pd.Da
 # Excel writer
 # ---------------------------------------------------------------------------
 
+
 def _write_excel(path: Path, swing: pd.DataFrame, scalping: pd.DataFrame, signal_date: str) -> None:
     """Ready-to-read workbook: a sheet per strategy, % formatting, W/L colour,
     win-rate summary at the top. Best-effort (skipped if openpyxl missing)."""
@@ -192,10 +226,32 @@ def _write_excel(path: Path, swing: pd.DataFrame, scalping: pd.DataFrame, signal
         logger.warning("openpyxl not available — skipping Excel ({}).", exc)
         return
 
-    disp_cols = ["ticker", "signal", "prev", "close", "high",
-                 "pct_high", "pct_close", "wl", "eval_date", "status"]
-    headers = ["Signal", "Type", "Prev", "Close", "High",
-               "Percentage High", "Percentage Close", "W/L", "Eval Date", "Status"]
+    disp_cols = [
+        "ticker",
+        "signal",
+        "prev",
+        "close",
+        "high",
+        "pct_high",
+        "pct_close",
+        "wl_high",
+        "wl_close",
+        "eval_date",
+        "status",
+    ]
+    headers = [
+        "Signal",
+        "Type",
+        "Open",
+        "Close",
+        "High",
+        "Percentage High",
+        "Percentage Close",
+        "W/L High",
+        "W/L Close",
+        "Eval Date",
+        "Status",
+    ]
 
     win_fill = PatternFill("solid", fgColor="C6EFCE")
     loss_fill = PatternFill("solid", fgColor="FFC7CE")
@@ -207,15 +263,16 @@ def _write_excel(path: Path, swing: pd.DataFrame, scalping: pd.DataFrame, signal
         for sheet, df in (("Swing", swing), ("Scalping", scalping)):
             ev = df[df["status"] == "evaluated"] if not df.empty else df
             n = len(ev)
-            wins = int((ev["wl"] == "W").sum()) if n else 0
+            wins = int((ev["wl_close"] == "W").sum()) if n else 0
             wr = round(wins / n * 100, 1) if n else 0.0
             pend = int((df["status"] == "pending").sum()) if not df.empty else 0
 
             ws = xw.book.create_sheet(sheet)
             ws["A1"] = f"{sheet} — Review sesi market {signal_date}"
             ws["A1"].font = Font(bold=True, size=13)
-            ws["A2"] = (f"Win Rate: {wr}%  ({wins}W / {n - wins}L of {n} evaluated"
-                        + (f", {pend} pending)" if pend else ")"))
+            ws["A2"] = f"Win Rate: {wr}%  ({wins}W / {n - wins}L of {n} evaluated" + (
+                f", {pend} pending)" if pend else ")"
+            )
             ws["A2"].font = Font(bold=True, color="2563EB")
 
             start = 4
@@ -234,14 +291,15 @@ def _write_excel(path: Path, swing: pd.DataFrame, scalping: pd.DataFrame, signal
                     # % formatting
                     for jc in (6, 7):  # pct_high, pct_close columns
                         ws.cell(row=i, column=jc).number_format = '0.00"%"'
-                    # W/L colour
-                    wl = r.get("wl")
-                    if wl == "W":
-                        ws.cell(row=i, column=8).fill = win_fill
-                    elif wl == "L":
-                        ws.cell(row=i, column=8).fill = loss_fill
+                    # W/L colour (High = col 8, Close = col 9)
+                    for jc, key in ((8, "wl_high"), (9, "wl_close")):
+                        wl = r.get(key)
+                        if wl == "W":
+                            ws.cell(row=i, column=jc).fill = win_fill
+                        elif wl == "L":
+                            ws.cell(row=i, column=jc).fill = loss_fill
             # widths
-            for j, w in enumerate([12, 13, 10, 10, 10, 15, 16, 6, 12, 11], 1):
+            for j, w in enumerate([12, 13, 10, 10, 10, 15, 16, 10, 10, 12, 11], 1):
                 ws.column_dimensions[chr(64 + j)].width = w
 
         # openpyxl always creates a default "Sheet" — remove it.
@@ -253,9 +311,14 @@ def _write_excel(path: Path, swing: pd.DataFrame, scalping: pd.DataFrame, signal
 # Per-date processing + orchestrator
 # ---------------------------------------------------------------------------
 
-def process_date(signal_date: str, signals_dir: Path | None = None,
-                 raw_dir: Path | None = None, perf_dir: Path | None = None,
-                 exclude_suspended: bool = True) -> dict:
+
+def process_date(
+    signal_date: str,
+    signals_dir: Path | None = None,
+    raw_dir: Path | None = None,
+    perf_dir: Path | None = None,
+    exclude_suspended: bool = True,
+) -> dict:
     """Archive + evaluate one signal date. Returns per-strategy summary."""
     signals_dir = signals_dir or _SIGNALS_DIR
     raw_dir = raw_dir or _RAW_DIR
@@ -272,6 +335,7 @@ def process_date(signal_date: str, signals_dir: Path | None = None,
     if exclude_suspended:
         try:
             from stock_scanner.pipeline.suspension import filter_active
+
             df = filter_active(df)
         except Exception:  # noqa: BLE001
             pass
@@ -285,7 +349,9 @@ def process_date(signal_date: str, signals_dir: Path | None = None,
             _evaluate_row(signal_date, strategy, str(r["ticker"]), str(r["signal"]), raw_dir)
             for _, r in lst.iterrows()
         ]
-        sdf = pd.DataFrame(rows, columns=_RESULT_COLS) if rows else pd.DataFrame(columns=_RESULT_COLS)
+        sdf = (
+            pd.DataFrame(rows, columns=_RESULT_COLS) if rows else pd.DataFrame(columns=_RESULT_COLS)
+        )
 
         # NOTE: daily review files are written keyed by EVAL DATE (the market
         # session reviewed) in _rebuild_daily_reviews(), not by signal_date —
@@ -293,14 +359,23 @@ def process_date(signal_date: str, signals_dir: Path | None = None,
         # market session instead of lagging one day behind on the signal date.
 
         for _, r in lst.iterrows():
-            archive_rows.append({"signal_date": signal_date, "strategy": strategy,
-                                 "ticker": str(r["ticker"]), "signal": str(r["signal"])})
+            archive_rows.append(
+                {
+                    "signal_date": signal_date,
+                    "strategy": strategy,
+                    "ticker": str(r["ticker"]),
+                    "signal": str(r["signal"]),
+                }
+            )
         result_rows.extend(rows)
 
         ev = sdf[sdf["status"] == "evaluated"]
-        n, wins = len(ev), int((ev["wl"] == "W").sum()) if len(ev) else 0
+        n, wins = len(ev), int((ev["wl_close"] == "W").sum()) if len(ev) else 0
         per_strategy[strategy] = {
-            "signals": len(sdf), "evaluated": n, "wins": wins, "losses": n - wins,
+            "signals": len(sdf),
+            "evaluated": n,
+            "wins": wins,
+            "losses": n - wins,
             "pending": int((sdf["status"] == "pending").sum()),
             "win_rate": round(wins / n * 100, 1) if n else None,
             "df": sdf,
@@ -308,10 +383,14 @@ def process_date(signal_date: str, signals_dir: Path | None = None,
 
     # Permanent stores (upsert)
     _ARCHIVE_CSV.parent.mkdir(parents=True, exist_ok=True)
-    _upsert(_read_csv(_ARCHIVE_CSV), pd.DataFrame(archive_rows),
-            ["signal_date", "strategy", "ticker"]).to_csv(_ARCHIVE_CSV, index=False)
-    _upsert(_read_csv(_RESULTS_CSV), pd.DataFrame(result_rows, columns=_RESULT_COLS),
-            ["signal_date", "strategy", "ticker"]).to_csv(_RESULTS_CSV, index=False)
+    _upsert(
+        _read_csv(_ARCHIVE_CSV), pd.DataFrame(archive_rows), ["signal_date", "strategy", "ticker"]
+    ).to_csv(_ARCHIVE_CSV, index=False)
+    _upsert(
+        _read_csv(_RESULTS_CSV),
+        pd.DataFrame(result_rows, columns=_RESULT_COLS),
+        ["signal_date", "strategy", "ticker"],
+    ).to_csv(_RESULTS_CSV, index=False)
 
     return per_strategy
 
@@ -368,8 +447,9 @@ def _reevaluate_pending(raw_dir: Path | None = None, perf_dir: Path | None = Non
     if pend.empty:
         return 0
     rows = [
-        _evaluate_row(str(r["signal_date"]), str(r["strategy"]),
-                      str(r["ticker"]), str(r["signal"]), raw_dir)
+        _evaluate_row(
+            str(r["signal_date"]), str(r["strategy"]), str(r["ticker"]), str(r["signal"]), raw_dir
+        )
         for _, r in pend.iterrows()
     ]
     upd = pd.DataFrame(rows, columns=_RESULT_COLS)
@@ -378,8 +458,12 @@ def _reevaluate_pending(raw_dir: Path | None = None, perf_dir: Path | None = Non
     return int((upd["status"] == "evaluated").sum())
 
 
-def run_performance(signals_dir: Path | None = None, raw_dir: Path | None = None,
-                    perf_dir: Path | None = None, dates: list[str] | None = None) -> dict:
+def run_performance(
+    signals_dir: Path | None = None,
+    raw_dir: Path | None = None,
+    perf_dir: Path | None = None,
+    dates: list[str] | None = None,
+) -> dict:
     """Archive + (re)evaluate. Default: every available signal date (so pending
     rows get filled once their next session exists). Returns {date: summary}."""
     signals_dir = signals_dir or _SIGNALS_DIR
@@ -408,14 +492,18 @@ def run_performance(signals_dir: Path | None = None, raw_dir: Path | None = None
     # Daily review files keyed by eval (market) date — the date the user reviews.
     review_dates = _rebuild_daily_reviews(perf_dir)
     if review_dates:
-        logger.info("Performance reviews written thru market date {} ({} sessions).",
-                    review_dates[-1], len(review_dates))
+        logger.info(
+            "Performance reviews written thru market date {} ({} sessions).",
+            review_dates[-1],
+            len(review_dates),
+        )
     return out
 
 
 # ---------------------------------------------------------------------------
 # Read helpers for dashboard / Telegram
 # ---------------------------------------------------------------------------
+
 
 def load_results(perf_dir: Path | None = None) -> pd.DataFrame:
     perf_dir = perf_dir or _PERF_DIR
@@ -425,6 +513,7 @@ def load_results(perf_dir: Path | None = None) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Evening (18:00 WIB) entrypoint — fetch same-day OHLC, then evaluate
 # ---------------------------------------------------------------------------
+
 
 def _pending_tickers(perf_dir: Path | None = None) -> set[str]:
     df = load_results(perf_dir)
@@ -450,6 +539,7 @@ def _refresh_raw_for(tickers: list[str], raw_dir: Path, lookback_years: int = 1)
         load_raw,
         save_raw,
     )
+
     fetcher = YFinanceFetcher(batch_size=20)
     end = (datetime.today() + timedelta(days=1)).strftime("%Y-%m-%d")  # inclusive of today
     n = 0
@@ -470,8 +560,11 @@ def _refresh_raw_for(tickers: list[str], raw_dir: Path, lookback_years: int = 1)
                 continue
             combined = pd.concat([existing, new], ignore_index=True)
             combined["date"] = pd.to_datetime(combined["date"]).dt.tz_localize(None).dt.normalize()
-            combined = (combined.drop_duplicates(subset=["date", "ticker"])
-                        .sort_values("date").reset_index(drop=True))
+            combined = (
+                combined.drop_duplicates(subset=["date", "ticker"])
+                .sort_values("date")
+                .reset_index(drop=True)
+            )
             save_raw(t, combined, raw_dir)
             n += 1
         except Exception as exc:  # noqa: BLE001
@@ -479,8 +572,12 @@ def _refresh_raw_for(tickers: list[str], raw_dir: Path, lookback_years: int = 1)
     return n
 
 
-def run_performance_evening(signals_dir: Path | None = None, raw_dir: Path | None = None,
-                            perf_dir: Path | None = None, lookback_years: int = 1) -> dict:
+def run_performance_evening(
+    signals_dir: Path | None = None,
+    raw_dir: Path | None = None,
+    perf_dir: Path | None = None,
+    lookback_years: int = 1,
+) -> dict:
     """18:00 WIB entrypoint. Refreshes OHLC for the tickers awaiting evaluation
     (pending results + the latest signal date's lists), so that if the market
     data source has already published today's close, pending rows are filled on
@@ -514,12 +611,19 @@ def win_rate_recap(eval_date: str, perf_dir: Path | None = None) -> dict:
     if df.empty:
         return out
     for strat in ("swing", "scalping"):
-        sub = df[(df["eval_date"].astype(str) == str(eval_date)) & (df["strategy"] == strat)
-                 & (df["status"] == "evaluated")]
+        sub = df[
+            (df["eval_date"].astype(str) == str(eval_date))
+            & (df["strategy"] == strat)
+            & (df["status"] == "evaluated")
+        ]
         n = len(sub)
-        wins = int((sub["wl"] == "W").sum()) if n else 0
-        out[strat] = {"signals": n, "wins": wins, "losses": n - wins,
-                      "win_rate": round(wins / n * 100, 1) if n else None}
+        wins = int((sub["wl_close"] == "W").sum()) if n else 0
+        out[strat] = {
+            "signals": n,
+            "wins": wins,
+            "losses": n - wins,
+            "win_rate": round(wins / n * 100, 1) if n else None,
+        }
     return out
 
 
@@ -532,8 +636,7 @@ def latest_evaluated_date(perf_dir: Path | None = None) -> Optional[str]:
     return None if ev.empty else str(ev["eval_date"].max())
 
 
-def send_daily_excel_telegram(eval_date: str | None = None,
-                              perf_dir: Path | None = None) -> bool:
+def send_daily_excel_telegram(eval_date: str | None = None, perf_dir: Path | None = None) -> bool:
     """Best-effort: upload the daily Signal List performance .xlsx to Telegram with
     a short win-rate caption. Fail-safe — never raises and never blocks file
     generation. Token/chat come from TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID (repo
@@ -558,9 +661,12 @@ def send_daily_excel_telegram(eval_date: str | None = None,
             tail = f" · WR {wr}%" if wr is not None else ""
             return f"{strat.title()}: {d.get('wins', 0)}W / {d.get('signals', 0)}{tail}"
 
-        caption = ("📋 Signal List Performance — sesi market "
-                   f"{eval_date}\n{_line('swing')}\n{_line('scalping')}")
+        caption = (
+            "📋 Signal List Performance — sesi market "
+            f"{eval_date}\n{_line('swing')}\n{_line('scalping')}"
+        )
         from stock_scanner.alerts.telegram_alert import TelegramAlert
+
         res = TelegramAlert().send_document(xlsx, caption=caption)
         ok = bool(getattr(res, "success", False))
         logger.info("Telegram: daily Excel for {} {}.", eval_date, "sent" if ok else "send failed")
@@ -572,12 +678,19 @@ def send_daily_excel_telegram(eval_date: str | None = None,
 
 if __name__ == "__main__":
     import argparse
+
     p = argparse.ArgumentParser(description="Signal List performance tracker")
     p.add_argument("--date", default=None, help="Only this signal date (YYYY-MM-DD).")
-    p.add_argument("--evening", action="store_true",
-                   help="Evening mode: fetch same-day OHLC for pending tickers, then evaluate.")
-    p.add_argument("--telegram", action="store_true",
-                   help="After evaluating, send the latest daily Excel to Telegram (fail-safe).")
+    p.add_argument(
+        "--evening",
+        action="store_true",
+        help="Evening mode: fetch same-day OHLC for pending tickers, then evaluate.",
+    )
+    p.add_argument(
+        "--telegram",
+        action="store_true",
+        help="After evaluating, send the latest daily Excel to Telegram (fail-safe).",
+    )
     a = p.parse_args()
     if a.evening:
         run_performance_evening()

@@ -2732,8 +2732,9 @@ with _hc_right:
 # ===========================================================================
 with tab_perf:
     st.markdown("### 📋 Signal List Performance")
-    st.caption("Win-rate sinyal Swing & Scalping — referensi = PREV CLOSE (close sesi "
-               "sinyal); High & Close diukur dari sesi bursa BERIKUTNYA (W jika Close > Prev).")
+    st.caption("Win-rate sinyal Swing & Scalping — referensi = Open (close sesi "
+               "sinyal); High & Close diukur dari sesi bursa BERIKUTNYA — W/L High "
+               "(High vs Open) dan W/L Close (Close vs Open) dinilai terpisah.")
 
     from stock_scanner.pipeline.performance import load_results
     _res = load_results()
@@ -2757,7 +2758,7 @@ with tab_perf:
         _day = _sd[(_sd["eval_date"].astype(str) == str(_date))
                    & (_sd["status"] == "evaluated")].copy()
         _n = len(_day)
-        _w = int((_day["wl"] == "W").sum()) if _n else 0
+        _w = int((_day["wl_close"] == "W").sum()) if _n else 0
         _wr = round(_w / _n * 100, 1) if _n else 0.0
         # Pending = signals still awaiting their next session (no eval_date yet).
         _pend = int((_sd["status"] == "pending").sum())
@@ -2844,27 +2845,28 @@ with tab_perf:
         st.divider()
 
         # Table (matches the screenshot layout)
-        _show = _day[["ticker", "signal", "prev", "close", "high",
-                      "pct_high", "pct_close", "wl", "eval_date", "status"]].copy()
+        _show = _day[["ticker", "signal", "prev", "close", "high", "pct_high", "pct_close",
+                      "wl_high", "wl_close", "eval_date", "status"]].copy()
         for c in ("pct_high", "pct_close"):
             _show[c] = _show[c].apply(lambda x: f"{float(x):+.2f}%" if pd.notna(x) else "—")
         for c in ("prev", "close", "high"):
             _show[c] = _show[c].apply(lambda x: f"{float(x):,.0f}" if pd.notna(x) else "—")
-        # Theme-correct table with the W/L column highlighted (green W / red L,
+        # Theme-correct table with the W/L columns highlighted (green W / red L,
         # tinted cell + bold letter). style_perf_table is used directly instead of
         # show_df so the W/L colours win over the base cell colours.
         st.dataframe(
-            style_perf_table(_show, wl_col="wl"),
+            style_perf_table(_show, wl_col=["wl_high", "wl_close"]),
             use_container_width=True, hide_index=True,
             column_config={
                 "ticker": st.column_config.TextColumn("Signal", width="small"),
                 "signal": st.column_config.TextColumn("Type", width="small"),
-                "prev": st.column_config.TextColumn("Prev"),
+                "prev": st.column_config.TextColumn("Open"),
                 "close": st.column_config.TextColumn("Close"),
                 "high": st.column_config.TextColumn("High"),
                 "pct_high": st.column_config.TextColumn("% High"),
                 "pct_close": st.column_config.TextColumn("% Close"),
-                "wl": st.column_config.TextColumn("W/L", width="small"),
+                "wl_high": st.column_config.TextColumn("W/L High", width="small"),
+                "wl_close": st.column_config.TextColumn("W/L Close", width="small"),
                 "eval_date": st.column_config.TextColumn("Eval Date", width="small"),
                 "status": st.column_config.TextColumn("Status", width="small"),
             },
