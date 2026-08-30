@@ -2732,9 +2732,10 @@ with _hc_right:
 # ===========================================================================
 with tab_perf:
     st.markdown("### 📋 Signal List Performance")
-    st.caption("Win-rate sinyal Swing & Scalping — referensi = Open (close sesi "
-               "sinyal); High & Close diukur dari sesi bursa BERIKUTNYA — W/L High "
-               "(High vs Open) dan W/L Close (Close vs Open) dinilai terpisah.")
+    st.caption("Win-rate sinyal Swing & Scalping — referensi W/L = Prev (close sesi "
+               "sinyal); Open = harga open sesi evaluasi (informasional). High & Close "
+               "diukur dari sesi bursa BERIKUTNYA — W/L High (High vs Prev) dan W/L "
+               "Close (Close vs Prev) dinilai terpisah.")
 
     from stock_scanner.pipeline.performance import load_results
     _res = load_results()
@@ -2845,11 +2846,11 @@ with tab_perf:
         st.divider()
 
         # Table (matches the screenshot layout)
-        _show = _day[["ticker", "signal", "prev", "close", "high", "pct_high", "pct_close",
-                      "wl_high", "wl_close", "eval_date", "status"]].copy()
+        _show = _day[["ticker", "signal", "prev", "open", "close", "high", "pct_high",
+                      "pct_close", "wl_high", "wl_close", "eval_date", "status"]].copy()
         for c in ("pct_high", "pct_close"):
             _show[c] = _show[c].apply(lambda x: f"{float(x):+.2f}%" if pd.notna(x) else "—")
-        for c in ("prev", "close", "high"):
+        for c in ("prev", "open", "close", "high"):
             _show[c] = _show[c].apply(lambda x: f"{float(x):,.0f}" if pd.notna(x) else "—")
         # Theme-correct table with the W/L columns highlighted (green W / red L,
         # tinted cell + bold letter). style_perf_table is used directly instead of
@@ -2860,7 +2861,8 @@ with tab_perf:
             column_config={
                 "ticker": st.column_config.TextColumn("Signal", width="small"),
                 "signal": st.column_config.TextColumn("Type", width="small"),
-                "prev": st.column_config.TextColumn("Open"),
+                "prev": st.column_config.TextColumn("Prev"),
+                "open": st.column_config.TextColumn("Open"),
                 "close": st.column_config.TextColumn("Close"),
                 "high": st.column_config.TextColumn("High"),
                 "pct_high": st.column_config.TextColumn("% High"),

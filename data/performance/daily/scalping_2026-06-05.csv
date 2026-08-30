@@ -1,2 +1,2 @@
-signal_date,eval_date,strategy,ticker,signal,prev,close,high,pct_high,pct_close,wl_high,wl_close,status
-2026-06-03,2026-06-05,scalping,MMIX.JK,SCALPING_HIGH,655.0,750.0,785.0,19.85,14.5,W,W,evaluated
+signal_date,eval_date,strategy,ticker,signal,prev,open,close,high,pct_high,pct_close,wl_high,wl_close,status
+2026-06-03,2026-06-05,scalping,MMIX.JK,SCALPING_HIGH,655.0,700.0,750.0,785.0,19.85,14.5,W,W,evaluated

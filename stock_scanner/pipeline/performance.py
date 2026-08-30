@@ -12,14 +12,15 @@ Convention (per product spec)
 -----------------------------
   Signal date     = the session the ticker appeared in the Swing/Scalping list
   Evaluation date = next valid trading session after the signal date
-  Open            = reference price, the signal session's close (field `prev`;
-                    displayed/labelled "Open" in the UI and Excel export)
+  Prev            = reference price, the signal session's close (field `prev`)
+  Open            = evaluation-date's actual open (field `open`; informational,
+                    NOT the reference used below)
   High            = evaluation-date high
   Close           = evaluation-date close
-  Percentage High = (High  - Open) / Open * 100
-  Percentage Close= (Close - Open) / Open * 100
-  W/L High        = "W" if High  > Open else "L"
-  W/L Close       = "W" if Close > Open else "L"
+  Percentage High = (High  - Prev) / Prev * 100
+  Percentage Close= (Close - Prev) / Prev * 100
+  W/L High        = "W" if High  > Prev else "L"
+  W/L Close       = "W" if Close > Prev else "L"
   Win Rate        = #W (W/L Close) / #evaluated * 100
 
 If the next session's OHLC is not available yet, the record is kept as
@@ -57,9 +58,10 @@ _RESULTS_CSV = _PERF_DIR / "signal_results.csv"
 SWING_SIGNALS = {"BREAKOUT", "PRE_MARKUP"}
 SCALPING_LABELS = {"SCALPING_HIGH"}
 
-# Column order for the daily table. Reference price = PREVIOUS CLOSE (the close
-# of the signal session, field `prev`, labelled "Open" in the UI/Excel);
-# High/Close are the next session's, each with its own W/L vs the reference.
+# Column order for the daily table. Reference price = PREVIOUS CLOSE (field
+# `prev`, the signal session's close); `open` is the eval session's actual
+# open — shown alongside Prev but NOT used as the W/L reference. High/Close
+# are the next session's, each with its own W/L vs Prev.
 _RESULT_COLS = [
     "signal_date",
     "eval_date",
@@ -67,6 +69,7 @@ _RESULT_COLS = [
     "ticker",
     "signal",
     "prev",
+    "open",
     "close",
     "high",
     "pct_high",
@@ -106,12 +109,14 @@ def _signal_list(df: pd.DataFrame, strategy: str) -> pd.DataFrame:
 
 
 def _next_session_ohlc(ticker: str, signal_date: str, raw_dir: Path) -> Optional[dict]:
-    """Previous-close reference + next valid session's high/close for `ticker`.
+    """Previous-close reference + next valid session's open/high/close for `ticker`.
 
-    Returns {prev_close, eval_date, high, close} or None when not available yet
-    (caller marks the record pending). `prev_close` is the close of the session
-    immediately BEFORE the evaluation session (i.e. the signal-session close).
-    Skips zero-volume / NaN bars.
+    Returns {prev_close, eval_date, open, high, close} or None when not
+    available yet (caller marks the record pending). `prev_close` is the close
+    of the session immediately BEFORE the evaluation session (i.e. the
+    signal-session close); `open` is the evaluation session's own open (shown
+    alongside `prev_close`, not used as the W/L reference). Skips zero-volume
+    / NaN bars.
     """
     path = raw_dir / f"{ticker}.parquet"
     if not path.exists():
@@ -137,11 +142,12 @@ def _next_session_ohlc(ticker: str, signal_date: str, raw_dir: Path) -> Optional
             continue
         ev = df.loc[i]
         prev_close = df.loc[i - 1, "close"]
-        h, c = ev.get("high"), ev.get("close")
+        o, h, c = ev.get("open"), ev.get("high"), ev.get("close")
         if pd.notna(prev_close) and float(prev_close) > 0 and pd.notna(h) and pd.notna(c):
             return {
                 "prev_close": float(prev_close),
                 "eval_date": ev["date"].strftime("%Y-%m-%d"),
+                "open": float(o) if pd.notna(o) else None,
                 "high": float(h),
                 "close": float(c),
             }
@@ -157,6 +163,7 @@ def _evaluate_row(signal_date: str, strategy: str, ticker: str, signal: str, raw
         "signal": signal,
         "eval_date": None,
         "prev": None,
+        "open": None,
         "close": None,
         "high": None,
         "pct_high": None,
@@ -168,11 +175,12 @@ def _evaluate_row(signal_date: str, strategy: str, ticker: str, signal: str, raw
     ohlc = _next_session_ohlc(ticker, signal_date, raw_dir)
     if ohlc is None:
         return base
-    p, h, c = ohlc["prev_close"], ohlc["high"], ohlc["close"]
+    p, o, h, c = ohlc["prev_close"], ohlc["open"], ohlc["high"], ohlc["close"]
     base.update(
         {
             "eval_date": ohlc["eval_date"],
             "prev": round(p, 2),
+            "open": round(o, 2) if o is not None else None,
             "high": round(h, 2),
             "close": round(c, 2),
             "pct_high": round((h - p) / p * 100, 2),
@@ -230,6 +238,7 @@ def _write_excel(path: Path, swing: pd.DataFrame, scalping: pd.DataFrame, signal
         "ticker",
         "signal",
         "prev",
+        "open",
         "close",
         "high",
         "pct_high",
@@ -242,6 +251,7 @@ def _write_excel(path: Path, swing: pd.DataFrame, scalping: pd.DataFrame, signal
     headers = [
         "Signal",
         "Type",
+        "Prev",
         "Open",
         "Close",
         "High",
@@ -289,17 +299,17 @@ def _write_excel(path: Path, swing: pd.DataFrame, scalping: pd.DataFrame, signal
                     for j, col in enumerate(disp_cols, 1):
                         ws.cell(row=i, column=j, value=r.get(col))
                     # % formatting
-                    for jc in (6, 7):  # pct_high, pct_close columns
+                    for jc in (7, 8):  # pct_high, pct_close columns
                         ws.cell(row=i, column=jc).number_format = '0.00"%"'
-                    # W/L colour (High = col 8, Close = col 9)
-                    for jc, key in ((8, "wl_high"), (9, "wl_close")):
+                    # W/L colour (High = col 9, Close = col 10)
+                    for jc, key in ((9, "wl_high"), (10, "wl_close")):
                         wl = r.get(key)
                         if wl == "W":
                             ws.cell(row=i, column=jc).fill = win_fill
                         elif wl == "L":
                             ws.cell(row=i, column=jc).fill = loss_fill
             # widths
-            for j, w in enumerate([12, 13, 10, 10, 10, 15, 16, 10, 10, 12, 11], 1):
+            for j, w in enumerate([12, 13, 10, 10, 10, 10, 15, 16, 10, 10, 12, 11], 1):
                 ws.column_dimensions[chr(64 + j)].width = w
 
         # openpyxl always creates a default "Sheet" — remove it.
