@@ -1,7 +1,7 @@
 {
   "as_of_date": "2026-09-11",
   "source": "yfinance",
-  "generated_at": "2026-09-11T13:42:37.625430+00:00",
+  "generated_at": "2026-09-14T15:57:51.297561+00:00",
   "summary": {
     "total_rows": 1701,
     "distinct_dates": 39,
@@ -24,7 +24,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -41,7 +41,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -58,7 +58,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -75,7 +75,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -92,7 +92,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -109,7 +109,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -126,7 +126,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -143,7 +143,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -160,7 +160,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -170,14 +170,14 @@
       "high": 144.0,
       "low": 117.0,
       "close": 126.0,
-      "volume": 150189500.0,
+      "volume": 150189300.0,
       "pct_change_close": 0.024390243902439046,
       "pct_change_high": 0.1707317073170731,
       "hit_10pct_close": false,
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -187,14 +187,14 @@
       "high": 308.0,
       "low": 236.0,
       "close": 290.0,
-      "volume": 136661900.0,
+      "volume": 136444800.0,
       "pct_change_close": 0.1417322834645669,
       "pct_change_high": 0.21259842519685046,
       "hit_10pct_close": true,
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -211,7 +211,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -228,7 +228,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -245,7 +245,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -262,7 +262,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -279,7 +279,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -296,7 +296,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -313,7 +313,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -330,7 +330,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -347,7 +347,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -364,7 +364,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -381,7 +381,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -398,7 +398,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -415,7 +415,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -432,7 +432,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -442,14 +442,14 @@
       "high": 172.0,
       "low": 140.0,
       "close": 168.0,
-      "volume": 147572900.0,
+      "volume": 147572800.0,
       "pct_change_close": 0.1914893617021276,
       "pct_change_high": 0.21985815602836878,
       "hit_10pct_close": true,
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -466,7 +466,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -483,7 +483,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -500,7 +500,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -517,7 +517,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -527,14 +527,14 @@
       "high": 155.0,
       "low": 113.0,
       "close": 135.0,
-      "volume": 528162000.0,
+      "volume": 527826400.0,
       "pct_change_close": 0.15384615384615374,
       "pct_change_high": 0.32478632478632474,
       "hit_10pct_close": true,
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -551,7 +551,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -568,7 +568,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -585,7 +585,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -602,7 +602,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -619,7 +619,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -636,7 +636,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -653,7 +653,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -670,7 +670,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -687,7 +687,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -704,7 +704,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -721,7 +721,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -738,7 +738,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -748,14 +748,14 @@
       "high": 336.0,
       "low": 270.0,
       "close": 296.0,
-      "volume": 3196900.0,
+      "volume": 3187300.0,
       "pct_change_close": 0.09629629629629632,
       "pct_change_high": 0.24444444444444446,
       "hit_10pct_close": false,
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-11",
@@ -772,7 +772,7 @@
       "hit_10pct_intraday": true,
       "source": "yfinance",
       "inserted_at": "2026-09-11T13:42:37.617349+00:00",
-      "updated_at": "2026-09-11T13:42:37.617349+00:00"
+      "updated_at": "2026-09-14T15:57:51.287396+00:00"
     },
     {
       "trade_date": "2026-09-10",
