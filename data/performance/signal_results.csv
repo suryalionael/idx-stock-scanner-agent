@@ -8776,15 +8776,9 @@ signal_date,eval_date,strategy,ticker,signal,prev,open,close,high,pct_high,pct_c
 2026-09-14,2026-09-15,scalping,DOOH.JK,SCALPING_HIGH,364.0,388.0,400.0,400.0,9.89,9.89,W,W,evaluated
 2026-09-14,2026-09-15,scalping,SMLE.JK,SCALPING_HIGH,206.0,208.0,220.0,226.0,9.71,6.8,W,W,evaluated
 2026-09-14,2026-09-15,scalping,KETR.JK,SCALPING_HIGH,905.0,905.0,905.0,920.0,1.66,0.0,W,L,evaluated
-2026-06-29,,scalping,BHAT.JK,SCALPING_HIGH,,,,,,,,,pending
-2026-06-30,,scalping,BHAT.JK,SCALPING_HIGH,,,,,,,,,pending
-2026-07-01,,scalping,BHAT.JK,SCALPING_HIGH,,,,,,,,,pending
 2026-09-03,2026-09-16,scalping,TRUK.JK,SCALPING_HIGH,1075.0,1180.0,1180.0,1180.0,9.77,9.77,W,W,evaluated
 2026-09-04,2026-09-16,scalping,TRUK.JK,SCALPING_HIGH,1075.0,1180.0,1180.0,1180.0,9.77,9.77,W,W,evaluated
-2026-09-04,,scalping,PPGL.JK,SCALPING_HIGH,,,,,,,,,pending
 2026-09-07,2026-09-16,scalping,TRUK.JK,SCALPING_HIGH,1075.0,1180.0,1180.0,1180.0,9.77,9.77,W,W,evaluated
-2026-09-07,,scalping,PPGL.JK,SCALPING_HIGH,,,,,,,,,pending
-2026-09-08,,scalping,PPGL.JK,SCALPING_HIGH,,,,,,,,,pending
 2026-09-15,2026-09-16,swing,AALI.JK,PRE_MARKUP,8475.0,8475.0,8625.0,8625.0,1.77,1.77,W,W,evaluated
 2026-09-15,2026-09-16,swing,AKPI.JK,PRE_MARKUP,550.0,550.0,550.0,560.0,1.82,0.0,W,L,evaluated
 2026-09-15,2026-09-16,swing,AKRA.JK,PRE_MARKUP,1490.0,1515.0,1475.0,1515.0,1.68,-1.01,W,L,evaluated
@@ -8827,7 +8821,6 @@ signal_date,eval_date,strategy,ticker,signal,prev,open,close,high,pct_high,pct_c
 2026-09-15,2026-09-16,swing,HYGN.JK,PRE_MARKUP,188.0,188.0,184.0,190.0,1.06,-2.13,W,L,evaluated
 2026-09-15,2026-09-16,swing,DOOH.JK,PRE_MARKUP,400.0,408.0,440.0,440.0,10.0,10.0,W,W,evaluated
 2026-09-15,2026-09-16,swing,AHAP.JK,PRE_MARKUP,118.0,119.0,112.0,123.0,4.24,-5.08,W,L,evaluated
-2026-09-15,,scalping,ALKA.JK,SCALPING_HIGH,,,,,,,,,pending
 2026-09-15,2026-09-16,scalping,BMSR.JK,SCALPING_HIGH,362.0,362.0,370.0,396.0,9.39,2.21,W,W,evaluated
 2026-09-15,2026-09-16,scalping,DEFI.JK,SCALPING_HIGH,139.0,139.0,119.0,148.0,6.47,-14.39,W,L,evaluated
 2026-09-15,2026-09-16,scalping,FORU.JK,SCALPING_HIGH,4220.0,4220.0,4020.0,4320.0,2.37,-4.74,W,L,evaluated
@@ -8858,7 +8851,6 @@ signal_date,eval_date,strategy,ticker,signal,prev,open,close,high,pct_high,pct_c
 2026-09-15,2026-09-16,scalping,UVCR.JK,SCALPING_HIGH,173.0,173.0,170.0,176.0,1.73,-1.73,W,L,evaluated
 2026-09-15,2026-09-16,scalping,IDEA.JK,SCALPING_HIGH,93.0,102.0,102.0,102.0,9.68,9.68,W,W,evaluated
 2026-09-15,2026-09-16,scalping,BSML.JK,SCALPING_HIGH,550.0,545.0,550.0,555.0,0.91,0.0,W,L,evaluated
-2026-09-15,,scalping,SEMA.JK,SCALPING_HIGH,,,,,,,,,pending
 2026-09-15,2026-09-16,scalping,WIRG.JK,SCALPING_HIGH,79.0,79.0,76.0,83.0,5.06,-3.8,W,L,evaluated
 2026-09-15,2026-09-16,scalping,SWID.JK,SCALPING_HIGH,125.0,125.0,124.0,130.0,4.0,-0.8,W,L,evaluated
 2026-09-15,2026-09-16,scalping,TOOL.JK,SCALPING_HIGH,75.0,75.0,71.0,76.0,1.33,-5.33,W,L,evaluated
@@ -8873,6 +8865,14 @@ signal_date,eval_date,strategy,ticker,signal,prev,open,close,high,pct_high,pct_c
 2026-09-15,2026-09-16,scalping,ASPR.JK,SCALPING_HIGH,153.0,153.0,149.0,153.0,0.0,-2.61,L,L,evaluated
 2026-09-15,2026-09-16,scalping,DOOH.JK,SCALPING_HIGH,400.0,408.0,440.0,440.0,10.0,10.0,W,W,evaluated
 2026-09-15,2026-09-16,scalping,AHAP.JK,SCALPING_HIGH,118.0,119.0,112.0,123.0,4.24,-5.08,W,L,evaluated
+2026-06-29,,scalping,BHAT.JK,SCALPING_HIGH,,,,,,,,,pending
+2026-06-30,,scalping,BHAT.JK,SCALPING_HIGH,,,,,,,,,pending
+2026-07-01,,scalping,BHAT.JK,SCALPING_HIGH,,,,,,,,,pending
+2026-09-04,,scalping,PPGL.JK,SCALPING_HIGH,,,,,,,,,pending
+2026-09-07,,scalping,PPGL.JK,SCALPING_HIGH,,,,,,,,,pending
+2026-09-08,,scalping,PPGL.JK,SCALPING_HIGH,,,,,,,,,pending
+2026-09-15,,scalping,ALKA.JK,SCALPING_HIGH,,,,,,,,,pending
+2026-09-15,,scalping,SEMA.JK,SCALPING_HIGH,,,,,,,,,pending
 2026-09-16,,swing,AALI.JK,PRE_MARKUP,,,,,,,,,pending
 2026-09-16,,swing,AKRA.JK,PRE_MARKUP,,,,,,,,,pending
 2026-09-16,,swing,ARNA.JK,PRE_MARKUP,,,,,,,,,pending
