@@ -10264,6 +10264,8 @@ signal_date,eval_date,strategy,ticker,signal,prev,open,close,high,pct_high,pct_c
 2026-10-07,,scalping,AIMS.JK,SCALPING_HIGH,,,,,,,,,pending
 2026-10-08,,scalping,CSMI.JK,SCALPING_HIGH,,,,,,,,,pending
 2026-10-08,,scalping,AIMS.JK,SCALPING_HIGH,,,,,,,,,pending
+2026-10-09,,scalping,DEWA.JK,SCALPING_HIGH,,,,,,,,,pending
+2026-10-09,,scalping,AMAN.JK,SCALPING_HIGH,,,,,,,,,pending
 2026-10-09,,swing,AALI.JK,PRE_MARKUP,,,,,,,,,pending
 2026-10-09,,swing,ADES.JK,PRE_MARKUP,,,,,,,,,pending
 2026-10-09,,swing,AKRA.JK,PRE_MARKUP,,,,,,,,,pending
@@ -10308,7 +10310,6 @@ signal_date,eval_date,strategy,ticker,signal,prev,open,close,high,pct_high,pct_c
 2026-10-09,,scalping,ALKA.JK,SCALPING_HIGH,,,,,,,,,pending
 2026-10-09,,scalping,APLI.JK,SCALPING_HIGH,,,,,,,,,pending
 2026-10-09,,scalping,ARII.JK,SCALPING_HIGH,,,,,,,,,pending
-2026-10-09,,scalping,DEWA.JK,SCALPING_HIGH,,,,,,,,,pending
 2026-10-09,,scalping,GEMA.JK,SCALPING_HIGH,,,,,,,,,pending
 2026-10-09,,scalping,GGRM.JK,SCALPING_HIGH,,,,,,,,,pending
 2026-10-09,,scalping,GWSA.JK,SCALPING_HIGH,,,,,,,,,pending
@@ -10372,6 +10373,5 @@ signal_date,eval_date,strategy,ticker,signal,prev,open,close,high,pct_high,pct_c
 2026-10-09,,scalping,DAAZ.JK,SCALPING_HIGH,,,,,,,,,pending
 2026-10-09,,scalping,ASPR.JK,SCALPING_HIGH,,,,,,,,,pending
 2026-10-09,,scalping,DKHH.JK,SCALPING_HIGH,,,,,,,,,pending
-2026-10-09,,scalping,AMAN.JK,SCALPING_HIGH,,,,,,,,,pending
 2026-10-09,,scalping,DGNS.JK,SCALPING_HIGH,,,,,,,,,pending
 2026-10-09,,scalping,AIMS.JK,SCALPING_HIGH,,,,,,,,,pending
