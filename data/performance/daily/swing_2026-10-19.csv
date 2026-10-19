@@ -1,0 +1,6 @@
+signal_date,eval_date,strategy,ticker,signal,prev,open,close,high,pct_high,pct_close,wl_high,wl_close,status
+2026-10-16,2026-10-19,swing,BDMN.JK,PRE_MARKUP,4420.0,4380.0,4400.0,4430.0,0.23,-0.45,W,L,evaluated
+2026-10-16,2026-10-19,swing,PKPK.JK,PRE_MARKUP,7100.0,6900.0,6625.0,6900.0,-2.82,-6.69,L,L,evaluated
+2026-10-16,2026-10-19,swing,ULTJ.JK,PRE_MARKUP,2010.0,2000.0,2000.0,2030.0,1.0,-0.5,W,L,evaluated
+2026-10-16,2026-10-19,swing,PRDA.JK,PRE_MARKUP,3010.0,2980.0,2880.0,3010.0,0.0,-4.32,L,L,evaluated
+2026-10-16,2026-10-19,swing,MPXL.JK,PRE_MARKUP,286.0,282.0,288.0,290.0,1.4,0.7,W,W,evaluated
