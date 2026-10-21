@@ -1,0 +1,4 @@
+signal_date,eval_date,strategy,ticker,signal,prev,open,close,high,pct_high,pct_close,wl_high,wl_close,status
+2026-10-19,2026-10-20,swing,BSIM.JK,PRE_MARKUP,930.0,985.0,880.0,1100.0,18.28,-5.38,W,L,evaluated
+2026-10-19,2026-10-20,swing,PTSP.JK,PRE_MARKUP,1660.0,1660.0,1545.0,1960.0,18.07,-6.93,W,L,evaluated
+2026-10-19,2026-10-20,swing,MPXL.JK,PRE_MARKUP,288.0,290.0,348.0,354.0,22.92,20.83,W,W,evaluated
