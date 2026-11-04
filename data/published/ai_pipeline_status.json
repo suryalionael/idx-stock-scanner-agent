@@ -1,39 +1,39 @@
 {
   "schema_version": 1,
-  "last_run": "2026-11-03T03:48:16.521767+00:00",
-  "scan_date": "2026-11-02",
+  "last_run": "2026-11-04T02:21:51.081950+00:00",
+  "scan_date": "2026-11-03",
   "generation": {
     "status": "failed",
-    "started_at": "2026-11-03T03:48:16.455797+00:00",
-    "finished_at": "2026-11-03T03:48:16.506843+00:00",
-    "duration_ms": 51,
+    "started_at": "2026-11-04T02:21:51.017472+00:00",
+    "finished_at": "2026-11-04T02:21:51.063990+00:00",
+    "duration_ms": 46,
     "error": "Missing required 9router configuration: NINEROUTER_API_KEY, NINEROUTER_MODEL, NINEROUTER_BASE_URL. These must be set as environment variables \u2014 see docs/AI_LAB_ARCHITECTURE.md for what's known/unknown about 9router's API contract."
   },
   "resolution": {
     "status": "ok",
-    "started_at": "2026-11-03T03:48:16.506860+00:00",
-    "finished_at": "2026-11-03T03:48:16.510031+00:00",
+    "started_at": "2026-11-04T02:21:51.064007+00:00",
+    "finished_at": "2026-11-04T02:21:51.067905+00:00",
     "duration_ms": 3
   },
   "reflection": {
     "status": "skipped",
-    "started_at": "2026-11-03T03:48:16.510054+00:00",
-    "finished_at": "2026-11-03T03:48:16.513035+00:00",
-    "duration_ms": 2,
+    "started_at": "2026-11-04T02:21:51.067918+00:00",
+    "finished_at": "2026-11-04T02:21:51.071295+00:00",
+    "duration_ms": 3,
     "reason": "insufficient resolved recommendations"
   },
   "hypothesis": {
     "status": "skipped",
-    "started_at": "2026-11-03T03:48:16.513058+00:00",
-    "finished_at": "2026-11-03T03:48:16.517231+00:00",
-    "duration_ms": 4,
+    "started_at": "2026-11-04T02:21:51.071317+00:00",
+    "finished_at": "2026-11-04T02:21:51.076601+00:00",
+    "duration_ms": 5,
     "reason": "no gated reflection observations to seed from, or no candidate cleared validation"
   },
   "knowledge_base": {
     "status": "skipped",
-    "started_at": "2026-11-03T03:48:16.517245+00:00",
-    "finished_at": "2026-11-03T03:48:16.521753+00:00",
-    "duration_ms": 4,
+    "started_at": "2026-11-04T02:21:51.076636+00:00",
+    "finished_at": "2026-11-04T02:21:51.081932+00:00",
+    "duration_ms": 5,
     "reason": "no validated hypotheses available to curate"
   }
 }
