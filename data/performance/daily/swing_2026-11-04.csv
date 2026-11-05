@@ -1,0 +1,8 @@
+signal_date,eval_date,strategy,ticker,signal,prev,open,close,high,pct_high,pct_close,wl_high,wl_close,status
+2026-11-03,2026-11-04,swing,AALI.JK,PRE_MARKUP,9450.0,9350.0,9525.0,9600.0,1.59,0.79,W,W,evaluated
+2026-11-03,2026-11-04,swing,AKPI.JK,PRE_MARKUP,595.0,620.0,620.0,685.0,15.13,4.2,W,W,evaluated
+2026-11-03,2026-11-04,swing,TMPO.JK,PRE_MARKUP,234.0,258.0,292.0,292.0,24.79,24.79,W,W,evaluated
+2026-11-03,2026-11-04,swing,KINO.JK,PRE_MARKUP,1630.0,1620.0,1535.0,1685.0,3.37,-5.83,W,L,evaluated
+2026-11-03,2026-11-04,swing,PRDA.JK,PRE_MARKUP,3680.0,3650.0,3700.0,3740.0,1.63,0.54,W,W,evaluated
+2026-11-03,2026-11-04,swing,PBID.JK,PRE_MARKUP,555.0,550.0,570.0,575.0,3.6,2.7,W,W,evaluated
+2026-11-03,2026-11-04,swing,BLES.JK,PRE_MARKUP,200.0,198.0,197.0,198.0,-1.0,-1.5,L,L,evaluated
