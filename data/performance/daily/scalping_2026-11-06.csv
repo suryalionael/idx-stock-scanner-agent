@@ -1,0 +1,4 @@
+signal_date,eval_date,strategy,ticker,signal,prev,open,close,high,pct_high,pct_close,wl_high,wl_close,status
+2026-10-06,2026-11-06,scalping,CSMI.JK,SCALPING_HIGH,515.0,480.0,480.0,480.0,-6.8,-6.8,L,L,evaluated
+2026-10-07,2026-11-06,scalping,CSMI.JK,SCALPING_HIGH,515.0,480.0,480.0,480.0,-6.8,-6.8,L,L,evaluated
+2026-10-08,2026-11-06,scalping,CSMI.JK,SCALPING_HIGH,515.0,480.0,480.0,480.0,-6.8,-6.8,L,L,evaluated
